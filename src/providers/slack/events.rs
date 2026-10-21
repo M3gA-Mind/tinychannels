@@ -3,6 +3,7 @@
 
 use super::inbound::{slack_channel_ref, ts_to_ms};
 use super::types::SlackChannel;
+use crate::channel::{ChannelInboundSink, ChannelSendError};
 use crate::traits::ChannelMessage;
 use serde_json::Value;
 use tinychannels_bus::{
@@ -84,12 +85,24 @@ impl SlackChannel {
         }
     }
 
-    async fn publish_event(&self, event: ChannelEvent) {
+    async fn publish_event(
+        &self,
+        event: ChannelEvent,
+        typed_sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+    ) -> Result<bool, ChannelSendError> {
+        if let Some(sink) = typed_sink {
+            sink.push(ChannelIngress::Event(event)).await?;
+            return Ok(true);
+        }
         let Some(events) = &self.events else {
-            return;
+            return Ok(false);
         };
-        if let Err(error) = events.publish_ingress(ChannelIngress::Event(event)).await {
-            tracing::debug!(%error, "[slack] failed to deliver channel event");
+        match events.publish_ingress(ChannelIngress::Event(event)).await {
+            Ok(delivered) => Ok(delivered),
+            Err(error) => {
+                tracing::debug!(%error, "[slack] failed to deliver channel event");
+                Ok(false)
+            }
         }
     }
 
@@ -107,45 +120,100 @@ impl SlackChannel {
         event: &Value,
         tx: Option<&Sender<ChannelMessage>>,
     ) -> Flow {
-        match str_of(event, "type") {
-            "message" | "app_mention" => match str_of(event, "subtype") {
-                "message_changed" => self.handle_changed(event).await,
-                "message_deleted" => self.handle_deleted(event).await,
-                "bot_message" => {}
-                _ => return self.handle_message(event, tx).await,
-            },
-            "reaction_added" => self.handle_reaction(event, true).await,
-            "reaction_removed" => self.handle_reaction(event, false).await,
-            _ => {}
-        }
-        Flow::Continue
+        self.handle_event_to_sink(event, tx, None)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::debug!(message = %error.message, "[slack] event delivery failed");
+                Flow::Continue
+            })
     }
 
-    async fn handle_message(&self, event: &Value, tx: Option<&Sender<ChannelMessage>>) -> Flow {
+    pub(crate) async fn handle_event_typed(
+        &self,
+        event: &Value,
+        sink: &(dyn ChannelInboundSink + Send + Sync),
+    ) -> Result<(), ChannelSendError> {
+        self.handle_event_to_sink(event, None, Some(sink))
+            .await
+            .map(|_| ())
+    }
+
+    pub(crate) async fn handle_socket_delivery(
+        &self,
+        kind: &str,
+        payload: &Value,
+        envelope_id: Option<&str>,
+        sink: &(dyn ChannelInboundSink + Send + Sync),
+    ) -> Result<(), ChannelSendError> {
+        let dedupe_key = envelope_id.map(|id| format!("socket-envelope:{id}"));
+        if dedupe_key.as_deref().is_some_and(|key| self.has_seen(key)) {
+            return Ok(());
+        }
+        match kind {
+            "events_api" => {
+                let event = payload.get("event").unwrap_or(&Value::Null);
+                self.handle_event_typed(event, sink).await?;
+            }
+            "interactive" => self.handle_interactive_to_sink(payload, Some(sink)).await?,
+            _ => {}
+        }
+        if let Some(dedupe_key) = dedupe_key {
+            self.mark_seen(dedupe_key);
+        }
+        Ok(())
+    }
+
+    async fn handle_event_to_sink(
+        &self,
+        event: &Value,
+        tx: Option<&Sender<ChannelMessage>>,
+        typed_sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+    ) -> Result<Flow, ChannelSendError> {
+        match str_of(event, "type") {
+            "message" | "app_mention" => match str_of(event, "subtype") {
+                "message_changed" => self.handle_changed(event, typed_sink).await?,
+                "message_deleted" => self.handle_deleted(event, typed_sink).await?,
+                "bot_message" => {}
+                _ => return self.handle_message(event, tx, typed_sink).await,
+            },
+            "reaction_added" => self.handle_reaction(event, true, typed_sink).await?,
+            "reaction_removed" => self.handle_reaction(event, false, typed_sink).await?,
+            _ => {}
+        }
+        Ok(Flow::Continue)
+    }
+
+    async fn handle_message(
+        &self,
+        event: &Value,
+        tx: Option<&Sender<ChannelMessage>>,
+        typed_sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+    ) -> Result<Flow, ChannelSendError> {
         let channel = str_of(event, "channel");
         let ts = str_of(event, "ts");
         let user = str_of(event, "user");
         let channel_type = event.get("channel_type").and_then(Value::as_str);
         if event.get("bot_id").is_some() || user.is_empty() || channel.is_empty() || ts.is_empty() {
-            return Flow::Continue;
+            return Ok(Flow::Continue);
         }
         if self.bot_user_id().await.as_deref() == Some(user) {
-            return Flow::Continue;
+            return Ok(Flow::Continue);
         }
         if !self.is_user_allowed(user) {
             tracing::warn!("[slack] ignoring message from an unauthorized user");
-            return Flow::Continue;
+            return Ok(Flow::Continue);
         }
         if !self.channel_in_scope(channel, channel_type) {
-            return Flow::Continue;
+            return Ok(Flow::Continue);
         }
         let text = str_of(event, "text");
         let has_files = event
             .get("files")
             .and_then(Value::as_array)
             .is_some_and(|files| !files.is_empty());
-        if (text.is_empty() && !has_files) || !self.mark_seen(format!("{channel}:{ts}")) {
-            return Flow::Continue;
+        let seen_key = format!("{channel}:{ts}");
+        if (text.is_empty() && !has_files) || self.has_seen(&seen_key) {
+            return Ok(Flow::Continue);
         }
         let thread_ts = Self::inbound_thread_ts(event, ts);
         let message_id = provider_message_id(channel, ts);
@@ -204,26 +272,36 @@ impl SlackChannel {
             raw: Some(serde_json::json!({"providerMessageId": ts})),
             ..Default::default()
         };
-        let delivered = match &self.events {
-            Some(events) => events
+        let delivered = if let Some(sink) = typed_sink {
+            sink.push(ChannelIngress::Inbound(envelope)).await?;
+            true
+        } else {
+            match &self.events {
+                Some(events) => events
                 .publish_ingress(ChannelIngress::Inbound(envelope))
                 .await
                 .unwrap_or_else(|error| {
                     tracing::debug!(%error, "[slack] failed to deliver inbound through ingress");
                     false
                 }),
-            None => false,
+                None => false,
+            }
         };
         if !delivered
             && let Some(tx) = tx
             && tx.send(message).await.is_err()
         {
-            return Flow::Stop;
+            return Ok(Flow::Stop);
         }
-        Flow::Continue
+        self.mark_seen(seen_key);
+        Ok(Flow::Continue)
     }
 
-    async fn handle_changed(&self, event: &Value) {
+    async fn handle_changed(
+        &self,
+        event: &Value,
+        typed_sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+    ) -> Result<(), ChannelSendError> {
         let channel = str_of(event, "channel");
         let inner = event.get("message").unwrap_or(&Value::Null);
         let (user, ts) = (str_of(inner, "user"), str_of(inner, "ts"));
@@ -233,7 +311,7 @@ impl SlackChannel {
             || !self.is_user_allowed(user)
             || self.bot_user_id().await.as_deref() == Some(user)
         {
-            return;
+            return Ok(());
         }
         let message_id = provider_message_id(channel, ts);
         let event_ts = str_of(event, "event_ts");
@@ -254,16 +332,24 @@ impl SlackChannel {
             }],
         };
         let event_id = format!("slack:edit:{message_id}:{event_ts}");
-        self.publish_event(Self::channel_event(
-            event_id,
-            ts_to_ms(event_ts),
-            Some(conversation),
-            kind,
-        ))
-        .await;
+        self.publish_event(
+            Self::channel_event(
+                event_id.clone(),
+                ts_to_ms(event_ts),
+                Some(conversation),
+                kind,
+            ),
+            typed_sink,
+        )
+        .await?;
+        Ok(())
     }
 
-    async fn handle_deleted(&self, event: &Value) {
+    async fn handle_deleted(
+        &self,
+        event: &Value,
+        typed_sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+    ) -> Result<(), ChannelSendError> {
         let channel = str_of(event, "channel");
         let ts = str_of(event, "deleted_ts");
         let author = event
@@ -275,7 +361,7 @@ impl SlackChannel {
             || !self.is_user_allowed(author)
             || self.bot_user_id().await.as_deref() == Some(author)
         {
-            return;
+            return Ok(());
         }
         let message_id = provider_message_id(channel, ts);
         let conversation = Self::conversation_ref(
@@ -288,16 +374,25 @@ impl SlackChannel {
             provider_message_id: Some(ts.to_owned()),
         };
         let event_ts = str_of(event, "event_ts");
-        self.publish_event(Self::channel_event(
-            format!("slack:delete:{message_id}:{event_ts}"),
-            ts_to_ms(event_ts),
-            Some(conversation),
-            kind,
-        ))
-        .await;
+        self.publish_event(
+            Self::channel_event(
+                format!("slack:delete:{message_id}:{event_ts}"),
+                ts_to_ms(event_ts),
+                Some(conversation),
+                kind,
+            ),
+            typed_sink,
+        )
+        .await?;
+        Ok(())
     }
 
-    async fn handle_reaction(&self, event: &Value, added: bool) {
+    async fn handle_reaction(
+        &self,
+        event: &Value,
+        added: bool,
+        typed_sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+    ) -> Result<(), ChannelSendError> {
         let item = event.get("item").unwrap_or(&Value::Null);
         let (channel, ts) = (str_of(item, "channel"), str_of(item, "ts"));
         let (user, name) = (str_of(event, "user"), str_of(event, "reaction"));
@@ -308,14 +403,14 @@ impl SlackChannel {
             || !self.is_user_allowed(user)
             || self.bot_user_id().await.as_deref() == Some(user)
         {
-            return;
+            return Ok(());
         }
         let event_ts = str_of(event, "event_ts");
         let direction = if added { "added" } else { "removed" };
         let event_id =
             format!("slack:reaction:{direction}:{channel}:{ts}:{user}:{name}:{event_ts}");
-        if !self.mark_seen(event_id.clone()) {
-            return;
+        if self.has_seen(&event_id) {
+            return Ok(());
         }
         let message_id = provider_message_id(channel, ts);
         let actor = tinychannels_bus::SenderRef {
@@ -343,19 +438,34 @@ impl SlackChannel {
             }
         };
         let conversation = Self::conversation_ref(channel, None, None);
-        self.publish_event(Self::channel_event(
-            event_id,
-            ts_to_ms(event_ts),
-            Some(conversation),
-            kind,
-        ))
-        .await;
+        self.publish_event(
+            Self::channel_event(
+                event_id.clone(),
+                ts_to_ms(event_ts),
+                Some(conversation),
+                kind,
+            ),
+            typed_sink,
+        )
+        .await?;
+        self.mark_seen(event_id);
+        Ok(())
     }
 
     /// Handle one Socket Mode `interactive` payload (a Block Kit button press).
     pub(crate) async fn handle_interactive(&self, payload: &Value) {
+        if let Err(error) = self.handle_interactive_to_sink(payload, None).await {
+            tracing::debug!(message = %error.message, "[slack] interactive event delivery failed");
+        }
+    }
+
+    async fn handle_interactive_to_sink(
+        &self,
+        payload: &Value,
+        typed_sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+    ) -> Result<(), ChannelSendError> {
         if str_of(payload, "type") != "block_actions" {
-            return;
+            return Ok(());
         }
         let user = payload.get("user").unwrap_or(&Value::Null);
         let actor = Self::sender_ref(user);
@@ -379,7 +489,7 @@ impl SlackChannel {
         let query_id = str_of(payload, "trigger_id");
         if !allowed || action_id.is_empty() || channel.is_empty() || query_id.is_empty() {
             tracing::debug!("[slack] dropped a button press");
-            return;
+            return Ok(());
         }
         let thread_ts = payload
             .pointer("/container/thread_ts")
@@ -393,13 +503,17 @@ impl SlackChannel {
             actor,
         };
         let conversation = Self::conversation_ref(channel, None, thread_ts);
-        self.publish_event(Self::channel_event(
-            format!("slack:callback:{query_id}"),
-            None,
-            Some(conversation),
-            kind,
-        ))
-        .await;
+        self.publish_event(
+            Self::channel_event(
+                format!("slack:callback:{query_id}"),
+                None,
+                Some(conversation),
+                kind,
+            ),
+            typed_sink,
+        )
+        .await?;
+        Ok(())
     }
 }
 

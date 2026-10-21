@@ -4,8 +4,10 @@ use crate::config::StreamMode;
 use crate::security::PairingGuard;
 use parking_lot::Mutex;
 use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use tokio::sync::watch;
 
 pub(crate) const TELEGRAM_RECENT_UPDATE_CACHE_SIZE: usize = 4096;
 
@@ -109,4 +111,7 @@ pub struct TelegramChannel {
     /// Back-off after a `getUpdates` 409 conflict that could not be cleared.
     /// Defaults to [`TELEGRAM_POLL_CONFLICT_BACKOFF`].
     pub(crate) poll_conflict_backoff: Duration,
+    /// Cancellation signal and single-owner guard for the typed long-poll loop.
+    pub(crate) listener_cancel: watch::Sender<bool>,
+    pub(crate) listener_running: AtomicBool,
 }

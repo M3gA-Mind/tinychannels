@@ -5301,27 +5301,262 @@ fn telegram_declares_remote_control_approvals_and_proactive_defaults() {
 }
 
 #[tokio::test]
-async fn adapter_start_stop_and_stop_typing_are_noops_without_provider_io() {
-    struct NullSink;
+async fn adapter_start_polls_and_delivers_original_typed_telegram_ingress() {
+    use crate::channel::{ChannelInboundSink, ChannelSendError};
+
+    #[derive(Default)]
+    struct RecordingSink {
+        items: std::sync::Mutex<Vec<tinychannels_bus::ChannelIngress>>,
+        notified: tokio::sync::Notify,
+    }
     #[async_trait::async_trait]
-    impl crate::channel::ChannelInboundSink for NullSink {
+    impl ChannelInboundSink for RecordingSink {
         async fn push(
             &self,
-            _event: tinychannels_bus::ChannelIngress,
-        ) -> Result<(), crate::channel::ChannelSendError> {
+            item: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), ChannelSendError> {
+            self.items.lock().unwrap().push(item);
+            self.notified.notify_one();
             Ok(())
         }
     }
+
     let server = mock_api().await;
-    let ch = channel_for(&server, &["*"]);
-    crate::channel::ChannelAdapter::start(&ch, &NullSink)
+    mount_get_updates_once(
+        &server,
+        1,
+        updates(serde_json::json!([{
+            "update_id": 41,
+            "message": {
+                "message_id": 9,
+                "message_thread_id": 73,
+                "date": 1700000000,
+                "chat": { "id": -10042, "type": "supergroup" },
+                "from": { "id": 7, "username": "alice", "first_name": "Alice" },
+                "text": "hello from a forum topic"
+            }
+        }])),
+    )
+    .await;
+    let mut channel = fast_backoff(channel_for(&server, &["alice"]));
+    channel.poll_error_backoff = Duration::from_millis(1);
+    let channel = Arc::new(channel);
+    let sink = Arc::new(RecordingSink::default());
+    let start = crate::channel::ChannelAdapter::start(channel.as_ref(), sink.as_ref());
+    tokio::pin!(start);
+    tokio::select! {
+        result = &mut start => panic!("Telegram adapter stopped before delivery: {result:?}"),
+        _ = tokio::time::timeout(Duration::from_secs(2), sink.notified.notified()) => {},
+    }
+
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.url.path() == api_path("getUpdates"))
+    );
+    {
+        let items = sink.items.lock().unwrap();
+        let [tinychannels_bus::ChannelIngress::Inbound(envelope)] = items.as_slice() else {
+            panic!("expected one original typed inbound envelope, got {items:?}");
+        };
+        assert_eq!(envelope.channel.id, "telegram");
+        assert_eq!(envelope.conversation.id, "-10042");
+        assert_eq!(envelope.conversation.topic_id.as_deref(), Some("73"));
+        assert_eq!(envelope.message_id, "telegram_-10042_9");
+        assert!(
+            matches!(envelope.parts.as_slice(), [tinychannels_bus::ContentPart::Text { text, .. }] if text == "hello from a forum topic")
+        );
+    }
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
         .await
         .unwrap();
-    crate::channel::ChannelAdapter::stop(&ch).await.unwrap();
-    crate::channel::ChannelTyping::stop_typing(&ch, "100")
+    tokio::time::timeout(Duration::from_secs(2), &mut start)
+        .await
+        .expect("typed Telegram listener observes stop")
+        .unwrap();
+
+    let previous_requests = server.received_requests().await.unwrap().len();
+    let restart = crate::channel::ChannelAdapter::start(channel.as_ref(), sink.as_ref());
+    tokio::pin!(restart);
+    tokio::select! {
+        result = &mut restart => panic!("Telegram listener did not restart: {result:?}"),
+        _ = async {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if server.received_requests().await.unwrap().len() > previous_requests {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("restarted listener polls Telegram");
+        } => {},
+    }
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
         .await
         .unwrap();
-    assert!(server.received_requests().await.unwrap().is_empty());
+    tokio::time::timeout(Duration::from_secs(2), &mut restart)
+        .await
+        .expect("restarted typed listener observes stop")
+        .unwrap();
+    assert_eq!(sink.items.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn typed_listener_retries_rejected_update_before_acknowledging_its_offset() {
+    use crate::channel::{ChannelInboundSink, ChannelSendError};
+
+    #[derive(Default)]
+    struct RejectOnceSink {
+        calls: AtomicUsize,
+        accepted: std::sync::Mutex<Vec<tinychannels_bus::ChannelIngress>>,
+        notified: tokio::sync::Notify,
+    }
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for RejectOnceSink {
+        async fn push(
+            &self,
+            ingress: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), ChannelSendError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                    message: "sink temporarily unavailable".into(),
+                    retryable: true,
+                    ..Default::default()
+                });
+            }
+            self.accepted.lock().unwrap().push(ingress);
+            self.notified.notify_one();
+            Ok(())
+        }
+    }
+
+    let server = mock_api().await;
+    let observed_offsets = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let accepted_offset_seen = Arc::new(tokio::sync::Notify::new());
+    let response_offsets = observed_offsets.clone();
+    let response_accepted = accepted_offset_seen.clone();
+    Mock::given(method("POST"))
+        .and(path(api_path("getUpdates")))
+        .respond_with(move |request: &wiremock::Request| {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            let offset = body["offset"].as_i64().unwrap();
+            response_offsets.lock().unwrap().push(offset);
+            if offset == 42 {
+                response_accepted.notify_one();
+                updates(serde_json::json!([]))
+            } else {
+                updates(serde_json::json!([{
+                    "update_id": 41,
+                    "message": {
+                        "message_id": 9,
+                        "date": 1700000000,
+                        "chat": { "id": -10042, "type": "supergroup" },
+                        "from": { "id": 7, "username": "alice", "first_name": "Alice" },
+                        "text": "retry this update"
+                    }
+                }]))
+            }
+        })
+        .mount(&server)
+        .await;
+    let channel = Arc::new(fast_backoff(channel_for(&server, &["alice"])));
+    let sink = Arc::new(RejectOnceSink::default());
+
+    let first = crate::channel::ChannelAdapter::start(channel.as_ref(), sink.as_ref()).await;
+    assert!(
+        first.is_err(),
+        "the rejected ingress must terminate this attempt"
+    );
+    assert!(!channel.has_seen_update_id(41));
+    assert_eq!(*observed_offsets.lock().unwrap(), [0]);
+
+    let second = crate::channel::ChannelAdapter::start(channel.as_ref(), sink.as_ref());
+    tokio::pin!(second);
+    tokio::select! {
+        result = &mut second => panic!("listener stopped before retry delivery: {result:?}"),
+        result = tokio::time::timeout(Duration::from_secs(2), accepted_offset_seen.notified()) => {
+            result.expect("the committed offset is polled after acceptance");
+        },
+    }
+    assert!(channel.has_seen_update_id(41));
+    assert_eq!(sink.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(sink.accepted.lock().unwrap().len(), 1);
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        requests.len() >= 3,
+        "the committed offset is polled after delivery"
+    );
+    let request_offsets = requests
+        .iter()
+        .map(|request| {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            body.get("offset")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(&request_offsets[..2], [0, 0]);
+    assert_eq!(request_offsets[2], 42);
+    assert!(request_offsets[2..].iter().all(|offset| *offset == 42));
+
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), &mut second)
+        .await
+        .expect("typed listener observes stop")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn typed_listener_stop_cancels_a_blocked_bot_identity_probe() {
+    use crate::channel::{ChannelInboundSink, ChannelSendError};
+
+    struct NullSink;
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for NullSink {
+        async fn push(
+            &self,
+            _ingress: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), ChannelSendError> {
+            Ok(())
+        }
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_seen_tx, request_seen_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 4096];
+        let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut request).await;
+        let _ = request_seen_tx.send(());
+        std::future::pending::<()>().await;
+    });
+
+    let mut channel = TelegramChannel::new("test-token".into(), vec!["alice".into()], true);
+    channel.api_base = format!("http://{address}");
+    let channel = Arc::new(channel);
+    let start = crate::channel::ChannelAdapter::start(channel.as_ref(), &NullSink);
+    tokio::pin!(start);
+    tokio::select! {
+        result = &mut start => panic!("listener exited before the blocked getMe call: {result:?}"),
+        result = request_seen_rx => result.expect("getMe request reached the local server"),
+    }
+
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), &mut start)
+        .await
+        .expect("stop cancels the blocked provider request")
+        .unwrap();
+    server.abort();
+    let _ = server.await;
 }
 
 #[tokio::test]

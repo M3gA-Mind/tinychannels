@@ -1395,13 +1395,13 @@ impl NativePorts {
 
     fn telegram(channel: Arc<tinychannels::TelegramChannel>) -> Self {
         let mut ports = Self::native(channel, "Telegram");
-        ports.listener_mode = LongTailListenerMode::Legacy;
+        ports.listener_mode = LongTailListenerMode::Adapter;
         ports
     }
 
     fn slack(channel: Arc<tinychannels::SlackChannel>) -> Self {
         let mut ports = Self::native(channel, "Slack");
-        ports.listener_mode = LongTailListenerMode::Legacy;
+        ports.listener_mode = LongTailListenerMode::Adapter;
         ports
     }
 }
@@ -1896,7 +1896,7 @@ impl Running {
     ) -> Arc<Self> {
         let provider_name = channel.descriptor().id;
         Self::start_inner(
-            Some(channel.clone()),
+            None,
             provider_name,
             hooks,
             host,
@@ -1906,7 +1906,7 @@ impl Running {
         )
     }
     /// Start a configured provider with typed operations and its provider-owned
-    /// legacy listener. Signal opts into its typed SSE listener explicitly;
+    /// listener. Signal and Telegram opt into their typed listener explicitly;
     /// providers with webhook, polling or session lifecycles retain theirs.
     pub(crate) fn start_native<T>(
         provider: &'static str,
@@ -1969,7 +1969,7 @@ impl Running {
     ) -> Arc<Self> {
         let provider_name = channel.descriptor().id;
         Self::start_inner(
-            Some(channel.clone()),
+            None,
             provider_name,
             hooks,
             host,

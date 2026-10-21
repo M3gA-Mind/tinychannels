@@ -6,6 +6,7 @@ use super::types::SlackChannel;
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use std::collections::BTreeMap;
+use std::sync::atomic::Ordering;
 use tinychannels_bus::channel::{
     ChannelDescriptor, ChannelReaction, ChannelRef, ChannelSendError, ChannelSendOutcome,
     ConversationRef, MessageReceipt,
@@ -22,6 +23,14 @@ fn check_channel(channel: &ChannelRef) -> Result<(), ChannelSendError> {
         message: "channel does not match Slack".into(),
         ..Default::default()
     })
+}
+
+struct SlackListenerGuard<'a>(&'a SlackChannel);
+
+impl Drop for SlackListenerGuard<'_> {
+    fn drop(&mut self) {
+        self.0.listener_running.store(false, Ordering::Release);
+    }
 }
 
 #[async_trait]
@@ -203,13 +212,47 @@ impl crate::channel::ChannelAdapter for SlackChannel {
 
     async fn start(
         &self,
-        _sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
     ) -> Result<(), ChannelSendError> {
-        // The configured module's running task owns the single inbound loop.
-        Ok(())
+        if self
+            .listener_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
+                message: "Slack listener is already running".into(),
+                retryable: false,
+                ..Default::default()
+            });
+        }
+        let _guard = SlackListenerGuard(self);
+        self.listener_cancel.send_replace(false);
+        let mut stop = self.listener_cancel.subscribe();
+        let listen = async {
+            if let Some(app_token) = self.app_token.as_deref() {
+                self.listen_socket_typed(sink, app_token).await
+            } else if let Some(channel_id) = self.channel_id.as_deref() {
+                self.listen_polling_typed(sink, channel_id).await
+            } else {
+                anyhow::bail!("Slack listening needs a channel_id or Socket Mode app token")
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = stop.wait_for(|stopped| *stopped) => Ok(()),
+            result = listen => result.map_err(|error| ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: error.to_string(),
+                retryable: true,
+                sent_before_error: false,
+                ..Default::default()
+            }),
+        }
     }
 
     async fn stop(&self) -> Result<(), ChannelSendError> {
+        self.listener_cancel.send_replace(true);
         Ok(())
     }
 
