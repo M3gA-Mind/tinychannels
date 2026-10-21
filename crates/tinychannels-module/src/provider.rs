@@ -1893,18 +1893,18 @@ impl Running {
         outbound_only: bool,
     ) -> Arc<Self>
     where
-        T: tinychannels::LongTailNative + Channel + 'static,
+        T: tinychannels::LongTailNative + 'static,
     {
-        let provider_name = channel.descriptor().id;
-        let legacy: Arc<dyn Channel> = channel.clone();
-        let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
-        let listener_mode = if matches!(provider_name.as_str(), "signal" | "email") {
-            LongTailListenerMode::Adapter
-        } else {
-            LongTailListenerMode::Legacy
+        let descriptor = channel.descriptor();
+        let provider_name = descriptor.id;
+        let listener_mode = match descriptor.metadata.get("backend").map(String::as_str) {
+            Some("cloud") => LongTailListenerMode::Webhook,
+            Some("web") => LongTailListenerMode::Adapter,
+            _ => LongTailListenerMode::Legacy,
         };
+        let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
         Self::start_inner(
-            Some(legacy),
+            None,
             provider_name,
             hooks,
             host,
