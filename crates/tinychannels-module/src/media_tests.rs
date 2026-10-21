@@ -662,7 +662,7 @@ async fn cancelling_the_bus_waiter_does_not_cancel_or_duplicate_finalize() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn stalled_storage_times_out_and_retry_reuses_the_same_dedupe_key() {
+async fn stalled_storage_keeps_upload_finalizing_until_persistence_finishes() {
     let uploads = std::sync::Arc::new(MediaUploads::default());
     let repository = std::sync::Arc::new(BlockingPersistence::default());
     let handle = ready_upload(&uploads).await;
@@ -678,25 +678,17 @@ async fn stalled_storage_times_out_and_retry_reuses_the_same_dedupe_key() {
     };
     repository.entered.notified().await;
     tokio::time::advance(UPLOAD_LIFETIME + Duration::from_millis(1)).await;
-    assert!(finishing.await.unwrap().is_err());
-    assert_eq!(uploads.state.lock().await.uploads.len(), 1);
+    tokio::task::yield_now().await;
+    assert!(!finishing.is_finished());
+    assert_eq!(repository.calls.load(Ordering::SeqCst), 1);
     repository.release.notify_one();
-    let media = uploads
-        .clone()
-        .finish(
-            MediaUploadFinish(handle),
-            "activation-a".into(),
-            repository.clone(),
-        )
-        .await
-        .unwrap();
+    let media = finishing.await.unwrap().unwrap();
     assert_eq!(
         media.opaque_id.as_deref(),
         Some("tinychannels_media_v1_saved")
     );
     let keys = repository.dedupe_keys.lock().unwrap();
-    assert_eq!(keys.len(), 2);
-    assert_eq!(keys[0], keys[1]);
+    assert_eq!(keys.len(), 1);
 }
 
 struct PanickingPersistence;
