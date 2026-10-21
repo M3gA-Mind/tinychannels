@@ -1,6 +1,19 @@
 //! Portable payloads for the host callback object.
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use crate::{ChannelRef, ConversationRef};
+
+/// Authenticated scope for media operations owned by one configured channel.
+/// The module fills provider identity from its active runtime; callers must
+/// supply the conversation and originating turn.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostVoiceScope {
+    pub configured_instance: String,
+    pub channel: ChannelRef,
+    pub conversation: ConversationRef,
+    pub turn_id: String,
+}
 
 /// Request speech recognition through the host's configured voice provider.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
