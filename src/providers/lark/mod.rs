@@ -1,10 +1,12 @@
 mod capabilities;
-mod inbound;
 mod config;
+mod inbound;
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceCodec, VoiceMediaStore};
 use crate::traits::ChannelMessage;
-use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
+#[cfg(test)]
+use inbound::{LarkWebhookState, handle_lark_webhook};
+use inbound::{parse_post_content, should_respond_in_group, strip_at_placeholders};
 use prost::Message as ProstMessage;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -162,7 +164,6 @@ pub struct LarkChannel {
     listener_cancel: LarkListenerCancel,
 }
 
-
 #[cfg(test)]
 #[path = "lark_tests.rs"]
 mod tests;
@@ -174,7 +175,6 @@ mod api_tests;
 #[cfg(test)]
 #[path = "legacy_conformance_tests.rs"]
 mod conformance_tests;
-
 
 #[path = "native.rs"]
 mod native;

@@ -1,5 +1,5 @@
-mod inbound;
 mod config;
+mod inbound;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::collections::HashSet;
@@ -89,7 +89,6 @@ async fn until_listener_cancelled<F: Future>(
         output = future => Some(output),
     }
 }
-
 
 #[path = "native.rs"]
 mod native;

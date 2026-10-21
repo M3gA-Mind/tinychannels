@@ -1,5 +1,5 @@
-mod inbound;
 mod config;
+mod inbound;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,7 +50,6 @@ struct GatewayResponse {
     endpoint: String,
     ticket: String,
 }
-
 
 #[path = "native.rs"]
 mod native;

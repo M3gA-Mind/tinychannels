@@ -70,7 +70,9 @@ impl DingTalkChannel {
         Ok(gw)
     }
 
-    pub(super) fn begin_listener(&self) -> anyhow::Result<(Uuid, tokio::sync::watch::Receiver<bool>)> {
+    pub(super) fn begin_listener(
+        &self,
+    ) -> anyhow::Result<(Uuid, tokio::sync::watch::Receiver<bool>)> {
         let mut listener = self
             .listener
             .lock()
@@ -320,11 +322,10 @@ async fn until_listener_cancelled<F: std::future::Future>(
     }
 }
 
-fn no_redirect_client() -> reqwest::Client {
+pub(super) fn no_redirect_client() -> reqwest::Client {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .expect("building the DingTalk attachment HTTP client should succeed")
 }
-

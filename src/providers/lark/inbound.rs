@@ -540,14 +540,14 @@ impl LarkChannel {
 }
 
 #[derive(Clone)]
-struct LarkWebhookState {
-    verification_token: String,
-    channel: Arc<LarkChannel>,
-    tx: Option<tokio::sync::mpsc::Sender<ChannelMessage>>,
-    typed_tx: Option<tokio::sync::mpsc::Sender<TypedWebhookEvent>>,
+pub(super) struct LarkWebhookState {
+    pub(super) verification_token: String,
+    pub(super) channel: Arc<LarkChannel>,
+    pub(super) tx: Option<tokio::sync::mpsc::Sender<ChannelMessage>>,
+    pub(super) typed_tx: Option<tokio::sync::mpsc::Sender<TypedWebhookEvent>>,
 }
 
-async fn handle_lark_webhook(
+pub(super) async fn handle_lark_webhook(
     axum::extract::State(state): axum::extract::State<LarkWebhookState>,
     axum::Json(payload): axum::Json<serde_json::Value>,
 ) -> axum::response::Response {
@@ -764,7 +764,7 @@ impl LarkChannel {
 /// Returns `None` when the content cannot be parsed or yields no usable text,
 /// so callers can simply `continue` rather than forwarding a meaningless
 /// placeholder string to the agent.
-fn parse_post_content(content: &str) -> Option<String> {
+pub(super) fn parse_post_content(content: &str) -> Option<String> {
     let parsed = serde_json::from_str::<serde_json::Value>(content).ok()?;
     let locale = parsed
         .get("zh_cn")
@@ -831,7 +831,7 @@ fn parse_post_content(content: &str) -> Option<String> {
 }
 
 /// Remove `@_user_N` placeholder tokens injected by Feishu in group chats.
-fn strip_at_placeholders(text: &str) -> String {
+pub(super) fn strip_at_placeholders(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut chars = text.char_indices().peekable();
     while let Some((_, ch)) = chars.next() {
@@ -859,6 +859,6 @@ fn strip_at_placeholders(text: &str) -> String {
 }
 
 /// In group chats, only respond when the bot is explicitly @-mentioned.
-fn should_respond_in_group(mentions: &[serde_json::Value]) -> bool {
+pub(super) fn should_respond_in_group(mentions: &[serde_json::Value]) -> bool {
     !mentions.is_empty()
 }

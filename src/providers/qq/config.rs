@@ -71,5 +71,3 @@ impl QQChannel {
         self
     }
 }
-
-

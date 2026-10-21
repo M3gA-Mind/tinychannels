@@ -517,7 +517,7 @@ async fn stream_audio_callback_stores_provider_voice_and_acknowledges_frame() {
             }
             ("GET", "/media/voice") => (
                 200,
-                include_bytes!("telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
+                include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
             ),
             _ => panic!("unexpected DingTalk request: {request:?}"),
         },
@@ -634,7 +634,7 @@ async fn stream_audio_callback_stores_provider_voice_and_acknowledges_frame() {
         base64::engine::general_purpose::STANDARD
             .decode(&stored[0].audio_base64)
             .unwrap(),
-        include_bytes!("telegram/fixtures/sine-ogg-opus.ogg")
+        include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg")
     );
 }
 

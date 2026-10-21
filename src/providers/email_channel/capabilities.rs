@@ -1,18 +1,18 @@
 //! Capability facts for a configured email account.
 
 use super::EmailChannel;
-use super::{HEALTH_CHECK_TIMEOUT, ImapStream};
 use super::native::{EMAIL_MAX_FILE_BYTES, EMAIL_MAX_VOICE_BYTES};
+use super::{HEALTH_CHECK_TIMEOUT, ImapStream};
+use crate::providers::native::capabilities::{media_capabilities, voice_capabilities};
 use anyhow::Result;
 use async_imap::Session;
-use crate::providers::native::capabilities::{media_capabilities, voice_capabilities};
 use std::time::Duration;
-use tokio::time::{Instant, timeout_at};
-use tracing::debug;
 use tinychannels_bus::{
     ActionCapabilities, AddressingCapabilities, ChannelCapabilities, ContentCapabilities,
     ContentCapability,
 };
+use tokio::time::{Instant, timeout_at};
+use tracing::debug;
 
 impl EmailChannel {
     #[cfg(feature = "email")]

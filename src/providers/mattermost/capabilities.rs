@@ -183,4 +183,3 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
         crate::providers::native::outbound::send_typed(self, message).await
     }
 }
-

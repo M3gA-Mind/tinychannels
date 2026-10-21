@@ -20,7 +20,8 @@ use async_imap::types::Fetch;
 #[cfg(feature = "email")]
 use futures::TryStreamExt;
 #[cfg(feature = "email")]
-use mail_parser::{MessageParser, MimeHeaders};
+#[cfg(any(test, debug_assertions))]
+use mail_parser::MessageParser;
 #[cfg(feature = "email")]
 use rustls::{ClientConfig, RootCertStore};
 #[cfg(feature = "email")]
@@ -50,8 +51,9 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 #[cfg(feature = "email")]
 use tokio::sync::watch;
+#[cfg(test)]
+use tokio::time::timeout;
 #[cfg(feature = "email")]
-use tokio::time::{Instant, sleep, timeout, timeout_at};
 #[cfg(feature = "email")]
 use tokio_rustls::TlsConnector;
 #[cfg(feature = "email")]
@@ -152,8 +154,6 @@ enum EmailDelivery<'a> {
 #[derive(Debug, thiserror::Error)]
 #[error("Email inbound sink rejected an event")]
 struct InboundSinkRejected;
-
-
 
 /// Internal struct for parsed email data
 #[cfg(feature = "email")]

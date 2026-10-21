@@ -1,7 +1,8 @@
 mod capabilities;
-mod outbound;
-mod inbound;
 mod config;
+mod inbound;
+use inbound::{contains_bot_mention_mm, normalize_mattermost_content};
+mod outbound;
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::traits::ChannelMessage;
 use anyhow::Result;
@@ -59,10 +60,6 @@ impl Drop for ListenerRegistration<'_> {
         }
     }
 }
-
-
-
-
 
 #[path = "native.rs"]
 mod native;

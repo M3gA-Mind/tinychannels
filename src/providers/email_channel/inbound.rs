@@ -18,6 +18,8 @@ use tinychannels_bus::{
 };
 #[cfg(test)]
 use tokio::sync::mpsc;
+use tokio::time::{sleep, timeout};
+use tracing::info;
 
 fn email_ref() -> ChannelRef {
     ChannelRef {
@@ -193,7 +195,6 @@ impl EmailChannel {
 #[cfg(test)]
 #[path = "inbound_tests.rs"]
 mod tests;
-
 
 // IMAP polling and message decoding remain owned by the email provider.
 use super::*;
@@ -660,7 +661,11 @@ impl EmailChannel {
     }
 
     #[cfg(feature = "email")]
-    pub(super) async fn mark_uid_seen<S: ImapStream>(&self, session: &mut Session<S>, uid: u32) -> Result<()> {
+    pub(super) async fn mark_uid_seen<S: ImapStream>(
+        &self,
+        session: &mut Session<S>,
+        uid: u32,
+    ) -> Result<()> {
         if uid == 0 {
             return Ok(());
         }
@@ -669,5 +674,4 @@ impl EmailChannel {
             .await?;
         Ok(())
     }
-
 }

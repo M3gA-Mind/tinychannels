@@ -448,7 +448,7 @@ impl MattermostChannel {
 /// Checks two sources:
 /// 1. Text-based: looks for `@bot_username` in the message body (case-insensitive).
 /// 2. Metadata-based: checks the post's `metadata.mentions` array for the bot user ID.
-fn contains_bot_mention_mm(
+pub(super) fn contains_bot_mention_mm(
     text: &str,
     bot_user_id: &str,
     bot_username: &str,
@@ -524,7 +524,7 @@ fn find_bot_mention_spans(text: &str, bot_username: &str) -> Vec<(usize, usize)>
 ///
 /// Returns `None` if the message doesn't mention the bot.
 /// Returns `Some(cleaned)` with the @-mention stripped and text trimmed.
-fn normalize_mattermost_content(
+pub(super) fn normalize_mattermost_content(
     text: &str,
     bot_user_id: &str,
     bot_username: &str,
@@ -562,5 +562,3 @@ fn normalize_mattermost_content(
 
     Some(cleaned)
 }
-
-

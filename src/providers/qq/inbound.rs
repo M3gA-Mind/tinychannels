@@ -151,7 +151,9 @@ impl QQChannel {
         dedup.insert(msg_id.to_owned());
     }
 
-    pub(super) fn begin_listener(&self) -> anyhow::Result<(Uuid, tokio::sync::watch::Receiver<bool>)> {
+    pub(super) fn begin_listener(
+        &self,
+    ) -> anyhow::Result<(Uuid, tokio::sync::watch::Receiver<bool>)> {
         let mut listener = self
             .listener
             .lock()
@@ -402,4 +404,3 @@ impl QQChannel {
         }
     }
 }
-

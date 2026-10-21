@@ -1,5 +1,6 @@
 //! DingTalk account configuration and host service wiring.
 
+use super::inbound::no_redirect_client;
 use super::*;
 
 impl DingTalkChannel {
@@ -75,5 +76,3 @@ impl DingTalkChannel {
         self
     }
 }
-
-
