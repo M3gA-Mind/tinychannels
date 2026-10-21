@@ -2,7 +2,7 @@
 //! observation read from the requests a mock Graph server actually received.
 
 use super::*;
-use crate::channel::{ChannelEdit as _, ChannelStreamingDraft as _};
+use crate::channel::{ChannelAdapter, ChannelEdit as _, ChannelStreamingDraft as _};
 use crate::providers::whatsapp::api::GRAPH_VERSION;
 use crate::providers::whatsapp_shared::fakes::{
     CollectingSink, MemoryMedia, MemoryVoices, ogg_bytes, png_bytes,
@@ -188,7 +188,7 @@ impl CloudKit {
         let mut mac = Hmac::<Sha256>::new_from_slice(SECRET.as_bytes()).unwrap();
         mac.update(&body);
         let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
-        Channel::deliver_webhook(self.channel.as_ref(), Some(&signature), &body)
+        ChannelAdapter::deliver_webhook(self.channel.as_ref(), Some(&signature), &body)
             .await
             .expect("authenticated delivery is ingested");
     }
