@@ -5,9 +5,9 @@
 #[cfg(test)]
 use super::NativeFailure;
 use super::{NativeProvider, pre_dispatch, unsupported};
-use crate::providers::slack::text::{chunk_text, strip_tool_call_tags};
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
+use crate::providers::telegram::text::strip_tool_call_tags;
+use crate::text::{ChunkMode, TextChunkOptions, chunk_text_with_options};
+use crate::channel::LengthUnit;
 use tinychannels_bus::channel::{
     ChannelSendError, ChannelSendOutcome, MessageReceipt, MessageReceiptPart,
     MessageReceiptPartKind, MessageReceiptSourceResult, SendErrorKind,
@@ -279,8 +279,8 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                         "{display} does not support outbound voice"
                     )));
                 }
-                let store = provider.voice_media_store().ok_or_else(|| {
-                    unsupported(&format!("{display} voice needs host voice storage"))
+                let repository = provider.media_repository().ok_or_else(|| {
+                    unsupported(&format!("{display} voice needs scoped host storage"))
                 })?;
                 if voice_count > 1 {
                     return Err(pre_dispatch(&format!(
@@ -309,20 +309,23 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                     })?
                     .join("\n");
                 let scope = voice_scope(message, target, display)?;
-                let resolved = store
-                    .read_voice(scope, opaque.to_owned())
+                let resolved = repository
+                    .read_media(scope, opaque.to_owned(), limits.voice_bytes)
                     .await
                     .map_err(|_| {
                         pre_dispatch(&format!("{display} voice media could not be read"))
                     })?;
-                let audio = BASE64
-                    .decode(resolved.audio_base64.as_bytes())
-                    .ok()
-                    .filter(|audio| !audio.is_empty() && audio.len() as u64 <= limits.voice_bytes)
-                    .ok_or_else(|| {
-                        pre_dispatch(&format!("{display} voice media failed upload validation"))
-                    })?;
-                let default_name = if resolved.mime_type == "audio/amr" {
+                let audio = resolved.bytes;
+                if resolved.media.kind != MediaKind::Audio
+                    || !crate::host::is_allowed_content_type(MediaKind::Audio, &resolved.content_type)
+                    || audio.is_empty()
+                    || audio.len() as u64 > limits.voice_bytes
+                {
+                    return Err(pre_dispatch(&format!(
+                        "{display} voice media failed upload validation"
+                    )));
+                }
+                let default_name = if resolved.content_type == "audio/amr" {
                     "voice.amr"
                 } else {
                     "voice.m4a"
@@ -330,7 +333,7 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                 steps.push(Step::Voice(FileStep {
                     #[cfg(feature = "lark")]
                     kind: MediaKind::Audio,
-                    mime: resolved.mime_type,
+                    mime: resolved.content_type,
                     name: resolved.file_name.unwrap_or_else(|| default_name.into()),
                     bytes: audio,
                     caption: provider
@@ -355,6 +358,22 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
         )));
     }
     Ok(steps)
+}
+
+fn chunk_text(text: &str, limit: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    chunk_text_with_options(
+        text,
+        TextChunkOptions {
+            limit,
+            length_unit: LengthUnit::Characters,
+            mode: ChunkMode::Length,
+            markdown: true,
+            indicators: false,
+        },
+    )
 }
 
 fn now_ms() -> u64 {

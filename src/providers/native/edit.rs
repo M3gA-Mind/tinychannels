@@ -2,7 +2,7 @@
 
 use super::outbound::send_typed;
 use super::{Address, NativeProvider, pre_dispatch, unsupported};
-use crate::providers::slack::text::strip_tool_call_tags;
+use crate::providers::telegram::text::strip_tool_call_tags;
 use tinychannels_bus::channel::{ChannelRef, ChannelSendError, MessageReceipt};
 use tinychannels_bus::{
     ChannelOutboundIntent, ChannelOutboundMessage, ContentPart, OutboundContentPart,
