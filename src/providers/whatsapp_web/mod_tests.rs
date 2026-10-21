@@ -604,13 +604,13 @@ fn message(recipient: &str, content: &str) -> SendMessage {
 #[tokio::test]
 async fn outbound_calls_fail_before_the_bot_is_built() {
     let ch = make_channel();
-    for err in [
-        crate::provider_test_support::send_v1(&ch, &message("+1234567890", "hi"))
-            .await
-            .unwrap_err(),
-        ch.start_typing("+1234567890").await.unwrap_err(),
-        ch.stop_typing("+1234567890").await.unwrap_err(),
-    ] {
+    let send_error = crate::provider_test_support::send_v1(&ch, &message("+1234567890", "hi"))
+        .await
+        .unwrap_err()
+        .to_string();
+    let start_error = ch.start_typing("+1234567890").await.unwrap_err().message;
+    let stop_error = ch.stop_typing("+1234567890").await.unwrap_err().message;
+    for err in [send_error, start_error, stop_error] {
         assert!(err.to_string().contains("client not connected"), "{err}");
     }
 }
@@ -933,7 +933,7 @@ async fn the_real_client_refuses_outbound_while_logged_out() {
 
     let send = tokio::time::timeout(
         HANG_GUARD,
-        crate::provider_test_support::send_v1(&ch, &message("+1234567890", "hi")),
+        crate::provider_test_support::send_v1(ch.as_ref(), &message("+1234567890", "hi")),
     )
     .await
     .expect("send hung");
@@ -943,9 +943,7 @@ async fn the_real_client_refuses_outbound_while_logged_out() {
         .expect("start_typing hung")
         .unwrap_err();
     assert!(
-        composing
-            .to_string()
-            .starts_with("Failed to send typing state (composing): "),
+        composing.message.starts_with("Failed to send typing state (composing): "),
         "{composing}"
     );
     let paused = tokio::time::timeout(HANG_GUARD, ch.stop_typing("+1234567890"))
@@ -953,9 +951,7 @@ async fn the_real_client_refuses_outbound_while_logged_out() {
         .expect("stop_typing hung")
         .unwrap_err();
     assert!(
-        paused
-            .to_string()
-            .starts_with("Failed to send typing state (paused): "),
+        paused.message.starts_with("Failed to send typing state (paused): "),
         "{paused}"
     );
 

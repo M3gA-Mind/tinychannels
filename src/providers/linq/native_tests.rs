@@ -423,7 +423,7 @@ async fn the_descriptor_and_legacy_methods_use_the_native_surface() {
         descriptor.metadata.get("voiceOut").map(String::as_str),
         Some("attachment")
     );
-    assert!(channel.declared_capabilities().remote_control);
+    assert!(ChannelAdapter::declared_capabilities(&channel).remote_control);
     let outcome = ChannelTypedSend::send_typed(&channel, &message(CHAT, vec![text("legacy")]))
         .await
         .unwrap();

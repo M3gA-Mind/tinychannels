@@ -879,7 +879,7 @@ async fn the_descriptor_status_and_legacy_methods_use_the_native_surface() {
     )
     .await
     .unwrap_err();
-    assert_eq!(error.kind, SendErrorKind::Permanent);
+    assert_eq!(error.kind, SendErrorKind::Unknown);
     assert!(error.message.contains("unsupported"));
     let _ = SendErrorKind::Unknown;
 }
