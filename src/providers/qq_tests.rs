@@ -129,12 +129,10 @@ async fn oauth_cache_gateway_and_send_preserve_auth_and_routing() {
         "ws://localhost/gateway"
     );
     for (index, recipient) in ["group:room", "user:alice", "bob"].into_iter().enumerate() {
-        let outcome = crate::provider_test_support::send_v1(
-            &channel,
-            &SendMessage::new("hello", recipient),
-        )
-            .await
-            .unwrap();
+        let outcome =
+            crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", recipient))
+                .await
+                .unwrap();
         assert_eq!(
             outcome.receipt.primary_platform_message_id.as_deref(),
             Some(format!("qq-message-{}", index + 1).as_str())

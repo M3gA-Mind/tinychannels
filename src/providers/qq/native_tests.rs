@@ -128,8 +128,7 @@ fn qq_declares_inbound_file_capabilities_when_media_storage_is_installed() {
     ));
 
     let no_media = super::super::QQChannel::new("app-id".into(), "app-secret".into(), vec![]);
-    let capabilities =
-        crate::providers::native::NativeProvider::declared_capabilities(&no_media);
+    let capabilities = crate::providers::native::NativeProvider::declared_capabilities(&no_media);
     assert!(!capabilities.content.image.inbound);
     assert!(!capabilities.content.image.outbound);
 }
@@ -413,7 +412,10 @@ async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fa
         ContentPart::Image { media, .. }
             if media.file_name.as_deref() == Some("group-listener.png")
     ));
-    assert!(rx.try_recv().is_err(), "one provider event emits one ingress");
+    assert!(
+        rx.try_recv().is_err(),
+        "one provider event emits one ingress"
+    );
     assert_eq!(
         media
             .stored
@@ -513,7 +515,10 @@ async fn qq_gateway_listener_publishes_group_attachment_only_message_without_leg
         ContentPart::Image { media, .. }
             if media.file_name.as_deref() == Some("group-listener.png")
     ));
-    assert!(rx.try_recv().is_err(), "one provider event emits one ingress");
+    assert!(
+        rx.try_recv().is_err(),
+        "one provider event emits one ingress"
+    );
     assert_eq!(media.stored.lock().unwrap()[0].bytes, b"group-image-bytes");
     release_tx.send(()).unwrap();
     drop(rx);
