@@ -1,4 +1,5 @@
 use super::*;
+use crate::channel::{ChannelAdapter, ChannelTypedSend};
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -624,8 +625,23 @@ fn channel_at(base: &str, channel_id: Option<&str>) -> DiscordChannel {
     .with_api_base(format!("{base}/"))
 }
 
-fn outbound(content: &str, recipient: &str) -> SendMessage {
-    SendMessage::new(content, recipient)
+fn outbound(content: &str, recipient: &str) -> tinychannels_bus::ChannelOutboundIntent {
+    tinychannels_bus::ChannelOutboundIntent {
+        channel_id: "discord".into(),
+        conversation_id: recipient.into(),
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: content.into(),
+        },
+        ..Default::default()
+    }
+}
+
+async fn send_text(
+    channel: &DiscordChannel,
+    content: &str,
+    recipient: &str,
+) -> Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError> {
+    ChannelAdapter::send(channel, outbound(content, recipient)).await
 }
 
 /// Mock that records `(channel_id, authorization, content)` per POSTed message.
@@ -668,7 +684,7 @@ fn with_api_base_trims_trailing_slash_and_defaults_to_discord() {
 async fn send_posts_message_to_recipient_with_bot_auth() {
     let (base, mut rx) = message_sink(StatusCode::OK).await;
     let ch = channel_at(&base, Some("default-chan"));
-    ch.send(&outbound("hello there", "chan-1")).await.unwrap();
+    send_text(&ch, "hello there", "chan-1").await.unwrap();
     let (chan, auth, content) = rx.try_recv().unwrap();
     assert_eq!(chan, "chan-1");
     assert_eq!(auth, format!("Bot {BOT_TOKEN}"));
@@ -681,7 +697,7 @@ async fn send_without_recipient_uses_configured_channel_and_splits_long_text() {
     let (base, mut rx) = message_sink(StatusCode::OK).await;
     let ch = channel_at(&base, Some("default-chan"));
     let long = "word ".repeat(500); // 2500 chars → two chunks
-    ch.send(&outbound(&long, "")).await.unwrap();
+    send_text(&ch, &long, "").await.unwrap();
     let first = rx.try_recv().unwrap();
     let second = rx.try_recv().unwrap();
     assert!(rx.try_recv().is_err());
@@ -700,7 +716,7 @@ async fn send_without_recipient_uses_configured_channel_and_splits_long_text() {
 async fn send_without_any_target_fails_before_any_request() {
     let (base, mut rx) = message_sink(StatusCode::OK).await;
     let ch = channel_at(&base, None);
-    let err = ch.send(&outbound("hi", "")).await.unwrap_err().to_string();
+    let err = send_text(&ch, "hi", "").await.unwrap_err().to_string();
     assert!(err.contains("no target channel"), "{err}");
     assert!(rx.try_recv().is_err());
 }
@@ -709,7 +725,7 @@ async fn send_without_any_target_fails_before_any_request() {
 async fn send_surfaces_non_success_status_and_body() {
     let (base, _rx) = message_sink(StatusCode::TOO_MANY_REQUESTS).await;
     let ch = channel_at(&base, None);
-    let err = ch.send(&outbound("hi", "c")).await.unwrap_err().to_string();
+    let err = send_text(&ch, "hi", "c").await.unwrap_err().to_string();
     assert!(err.contains("Discord send message failed (429"), "{err}");
     assert!(err.contains("rate limited body"), "{err}");
 }
