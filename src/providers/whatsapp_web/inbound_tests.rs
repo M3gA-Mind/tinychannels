@@ -1,10 +1,10 @@
 use super::*;
+use crate::channel::ChannelAdapter as _;
 use crate::providers::whatsapp_shared::fakes::{
     CollectingSink, MemoryMedia, MemoryVoices, png_bytes,
 };
 use crate::providers::whatsapp_web::client::OutboundClient;
 use crate::providers::whatsapp_web::fakes::{RecordingClient, base_state};
-use crate::channel::ChannelAdapter as _;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use tinychannels_bus::{ChannelIngress, ContentPart};
@@ -238,12 +238,7 @@ async fn cancelled_typed_delivery_is_not_committed_and_provider_redelivery_succe
             .await
     });
     let pending = deliveries.recv().await.expect("provider callback queued");
-    let channel = WhatsAppWebChannel::new(
-        "test-session.db".into(),
-        None,
-        None,
-        vec!["*".into()],
-    );
+    let channel = WhatsAppWebChannel::new("test-session.db".into(), None, None, vec!["*".into()]);
     let mut cancellation = channel.listener_cancel.subscribe();
     let sink = Arc::new(BlockingSink::default());
     let entered = sink.entered.clone();

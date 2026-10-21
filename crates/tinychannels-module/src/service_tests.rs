@@ -4488,10 +4488,7 @@ async fn whatsapp_cloud_starts_normally_and_serves_webhook_ingress_over_the_bus(
         })
         .await
         .expect_err("a read receipt from another account must be refused");
-    assert!(matches!(
-        foreign_receipt,
-        BusError::MethodFailed { .. }
-    ));
+    assert!(matches!(foreign_receipt, BusError::MethodFailed { .. }));
     // The subscription handshake is answered through the interaction method.
     let challenge = service
         .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
