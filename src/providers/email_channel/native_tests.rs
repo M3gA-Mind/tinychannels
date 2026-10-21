@@ -96,6 +96,22 @@ async fn an_explicit_subject_line_becomes_the_subject() {
 }
 
 #[tokio::test]
+async fn v1_subject_is_sent_as_mail_header_without_leaking_into_body() {
+    let smtp = smtp(false).await;
+    let channel = EmailChannel::new(config_for(&smtp));
+    let mut legacy = crate::traits::SendMessage::new("All green", PEER);
+    legacy.subject = Some("Weekly report".into());
+    crate::provider_test_support::send_v1(&channel, &legacy)
+        .await
+        .unwrap();
+
+    let sent = only(&smtp);
+    assert_eq!(header(&sent, "Subject").as_deref(), Some("Weekly report"));
+    assert!(sent.contains("All green"));
+    assert!(!sent.contains("Subject: Weekly report\nAll green"));
+}
+
+#[tokio::test]
 async fn replies_keep_the_thread_subject_and_headers() {
     let smtp = smtp(false).await;
     let channel = EmailChannel::new(config_for(&smtp));
