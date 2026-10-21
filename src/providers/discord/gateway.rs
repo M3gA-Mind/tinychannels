@@ -174,7 +174,9 @@ impl DiscordChannel {
                 self.handle_message_update_to(
                     d,
                     bot_user_id,
-                    match sink { GatewaySink::Typed(tx) => Some(tx) },
+                    match sink {
+                        GatewaySink::Typed(tx) => Some(tx),
+                    },
                 )
                 .await;
                 true
@@ -182,7 +184,9 @@ impl DiscordChannel {
             "MESSAGE_DELETE" => {
                 self.handle_message_delete_to(
                     d,
-                    match sink { GatewaySink::Typed(tx) => Some(tx) },
+                    match sink {
+                        GatewaySink::Typed(tx) => Some(tx),
+                    },
                 )
                 .await;
                 true
@@ -192,7 +196,9 @@ impl DiscordChannel {
                     d,
                     bot_user_id,
                     true,
-                    match sink { GatewaySink::Typed(tx) => Some(tx) },
+                    match sink {
+                        GatewaySink::Typed(tx) => Some(tx),
+                    },
                 )
                 .await;
                 true
@@ -202,7 +208,9 @@ impl DiscordChannel {
                     d,
                     bot_user_id,
                     false,
-                    match sink { GatewaySink::Typed(tx) => Some(tx) },
+                    match sink {
+                        GatewaySink::Typed(tx) => Some(tx),
+                    },
                 )
                 .await;
                 true
@@ -225,7 +233,9 @@ impl DiscordChannel {
             "INTERACTION_CREATE" => {
                 self.handle_interaction_to(
                     d,
-                    match sink { GatewaySink::Typed(tx) => Some(tx) },
+                    match sink {
+                        GatewaySink::Typed(tx) => Some(tx),
+                    },
                 )
                 .await;
                 true
