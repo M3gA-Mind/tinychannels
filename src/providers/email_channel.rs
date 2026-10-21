@@ -49,7 +49,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 #[cfg(feature = "email")]
 use tokio::sync::Mutex;
-#[cfg(feature = "email")]
+#[cfg(all(feature = "email", test))]
 use tokio::sync::mpsc;
 #[cfg(feature = "email")]
 use tokio::sync::watch;
@@ -78,7 +78,7 @@ use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::mail::{ImapCredentials, MailSecret, SmtpCredentials, SmtpSecurity};
 #[cfg(feature = "email")]
 use crate::providers::native::HostPorts as NativeState;
-#[cfg(feature = "email")]
+#[cfg(all(feature = "email", test))]
 use crate::traits::ChannelMessage;
 
 #[cfg(feature = "email")]

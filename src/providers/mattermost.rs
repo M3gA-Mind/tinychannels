@@ -1,6 +1,6 @@
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
-use crate::traits::{ChannelMessage, SendMessage};
-use anyhow::{Result, bail};
+use crate::traits::ChannelMessage;
+use anyhow::Result;
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use std::sync::Arc;

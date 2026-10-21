@@ -11,10 +11,13 @@ use tinychannels_runtime::config::YuanbaoConfigExt as _;
 
 use tokio::sync::{Mutex as TokioMutex, mpsc, watch};
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::warn;
+#[cfg(test)]
+use tracing::info;
 
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::native::HostPorts as NativeState;
+#[cfg(test)]
 use crate::traits::ChannelMessage;
 
 use super::config::YuanbaoConfig;

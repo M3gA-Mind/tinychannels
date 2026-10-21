@@ -14,7 +14,9 @@ mod native;
 
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::native::HostPorts as NativeState;
+#[cfg(test)]
 use crate::traits::ChannelMessage;
+#[cfg(test)]
 use anyhow::Context as _;
 use directories::UserDirs;
 use rusqlite::{Connection, OpenFlags};
@@ -23,7 +25,9 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
+#[cfg(test)]
+use tokio::sync::mpsc;
 
 type ListenerCancellationSlot = Arc<StdMutex<Option<(u64, watch::Sender<bool>)>>>;
 

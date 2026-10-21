@@ -3,10 +3,12 @@
 
 use super::events::Flow;
 use super::types::SlackChannel;
+#[cfg(test)]
 use crate::traits::ChannelMessage;
 use futures_util::stream::FuturesUnordered;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
+#[cfg(test)]
 use tokio::sync::mpsc::Sender;
 use tokio_tungstenite::tungstenite::Message;
 

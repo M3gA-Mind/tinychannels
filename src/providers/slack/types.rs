@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
+#[cfg(test)]
 use tinychannels_bus::channel::ChannelSendError;
 
 pub(crate) const SLACK_API_BASE: &str = "https://slack.com/api";
