@@ -4318,7 +4318,7 @@ async fn v1_subjects_are_normalized_only_for_providers_that_consume_them() {
 
 #[tokio::test]
 async fn v1_discord_send_uses_configured_channel_when_recipient_is_empty() {
-    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     let rest = MockServer::start().await;
