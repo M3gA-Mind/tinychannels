@@ -7,7 +7,7 @@ mod outbound;
 
 pub use config::IrcChannelConfig;
 use inbound::ListenerRegistration;
-#[cfg(test)]
+#[cfg(any(test, debug_assertions))]
 use inbound::{IRC_STYLE_PREFIX, IrcMessage, encode_sasl_plain};
 use outbound::split_message;
 
