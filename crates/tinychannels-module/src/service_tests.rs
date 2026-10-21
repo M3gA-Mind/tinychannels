@@ -2859,6 +2859,37 @@ async fn preparation_preserves_explicit_keys_and_typed_thread_before_provider_io
     channels.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn telegram_v1_preparation_splits_topic_address_and_preserves_parent_reply() {
+    use tinychannels_bus::module_runtime::ChannelMessagePreparation;
+
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(connection);
+    let channels = Channels::new(host, None);
+    let mut message = SendMessage::new("reply body", "-200:42");
+    message.thread_ts = Some("100".into());
+
+    let prepared = channels
+        .prepare_outbound_intent(
+            "telegram".into(),
+            ChannelMessagePreparation::Typed(message),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(prepared.intent.conversation_id, "-200");
+    assert_eq!(
+        prepared.intent.conversation_ref.as_ref().and_then(|value| value.topic_id.as_deref()),
+        Some("42")
+    );
+    assert_eq!(prepared.intent.reply_to_id.as_deref(), Some("100"));
+    assert_eq!(prepared.intent.thread_id, None);
+}
+
 struct OutboundOnlyFixture(tokio::sync::mpsc::Sender<SendMessage>);
 
 #[async_trait::async_trait]
