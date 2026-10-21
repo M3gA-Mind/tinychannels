@@ -82,12 +82,12 @@ impl IMessageChannel {
         }
 
         let path = db_path.clone();
-        let conn = tokio::task::spawn_blocking(move || super::open_read_only(&path))
+        let conn = tokio::task::spawn_blocking(move || super::db::open_read_only(&path))
             .await
             .map_err(|_| listener_error("iMessage database worker failed"))?
             .map_err(|_| listener_error("iMessage database could not be opened"))?;
         let (mut conn, mut cursor) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            let rowid = super::max_inbound_rowid(&conn)?;
+            let rowid = super::db::max_inbound_rowid(&conn)?;
             let (read_date, read_rowid) = super::db::max_read_cursor(&conn)?;
             Ok::<(Connection, ListenerCursor), anyhow::Error>((
                 conn,
