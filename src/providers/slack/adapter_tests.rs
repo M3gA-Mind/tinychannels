@@ -891,12 +891,11 @@ async fn listening_needs_a_channel_or_an_app_token_and_picks_the_transport() {
         }
     }
     let bare = SlackChannel::new("t".into(), None, vec![]);
+    let error = ChannelAdapter::start(&bare, &NoSink)
+        .await
+        .unwrap_err();
     assert!(
-        ChannelAdapter::start(&bare, &NoSink)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("channel_id required")
+        error.message.contains("channel_id required")
     );
     let dead = |channel: Option<&str>, app: Option<&str>| {
         SlackChannel::new("t".into(), channel.map(str::to_owned), vec!["*".into()])

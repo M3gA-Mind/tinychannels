@@ -658,7 +658,9 @@ async fn listener_stops_when_shutdown_is_signaled() {
     let (tx, _rx) = mpsc::channel(1);
     let listener = {
         let ch = ch.clone();
-        tokio::spawn(async move { crate::provider_test_support::listen_v1(&ch, tx).await })
+        tokio::spawn(async move {
+            crate::provider_test_support::listen_v1(ch.as_ref(), tx).await
+        })
     };
     tokio::time::timeout(Duration::from_secs(3), async {
         while ch.inbound_rx.lock().await.is_some() {

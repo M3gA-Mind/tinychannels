@@ -667,12 +667,14 @@ async fn unparseable_recipients_are_rejected() {
     let no_digits = ch.start_typing("+abc").await.unwrap_err();
     assert!(
         no_digits.message.contains("valid phone number"),
-        "{no_digits}"
+        "{}",
+        no_digits.message
     );
     let bad_jid = ch.stop_typing("@@").await.unwrap_err();
     assert!(
         bad_jid.message.contains("Invalid WhatsApp JID"),
-        "{bad_jid}"
+        "{}",
+        bad_jid.message
     );
     assert!(fake.calls().is_empty());
 }
@@ -946,7 +948,8 @@ async fn the_real_client_refuses_outbound_while_logged_out() {
         composing
             .message
             .starts_with("Failed to send typing state (composing): "),
-        "{composing}"
+        "{}",
+        composing.message
     );
     let paused = tokio::time::timeout(HANG_GUARD, ch.stop_typing("+1234567890"))
         .await
@@ -956,7 +959,8 @@ async fn the_real_client_refuses_outbound_while_logged_out() {
         paused
             .message
             .starts_with("Failed to send typing state (paused): "),
-        "{paused}"
+        "{}",
+        paused.message
     );
 
     let (_, hook) = lifecycle.hooks.lock().pop().expect("hook registered");
