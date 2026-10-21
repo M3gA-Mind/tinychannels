@@ -282,6 +282,9 @@ impl LarkChannel {
             .unwrap_or_default(),
             _ => String::new(),
         };
+        // Feishu inserts these placeholders into plain text for mentioned
+        // users. Keep the historical user-facing text on the typed path too.
+        let text = super::strip_at_placeholders(&text).trim().to_owned();
         let thread_id = message
             .get("thread_id")
             .and_then(serde_json::Value::as_str)
