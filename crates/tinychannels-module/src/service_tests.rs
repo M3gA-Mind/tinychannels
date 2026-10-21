@@ -2567,10 +2567,10 @@ async fn remote_help_is_parsed_and_rendered_inside_the_module() {
                     "content":"/help", "channel":"telegram:fixture", "timestamp":1
                 }))
                 .unwrap(),
-                capabilities: tinychannels_bus::ChannelCapabilities {
+                capabilities: Some(tinychannels_bus::ChannelCapabilities {
                     remote_control: true,
                     ..Default::default()
-                },
+                }),
                 route: RemoteRoute {
                     provider: "fixture".into(),
                     model: "fixture".into(),
@@ -2692,10 +2692,10 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
         Request::Route {
         workspace_dir: ".".into(),
         message: serde_json::from_value(serde_json::json!({"id":"fixture","sender":"sender","reply_target":"chat","content":content,"channel":channel,"timestamp":1})).unwrap(),
-        capabilities: tinychannels_bus::ChannelCapabilities {
+        capabilities: Some(tinychannels_bus::ChannelCapabilities {
             remote_control: true,
             ..Default::default()
-        },
+        }),
         route: RemoteRoute { provider: "old".into(), model: "model".into() }, history_len: 3,
         providers: vec![ProviderDescriptor { name: "approved".into(), aliases: vec!["alias".into()] }],
     }
@@ -2788,10 +2788,10 @@ async fn route_remote_commands_use_host_capabilities_for_isolated_runtime() {
                 "content":"/help", "channel":"telegram", "timestamp":1
             }))
             .unwrap(),
-            capabilities: tinychannels_bus::ChannelCapabilities {
+            capabilities: Some(tinychannels_bus::ChannelCapabilities {
                 remote_control: true,
                 ..Default::default()
-            },
+            }),
             route: RemoteRoute {
                 provider: "fixture".into(),
                 model: "fixture".into(),

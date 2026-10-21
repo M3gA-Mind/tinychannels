@@ -564,7 +564,7 @@ impl Channels {
         };
         let capabilities = match &request {
             tinychannels_bus::module_control::ChannelControlRequest::Route {
-                capabilities, ..
+                capabilities: Some(capabilities), ..
             } => capabilities.clone(),
             _ => configured_capabilities(&self.running, name).await,
         };

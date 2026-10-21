@@ -20,7 +20,10 @@ pub enum ChannelControlRequest {
         message: Box<ChannelMessage>,
         /// Capabilities of the configured channel instance selected by the host.
         /// Isolated turn runtimes do not own provider instances themselves.
-        capabilities: ChannelCapabilities,
+        /// Missing values retain compatibility with callers that rely on the
+        /// module's own configured provider registry.
+        #[serde(default)]
+        capabilities: Option<ChannelCapabilities>,
         route: RemoteRoute,
         history_len: usize,
         providers: Vec<ProviderDescriptor>,
