@@ -5487,6 +5487,53 @@ async fn typed_listener_retries_rejected_update_before_acknowledging_its_offset(
 }
 
 #[tokio::test]
+async fn typed_listener_stop_cancels_a_blocked_bot_identity_probe() {
+    use crate::channel::{ChannelInboundSink, ChannelSendError};
+
+    struct NullSink;
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for NullSink {
+        async fn push(
+            &self,
+            _ingress: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), ChannelSendError> {
+            Ok(())
+        }
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_seen_tx, request_seen_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 4096];
+        let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut request).await;
+        let _ = request_seen_tx.send(());
+        std::future::pending::<()>().await;
+    });
+
+    let mut channel = TelegramChannel::new("test-token".into(), vec!["alice".into()], true);
+    channel.api_base = format!("http://{address}");
+    let channel = Arc::new(channel);
+    let start = crate::channel::ChannelAdapter::start(channel.as_ref(), &NullSink);
+    tokio::pin!(start);
+    tokio::select! {
+        result = &mut start => panic!("listener exited before the blocked getMe call: {result:?}"),
+        result = request_seen_rx => result.expect("getMe request reached the local server"),
+    }
+
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), &mut start)
+        .await
+        .expect("stop cancels the blocked provider request")
+        .unwrap();
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
 async fn native_reaction_removal_clears_reactions_and_surfaces_rejection() {
     let server = mock_api().await;
     mount_post(

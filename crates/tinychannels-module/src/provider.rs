@@ -1945,7 +1945,7 @@ impl Running {
     ) -> Arc<Self> {
         let provider_name = channel.descriptor().id;
         Self::start_inner(
-            None,
+            Some(channel.clone()),
             provider_name,
             hooks,
             host,
