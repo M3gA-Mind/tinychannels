@@ -1959,14 +1959,9 @@ struct ReconnectingChannel {
     attempts: StdMutex<Vec<oneshot::Sender<()>>>,
 }
 #[async_trait::async_trait]
-impl Channel for ReconnectingChannel {
-    fn name(&self) -> &str {
-        "reconnect-fixture"
-    }
-    async fn send(&self, _: &SendMessage) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn listen(&self, _: mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
+impl crate::provider::TestProviderBehavior for ReconnectingChannel {
+    fn test_provider_id(&self) -> &'static str { "reconnect-fixture" }
+    async fn test_start(&self, _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync)) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         let last = {
             let mut attempts = self.attempts.lock().unwrap();
             let receipt = attempts.remove(0);
@@ -1976,7 +1971,7 @@ impl Channel for ReconnectingChannel {
         if last {
             std::future::pending::<()>().await;
         }
-        anyhow::bail!("fixture disconnected")
+        Err(tinychannels::channel::ChannelSendError { message: "fixture disconnected".into(), retryable: true, ..Default::default() })
     }
 }
 
@@ -1993,7 +1988,7 @@ async fn disconnected_module_provider_reconnects_and_stop_joins_the_new_listener
         .await
         .unwrap();
     let host = HostChannels::new(connection);
-    let running = Running::start_supervised(
+    let running = Running::start_test_supervised(
         channel,
         Arc::new(Hooks::default()),
         host.clone(),
@@ -2030,7 +2025,7 @@ async fn stopping_during_selected_backoff_prevents_another_provider_attempt() {
         .await
         .unwrap();
     let host = HostChannels::new(connection);
-    let running = Running::start_supervised(
+    let running = Running::start_test_supervised(
         channel.clone(),
         Arc::new(Hooks::default()),
         host.clone(),
@@ -3188,17 +3183,9 @@ async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_s
 struct IdentityChannel(std::sync::Mutex<Option<String>>);
 
 #[async_trait::async_trait]
-impl Channel for IdentityChannel {
-    fn name(&self) -> &str {
-        "whatsapp"
-    }
-    async fn send(&self, _: &SendMessage) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn listen(&self, _: mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
-        std::future::pending().await
-    }
-    fn media_account_identity(&self) -> Option<String> {
+impl crate::provider::TestProviderBehavior for IdentityChannel {
+    fn test_provider_id(&self) -> &'static str { "whatsapp" }
+    fn test_media_account_identity(&self) -> Option<String> {
         self.0.lock().unwrap().clone()
     }
 }

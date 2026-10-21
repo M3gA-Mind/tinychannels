@@ -1810,6 +1810,24 @@ impl Running {
         )
     }
 
+    #[cfg(test)]
+    pub(crate) fn start_test_supervised<T: TestProviderBehavior + 'static>(
+        channel: Arc<T>,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+        supervision: ChannelSupervisionPolicy,
+    ) -> Arc<Self> {
+        let provider_name = channel.test_provider_id().to_owned();
+        Self::start_inner(
+            provider_name,
+            hooks,
+            host,
+            Some(supervision),
+            false,
+            NativePorts::test(channel, LongTailListenerMode::Adapter),
+        )
+    }
+
     pub(crate) fn provider_name(&self) -> &str {
         &self.provider_name
     }
