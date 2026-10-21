@@ -64,8 +64,6 @@ impl TelegramChannel {
             draft_update_interval_ms: 1000,
             silent_streaming: true,
             last_draft_edit: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            #[cfg(test)]
-            typing_handle: parking_lot::Mutex::new(None),
             mention_only,
             bot_username: parking_lot::Mutex::new(None),
             recent_updates: parking_lot::Mutex::new(TelegramUpdateWindow::default()),

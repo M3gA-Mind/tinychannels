@@ -37,7 +37,7 @@ fn proactive_target_uses_configured_chat_id() {
 }
 
 #[test]
-fn typing_handle_starts_as_none() {
+fn typing_capability_is_declared() {
     let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
     assert!(
         ch.declared_capabilities()

@@ -19,15 +19,6 @@ pub(super) const GATEWAY_INTENTS: u64 =
     1 | (1 << 9) | (1 << 10) | (1 << 12) | (1 << 13) | (1 << 15);
 
 impl DiscordChannel {
-    /// Run one gateway session until the socket closes or the receiver drops.
-    #[cfg(test)]
-    pub(super) async fn run_gateway(
-        &self,
-        tx: tokio::sync::mpsc::Sender<ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        self.run_gateway_to(GatewaySink::Legacy(tx)).await
-    }
-
     pub(super) async fn run_gateway_typed(
         &self,
         tx: tokio::sync::mpsc::Sender<tinychannels_bus::ChannelIngress>,
