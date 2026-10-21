@@ -166,7 +166,8 @@ impl ChannelAdapter for CliChannel {
         &self,
         sink: &(dyn ChannelInboundSink + Send + Sync),
     ) -> Result<(), ChannelSendError> {
-        self.start_with_reader(BufReader::new(io::stdin()), sink).await;
+        self.start_with_reader(BufReader::new(io::stdin()), sink)
+            .await;
         Ok(())
     }
 

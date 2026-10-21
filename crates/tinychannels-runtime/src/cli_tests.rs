@@ -1,8 +1,8 @@
 use super::*;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use tokio::io::ReadBuf;
 use tokio::sync::Notify;
@@ -165,7 +165,9 @@ async fn stop_cancels_blocked_reader_and_adapter_can_restart() {
     let running_cli = cli.clone();
     let running_sink = sink.clone();
     let task = tokio::spawn(async move {
-        running_cli.start_with_reader(reader, running_sink.as_ref()).await;
+        running_cli
+            .start_with_reader(reader, running_sink.as_ref())
+            .await;
     });
 
     tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
@@ -177,7 +179,8 @@ async fn stop_cancels_blocked_reader_and_adapter_can_restart() {
         .expect("stop should release a blocked stdin read")
         .unwrap();
 
-    cli.start_with_reader("again\n".as_bytes(), sink.as_ref()).await;
+    cli.start_with_reader("again\n".as_bytes(), sink.as_ref())
+        .await;
     let ingress = rx.recv().await.expect("restarted adapter forwards input");
     let ChannelIngress::Inbound(envelope) = ingress else {
         panic!("CLI emits only inbound messages");
