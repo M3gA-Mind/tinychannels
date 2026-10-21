@@ -1062,6 +1062,26 @@ async fn listen_returns_when_gateway_closes() {
 }
 
 #[tokio::test]
+async fn gateway_reconnect_controls_release_the_current_typed_session() {
+    for opcode in [7, 9] {
+        let (base, server) = spawn_gateway(move |mut ws| async move {
+            send_json(&mut ws, json!({"op": opcode, "d": false})).await;
+        })
+        .await;
+        let channel = channel_at(&base, None);
+        let (tx, _rx) = mpsc::channel(1);
+        tokio::time::timeout(HANG_GUARD, channel.run_gateway_typed(tx))
+            .await
+            .expect("reconnect control closes this gateway session")
+            .expect("reconnect is a normal session boundary");
+        tokio::time::timeout(HANG_GUARD, server)
+            .await
+            .expect("mock gateway exits")
+            .expect("mock gateway task succeeds");
+    }
+}
+
+#[tokio::test]
 async fn listen_stops_when_receiver_is_gone() {
     let (base, server) = spawn_gateway(|mut ws| async move {
         send_json(
