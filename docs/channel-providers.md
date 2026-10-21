@@ -53,6 +53,8 @@ providers support every feature.
 
 The matrix names the operations being tested. The provider descriptor and
 mock-wire assertion in each suite are authoritative for its supported subset.
+Telegram has provider tests, but is not currently part of a full shared
+conformance-matrix suite.
 
 ## Controller Registry
 
