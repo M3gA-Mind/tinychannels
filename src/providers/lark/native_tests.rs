@@ -1,4 +1,5 @@
 use super::*;
+use base64::Engine as _;
 
 #[tokio::test]
 async fn typed_inbound_strips_feishu_mention_placeholders_from_text() {
@@ -224,7 +225,7 @@ async fn lark_audio_preparation_rejects_unsupported_and_invalid_sources() {
             let audio_base64 = self
                 .0
                 .as_ref()
-                .map_err(|message| anyhow::anyhow!(message))?;
+                .map_err(|message| anyhow::anyhow!("{message}"))?;
             Ok(VoiceCodecResult {
                 audio_base64: audio_base64.clone(),
                 duration_ms: None,
@@ -253,10 +254,7 @@ async fn lark_audio_preparation_rejects_unsupported_and_invalid_sources() {
         .opus_audio(&file("audio/flac", b"audio"))
         .await
         .unwrap_err();
-    assert_eq!(
-        unsupported.kind,
-        tinychannels_bus::channel::SendErrorKind::Unsupported
-    );
+    assert!(unsupported.unsupported);
     assert!(!unsupported.sent_before_error);
 
     let malformed = channel
