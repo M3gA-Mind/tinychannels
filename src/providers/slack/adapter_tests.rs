@@ -866,10 +866,16 @@ async fn health_checks_follow_the_auth_test_status() {
 
 #[tokio::test]
 async fn listening_needs_a_channel_or_an_app_token_and_picks_the_transport() {
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    struct NoSink;
+    #[async_trait::async_trait]
+    impl crate::channel::ChannelInboundSink for NoSink {
+        async fn push(&self, _: tinychannels_bus::ChannelIngress) -> Result<(), ChannelSendError> {
+            Ok(())
+        }
+    }
     let bare = SlackChannel::new("t".into(), None, vec![]);
     assert!(
-        Channel::listen(&bare, tx.clone())
+        ChannelAdapter::start(&bare, &NoSink)
             .await
             .unwrap_err()
             .to_string()
@@ -891,7 +897,7 @@ async fn listening_needs_a_channel_or_an_app_token_and_picks_the_transport() {
     ] {
         let waited = tokio::time::timeout(
             std::time::Duration::from_millis(80),
-            Channel::listen(&channel, tx.clone()),
+            ChannelAdapter::start(&channel, &NoSink),
         )
         .await;
         assert!(waited.is_err(), "the transport loops until cancelled");
