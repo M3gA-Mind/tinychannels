@@ -296,3 +296,76 @@ async fn typed_sse_cancellation_interrupts_trailing_event_delivery() {
         .unwrap();
     server.verify().await;
 }
+
+#[tokio::test]
+async fn typed_sse_skips_invalid_utf8_and_retries_malformed_trailing_data() {
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::{Notify, watch};
+
+    async fn read_request(stream: &mut tokio::net::TcpStream) {
+        let mut request = Vec::new();
+        let mut byte = [0u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+        }
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let reconnect_seen = Arc::new(Notify::new());
+    let server_reconnect_seen = reconnect_seen.clone();
+    let server = tokio::spawn(async move {
+        let (mut first, _) = listener.accept().await.unwrap();
+        read_request(&mut first).await;
+        first
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        // The invalid chunk is skipped, while the following valid bytes leave
+        // malformed trailing event data for the end-of-stream parser.
+        first.write_all(b"1\r\n\xff\r\n").await.unwrap();
+        first
+            .write_all(b"10\r\ndata: {not-json\n\r\n0\r\n\r\n")
+            .await
+            .unwrap();
+        drop(first);
+
+        let (mut second, _) = listener.accept().await.unwrap();
+        read_request(&mut second).await;
+        second
+            .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        server_reconnect_seen.notify_one();
+    });
+
+    struct IgnoreSink;
+    #[async_trait]
+    impl ChannelInboundSink for IgnoreSink {
+        async fn push(
+            &self,
+            _ingress: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+            Ok(())
+        }
+    }
+
+    let channel = mock_signal(format!("http://{address}/"));
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let task = tokio::spawn(async move { channel.listen_typed(&IgnoreSink, cancel_rx).await });
+    tokio::time::timeout(Duration::from_secs(6), reconnect_seen.notified())
+        .await
+        .expect("listener should reconnect after malformed trailing data");
+    cancel_tx.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("cancel should interrupt retry backoff")
+        .unwrap()
+        .unwrap();
+    server.await.unwrap();
+}
