@@ -2489,7 +2489,15 @@ fn exported_manifest_preserves_the_complete_contract_member_order() {
         .iter()
         .map(|method| method.as_str())
         .collect();
-    assert_eq!(actual, tinychannels_bus::METHODS);
+    #[cfg(feature = "test-support")]
+    let expected = {
+        let mut expected = tinychannels_bus::METHODS.to_vec();
+        expected.extend(["TestRegisterRemoteChannel", "TestUnregisterRemoteChannel"]);
+        expected
+    };
+    #[cfg(not(feature = "test-support"))]
+    let expected = tinychannels_bus::METHODS.to_vec();
+    assert_eq!(actual, expected);
 }
 
 #[tokio::test]
