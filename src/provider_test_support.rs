@@ -28,7 +28,15 @@ pub(crate) struct LegacyMessageSink(tokio::sync::mpsc::Sender<ChannelMessage>);
 impl ChannelInboundSink for LegacyMessageSink {
     async fn push(&self, ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
         if let ChannelIngress::Inbound(envelope) = ingress {
-            let timestamp = envelope.timestamp_unix_ms.unwrap_or_default() / 1_000;
+            let timestamp = envelope.timestamp_unix_ms.map_or_else(
+                || {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                },
+                |timestamp| timestamp / 1_000,
+            );
             let message = crate::channel::typed_message_from_inbound_envelope(&envelope, timestamp);
             self.0
                 .send(message)
