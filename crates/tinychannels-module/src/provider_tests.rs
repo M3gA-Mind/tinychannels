@@ -1,6 +1,25 @@
 use super::*;
 use tinychannels::SendMessage;
 
+#[test]
+fn native_operation_errors_preserve_dispatch_uncertainty() {
+    let before_dispatch = adapter_operation_error(
+        "telegram",
+        RunningSendError::NotDispatched("queue is full".into()),
+    );
+    assert!(before_dispatch.retryable);
+    assert!(!before_dispatch.sent_before_error);
+    assert_eq!(before_dispatch.message, "telegram operation failed");
+
+    let after_dispatch = adapter_operation_error(
+        "telegram",
+        RunningSendError::AfterDispatch("response was lost".into()),
+    );
+    assert!(!after_dispatch.retryable);
+    assert!(after_dispatch.sent_before_error);
+    assert_eq!(after_dispatch.message, "telegram operation failed");
+}
+
 #[derive(Clone, Default)]
 struct RecordingDraftIntents(Arc<std::sync::Mutex<Vec<tinychannels_bus::ChannelOutboundIntent>>>);
 
