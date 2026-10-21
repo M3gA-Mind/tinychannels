@@ -667,12 +667,12 @@ async fn typed_operations_preserve_errors_and_receipts() {
     let error = crate::channel::ChannelTypedSend::send_typed(&channel, &bad)
         .await
         .unwrap_err();
-    assert!(error.downcast_ref::<DiscordError>().unwrap().0.unsupported);
+    assert!(error.unsupported);
     let failed = crate::channel::ChannelEdit::edit(&channel, &receipt, intent(&"x".repeat(2001)))
         .await
         .unwrap_err();
     assert_eq!(
-        failed.downcast_ref::<DiscordError>().unwrap().0.kind,
+        failed.kind,
         SendErrorKind::TooLong
     );
     assert!(

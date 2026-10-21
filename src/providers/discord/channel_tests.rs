@@ -752,7 +752,7 @@ async fn send_without_recipient_uses_configured_channel_and_splits_long_text() {
 async fn send_without_any_target_fails_before_any_request() {
     let (base, mut rx) = message_sink(StatusCode::OK).await;
     let ch = channel_at(&base, None);
-    let err = send_text(&ch, "hi", "").await.unwrap_err().to_string();
+    let err = send_text(&ch, "hi", "").await.unwrap_err().message;
     assert!(err.contains("no target channel"), "{err}");
     assert!(rx.try_recv().is_err());
 }
@@ -761,7 +761,7 @@ async fn send_without_any_target_fails_before_any_request() {
 async fn send_surfaces_non_success_status_and_body() {
     let (base, _rx) = message_sink(StatusCode::TOO_MANY_REQUESTS).await;
     let ch = channel_at(&base, None);
-    let err = send_text(&ch, "hi", "c").await.unwrap_err().to_string();
+    let err = send_text(&ch, "hi", "c").await.unwrap_err().message;
     assert!(err.contains("Discord send message failed (429"), "{err}");
     assert!(err.contains("rate limited body"), "{err}");
 }
