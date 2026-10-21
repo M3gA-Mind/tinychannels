@@ -100,3 +100,36 @@ fn media_read_begin_preserves_full_logical_scope_and_opaque_reference() {
     assert_eq!(decoded.scope.turn_id, begin.scope.turn_id);
     assert_eq!(decoded.media.opaque_id, begin.media.opaque_id);
 }
+
+#[test]
+fn opaque_media_reference_round_trips_without_a_shared_path() {
+    let media = MediaReference {
+        opaque_id: Some("tinychannels_media_v1_fixture".into()),
+        content_type: Some("image/png".into()),
+        kind: MediaKind::Image,
+        ..Default::default()
+    };
+    let part = crate::ContentPart::Image {
+        media: media.clone(),
+        caption: Some("first attachment".into()),
+        alt_text: None,
+    };
+    let envelope = crate::ChannelInboundEnvelope {
+        parts: vec![
+            crate::ContentPart::Text {
+                text: "look".into(),
+                markdown_dialect: None,
+            },
+            part,
+        ],
+        ..Default::default()
+    };
+
+    let encoded = serde_json::to_value(&envelope).unwrap();
+    let decoded: crate::ChannelInboundEnvelope = serde_json::from_value(encoded.clone()).unwrap();
+    assert_eq!(decoded.parts, envelope.parts);
+    assert_eq!(decoded.parts[1], envelope.parts[1]);
+    assert_eq!(decoded.parts[1].media_reference().unwrap().opaque_id, media.opaque_id);
+    assert!(encoded.to_string().contains("tinychannels_media_v1_fixture"));
+    assert!(!encoded.to_string().contains("localCachePath"));
+}
