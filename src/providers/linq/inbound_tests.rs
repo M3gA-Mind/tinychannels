@@ -1,6 +1,5 @@
 use super::*;
 use crate::providers::linq::fixtures::*;
-use crate::traits::Channel;
 use serde_json::json;
 use tinychannels_bus::{ContentPart, ConversationKind};
 use wiremock::matchers::{method, path};

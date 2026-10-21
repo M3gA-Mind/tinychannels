@@ -120,6 +120,33 @@ fn conformance_media(
     }
 }
 
+fn plain_text_intent(text: &str, conversation_id: &str) -> tinychannels_bus::ChannelOutboundIntent {
+    tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "telegram-plain-text-test".into(),
+        channel_id: "telegram".into(),
+        conversation_id: conversation_id.into(),
+        payload: tinychannels_bus::OutboundPayload::Text { text: text.into() },
+        ..Default::default()
+    }
+}
+
+fn draft_text_intent(
+    text: &str,
+    conversation_id: &str,
+    reply_to_id: Option<&str>,
+    thread_id: Option<&str>,
+) -> tinychannels_bus::ChannelOutboundIntent {
+    tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "telegram-draft-test".into(),
+        channel_id: "telegram".into(),
+        conversation_id: conversation_id.into(),
+        reply_to_id: reply_to_id.map(str::to_owned),
+        thread_id: thread_id.map(str::to_owned),
+        payload: tinychannels_bus::OutboundPayload::Text { text: text.into() },
+        ..Default::default()
+    }
+}
+
 struct TelegramConformanceMedia;
 
 #[async_trait::async_trait]
@@ -1772,10 +1799,12 @@ async fn send_draft_posts_placeholder_and_returns_message_id() {
     .await;
     let ch = streaming(&server);
 
-    let id = ch
-        .send_draft(&SendMessage::new("", "100:7").in_thread(Some("55".into())))
-        .await
-        .unwrap();
+    let id = ChannelStreamingDraft::start_draft(
+        &ch,
+        draft_text_intent("", "100:7", Some("55"), Some("7")),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(id.as_deref(), Some("321"));
     assert_eq!(
@@ -1796,10 +1825,12 @@ async fn send_draft_without_message_id_in_result_returns_none() {
     mount_post(&server, "sendMessage", ok_with(serde_json::json!({}))).await;
     let ch = streaming(&server);
 
-    let id = ch
-        .send_draft(&SendMessage::new("thinking", "100"))
-        .await
-        .unwrap();
+    let id = ChannelStreamingDraft::start_draft(
+        &ch,
+        draft_text_intent("thinking", "100", None, None),
+    )
+    .await
+    .unwrap();
     assert_eq!(id, None);
     assert_eq!(
         json_bodies(&server, "sendMessage").await[0]["text"],
@@ -1818,8 +1849,10 @@ async fn send_draft_surfaces_api_rejection() {
     .await;
     let ch = streaming(&server);
 
-    let err = ch
-        .send_draft(&SendMessage::new("x", "100"))
+    let err = ChannelStreamingDraft::start_draft(
+        &ch,
+        draft_text_intent("x", "100", None, None),
+    )
         .await
         .unwrap_err()
         .to_string();
@@ -4102,7 +4135,7 @@ async fn legacy_reaction_marker_is_plain_text_not_a_telegram_operation() {
     mount_post(&server, "sendMessage", ok()).await;
     let ch = channel_for(&server, &["*"]);
 
-    Channel::send(&ch, &SendMessage::new("[REACTION:🔥] hello", "100"))
+    ChannelAdapter::send(&ch, plain_text_intent("[REACTION:🔥] hello", "100"))
         .await
         .unwrap();
 
@@ -4280,7 +4313,7 @@ async fn send_bare_existing_path_remains_plain_text() {
     let file = dir.path().join("report.pdf");
     std::fs::write(&file, b"%PDF").unwrap();
 
-    Channel::send(&ch, &SendMessage::new(file.to_str().unwrap(), "100"))
+    ChannelAdapter::send(&ch, plain_text_intent(file.to_str().unwrap(), "100"))
         .await
         .unwrap();
 
@@ -4399,8 +4432,8 @@ async fn typing_refresh_reports_acceptance_rejection_and_transport_error() {
 #[test]
 fn telegram_advertises_reaction_support() {
     let ch = TelegramChannel::new("tok".into(), vec!["*".into()], false);
-    assert!(ch.supports_reactions());
     let caps = ch.declared_capabilities();
+    assert!(caps.reactions);
     assert!(caps.actions.supported.contains(&"typing".into()));
     assert!(caps.actions.supported.contains(&"edit".into()));
     assert!(caps.actions.supported.contains(&"delete".into()));
@@ -5311,12 +5344,13 @@ async fn draft_edit_validates_receipt_ids_and_reports_wire_failures() {
 #[test]
 fn telegram_declares_remote_control_approvals_and_proactive_defaults() {
     let ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
-    assert!(Channel::supports_remote_control(&ch));
-    assert!(Channel::supports_chat_approvals(&ch));
-    assert!(Channel::history_key_ignores_thread(&ch));
+    let capabilities = ch.declared_capabilities();
+    assert!(capabilities.remote_control);
+    assert!(capabilities.chat_approvals);
+    assert!(capabilities.history_key_ignores_thread);
     assert_eq!(
-        crate::channel::ChannelAdapter::proactive_target(&ch),
-        Channel::proactive_target(&ch)
+        ChannelAdapter::proactive_target(&ch),
+        ch.proactive_target()
     );
 }
 

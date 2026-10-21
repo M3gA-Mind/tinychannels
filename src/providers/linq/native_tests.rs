@@ -2,7 +2,6 @@ use super::*;
 use crate::channel::{ChannelAdapter, ChannelReaction, ChannelTypedSend, ChannelTyping};
 use crate::providers::linq::fixtures::*;
 use crate::providers::native::fixtures::stored_media;
-use crate::traits::Channel;
 use serde_json::json;
 use tinychannels_bus::channel::ConversationRef;
 use tinychannels_bus::{
@@ -425,8 +424,7 @@ async fn the_descriptor_and_legacy_methods_use_the_native_surface() {
         Some("attachment")
     );
     assert!(channel.declared_capabilities().remote_control);
-    let outcome = channel
-        .send_typed_with_receipt(&message(CHAT, vec![text("legacy")]))
+    let outcome = ChannelTypedSend::send_typed(&channel, &message(CHAT, vec![text("legacy")]))
         .await
         .unwrap();
     assert_eq!(

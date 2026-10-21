@@ -3,7 +3,6 @@ use crate::channel::{ChannelAdapter, ChannelTypedSend, ChannelTyping};
 use crate::config::EmailConfig;
 use crate::providers::email_channel::fixtures::*;
 use crate::providers::native::fixtures::stored_media;
-use crate::traits::Channel;
 use tinychannels_bus::channel::{ConversationRef, MessageReceiptPartKind};
 use tinychannels_bus::{
     ChannelOutboundMessage, ChannelRef, ContentPart, ConversationKind, MediaKind, MediaReference,
@@ -284,8 +283,7 @@ async fn unsupported_operations_and_the_descriptor_use_the_native_surface() {
             .unsupported
     );
     assert!(channel.declared_capabilities().remote_control);
-    let outcome = channel
-        .send_typed_with_receipt(&message(PEER, vec![text("legacy")]))
+    let outcome = ChannelTypedSend::send_typed(&channel, &message(PEER, vec![text("legacy")]))
         .await
         .unwrap();
     assert!(outcome.receipt.primary_platform_message_id.is_some());
