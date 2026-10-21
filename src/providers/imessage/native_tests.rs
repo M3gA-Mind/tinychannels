@@ -5,7 +5,6 @@ use crate::channel::{
 };
 use crate::providers::imessage::fixtures::*;
 use crate::providers::native::fixtures::stored_media;
-use crate::traits::Channel;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -846,7 +845,7 @@ async fn the_descriptor_status_and_legacy_methods_use_the_native_surface() {
     assert_eq!(descriptor.id, "imessage");
     assert_eq!(descriptor.metadata["adapterMode"], "native-v2");
     assert_eq!(descriptor.metadata["voiceOut"], "attachment");
-    assert_eq!(Channel::capabilities(&rig.channel), rig.channel.declared());
+    assert_eq!(rig.channel.declared_capabilities(), rig.channel.declared());
     assert_eq!(
         ChannelAdapter::status(&rig.channel)
             .await
@@ -856,12 +855,12 @@ async fn the_descriptor_status_and_legacy_methods_use_the_native_surface() {
     );
     let recorder = rig.spawn_messages();
     let outcome =
-        Channel::send_typed_with_receipt(&rig.channel, &message(PEER, vec![text("typed")]))
+        ChannelTypedSend::send_typed(&rig.channel, &message(PEER, vec![text("typed")]))
             .await
             .unwrap();
     recorder.abort();
     assert_eq!(outcome.receipt.platform_message_ids, ["SENT1"]);
-    let error = Channel::send_typed_with_receipt(
+    let error = ChannelTypedSend::send_typed(
         &rig.channel,
         &message(
             PEER,

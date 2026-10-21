@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use crate::channel::ChannelStreamingDraft;
+use std::sync::Arc;
 use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
 
 use super::*;
@@ -550,13 +550,15 @@ async fn disconnected_sends_and_typing_return_errors_without_leaving_heartbeat_t
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
     ch.register_recipient_alias("alias", "original").await;
     assert!(crate::provider_test_support::send_v1(&ch, &SendMessage::new("hello", "alias")).await.is_err());
-    assert!(ChannelStreamingDraft::finalize_draft(
+    let error = ChannelStreamingDraft::finalize_draft(
         &ch,
         "draft",
-        draft_intent("alias", "hello")
+        draft_intent("alias", "hello"),
     )
     .await
-    .is_err());
+    .unwrap_err();
+    assert!(!error.unsupported, "finalization reached the Yuanbao sender");
+    assert!(error.retryable, "a disconnected send remains retryable");
     assert!(ch.start_typing("alias").await.is_err());
     assert!(ch.heartbeat_tasks.lock().await.is_empty());
     ch.start_heartbeat_task("original").await;
