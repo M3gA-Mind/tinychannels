@@ -27,4 +27,3 @@ pub struct LegacySessionKeys {
     pub conversation_history_key: String,
     pub conversation_memory_key: String,
 }
-
