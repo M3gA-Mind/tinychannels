@@ -1321,7 +1321,7 @@ impl TelegramChannel {
             .map(str::to_owned);
         let reply_to_id = match message.reply_to_id.as_deref() {
             Some(id) => Some(id.parse::<i64>().map_err(|_| {
-                anyhow::anyhow!("Telegram reply_to_id must be a numeric message ID")
+                anyhow::Error::new(TelegramBadFormatError)
             })?),
             None => None,
         };
@@ -2324,12 +2324,12 @@ async fn send_typed_media_with_receipt(
         .account_id
         .clone()
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Telegram media send requires a configured account"))?;
+        .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?;
     let turn_id = message
         .turn_id
         .clone()
         .filter(|turn_id| !turn_id.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Telegram media send requires originating turn identity"))?;
+        .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?;
     let scope = tinychannels_bus::HostVoiceScope {
         configured_instance,
         channel: channel_ref.clone(),
@@ -2346,12 +2346,12 @@ async fn send_typed_media_with_receipt(
         .as_deref()
         .is_some_and(|thread_id| thread_id.parse::<i64>().is_err())
     {
-        anyhow::bail!("Telegram thread_id must be a numeric message thread ID");
+        return Err(TelegramBadFormatError.into());
     }
     if let Some(reply_to) = message.reply_to_id.as_deref() {
         reply_to
             .parse::<i64>()
-            .map_err(|_| anyhow::anyhow!("Telegram reply_to_id must be a numeric message ID"))?;
+            .map_err(|_| anyhow::Error::new(TelegramBadFormatError))?;
     }
     let repository = channel
         .media_repository
