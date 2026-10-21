@@ -3,13 +3,13 @@
 
 use super::inbound::{slack_channel_ref, ts_to_ms};
 use super::types::SlackChannel;
+use crate::channel::{ChannelInboundSink, ChannelSendError};
 use crate::traits::ChannelMessage;
 use serde_json::Value;
 use tinychannels_bus::{
     ChannelEvent, ChannelEventKind, ChannelInboundEnvelope, ChannelIngress, ChannelReaction,
     ContentPart, ConversationRef,
 };
-use crate::channel::{ChannelInboundSink, ChannelSendError};
 use tokio::sync::mpsc::Sender;
 
 /// Whether the listener should keep running.
@@ -134,6 +134,23 @@ impl SlackChannel {
         sink: &(dyn ChannelInboundSink + Send + Sync),
     ) -> Result<Flow, ChannelSendError> {
         self.handle_event_to_sink(event, None, Some(sink)).await
+    }
+
+    pub(crate) async fn handle_socket_delivery(
+        &self,
+        kind: &str,
+        payload: &Value,
+        sink: &(dyn ChannelInboundSink + Send + Sync),
+    ) -> Result<(), ChannelSendError> {
+        match kind {
+            "events_api" => {
+                let event = payload.get("event").unwrap_or(&Value::Null);
+                self.handle_event_typed(event, sink).await?;
+            }
+            "interactive" => self.handle_interactive_to_sink(payload, Some(sink)).await?,
+            _ => {}
+        }
+        Ok(())
     }
 
     async fn handle_event_to_sink(
@@ -305,12 +322,10 @@ impl SlackChannel {
             }],
         };
         let event_id = format!("slack:edit:{message_id}:{event_ts}");
-        self.publish_event(Self::channel_event(
-            event_id,
-            ts_to_ms(event_ts),
-            Some(conversation),
-            kind,
-        ), typed_sink)
+        self.publish_event(
+            Self::channel_event(event_id, ts_to_ms(event_ts), Some(conversation), kind),
+            typed_sink,
+        )
         .await?;
         Ok(())
     }
@@ -344,12 +359,15 @@ impl SlackChannel {
             provider_message_id: Some(ts.to_owned()),
         };
         let event_ts = str_of(event, "event_ts");
-        self.publish_event(Self::channel_event(
-            format!("slack:delete:{message_id}:{event_ts}"),
-            ts_to_ms(event_ts),
-            Some(conversation),
-            kind,
-        ), typed_sink)
+        self.publish_event(
+            Self::channel_event(
+                format!("slack:delete:{message_id}:{event_ts}"),
+                ts_to_ms(event_ts),
+                Some(conversation),
+                kind,
+            ),
+            typed_sink,
+        )
         .await?;
         Ok(())
     }
@@ -405,19 +423,23 @@ impl SlackChannel {
             }
         };
         let conversation = Self::conversation_ref(channel, None, None);
-        self.publish_event(Self::channel_event(
-            event_id,
-            ts_to_ms(event_ts),
-            Some(conversation),
-            kind,
-        ), typed_sink)
+        self.publish_event(
+            Self::channel_event(event_id, ts_to_ms(event_ts), Some(conversation), kind),
+            typed_sink,
+        )
         .await?;
         self.mark_seen(event_id);
         Ok(())
     }
 
     /// Handle one Socket Mode `interactive` payload (a Block Kit button press).
-    pub(crate) async fn handle_interactive(
+    pub(crate) async fn handle_interactive(&self, payload: &Value) {
+        if let Err(error) = self.handle_interactive_to_sink(payload, None).await {
+            tracing::debug!(%error, "[slack] interactive event delivery failed");
+        }
+    }
+
+    async fn handle_interactive_to_sink(
         &self,
         payload: &Value,
         typed_sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
@@ -461,12 +483,15 @@ impl SlackChannel {
             actor,
         };
         let conversation = Self::conversation_ref(channel, None, thread_ts);
-        self.publish_event(Self::channel_event(
-            format!("slack:callback:{query_id}"),
-            None,
-            Some(conversation),
-            kind,
-        ), typed_sink)
+        self.publish_event(
+            Self::channel_event(
+                format!("slack:callback:{query_id}"),
+                None,
+                Some(conversation),
+                kind,
+            ),
+            typed_sink,
+        )
         .await?;
         Ok(())
     }

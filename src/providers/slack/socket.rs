@@ -9,6 +9,11 @@ use serde_json::Value;
 use tokio::sync::mpsc::Sender;
 use tokio_tungstenite::tungstenite::Message;
 
+struct SocketDelivery {
+    kind: String,
+    payload: Value,
+}
+
 impl SlackChannel {
     /// `apps.connections.open` with the app-level token; returns the `wss` URL.
     async fn open_socket_url(&self, app_token: &str) -> Option<String> {
@@ -42,6 +47,128 @@ impl SlackChannel {
             }
             tokio::time::sleep(self.reconnect_backoff).await;
         }
+    }
+
+    /// Run Socket Mode with a bounded queue between the protocol reader and
+    /// typed ingress delivery. Envelopes are acknowledged only after they are
+    /// safely in that queue, so a slow sink cannot block websocket control
+    /// frames or acknowledgements until the bounded queue is full.
+    pub(crate) async fn listen_socket_typed(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+        app_token: &str,
+    ) -> anyhow::Result<()> {
+        let (delivery_tx, delivery_rx) = tokio::sync::mpsc::channel(32);
+        let transport = self.listen_socket_typed_transport(delivery_tx, app_token);
+        let delivery = self.deliver_socket_queue(delivery_rx, sink);
+        tokio::select! {
+            result = transport => result,
+            result = delivery => result,
+        }
+    }
+
+    async fn listen_socket_typed_transport(
+        &self,
+        delivery_tx: tokio::sync::mpsc::Sender<SocketDelivery>,
+        app_token: &str,
+    ) -> anyhow::Result<()> {
+        tracing::info!("[slack] typed socket mode listening");
+        loop {
+            if let Some(url) = self.open_socket_url(app_token).await
+                && self.run_connection_typed(&url, &delivery_tx).await == Flow::Stop
+            {
+                return Ok(());
+            }
+            tokio::time::sleep(self.reconnect_backoff).await;
+        }
+    }
+
+    async fn deliver_socket_queue(
+        &self,
+        mut deliveries: tokio::sync::mpsc::Receiver<SocketDelivery>,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> anyhow::Result<()> {
+        while let Some(delivery) = deliveries.recv().await {
+            loop {
+                match self
+                    .handle_socket_delivery(&delivery.kind, &delivery.payload, sink)
+                    .await
+                {
+                    Ok(()) => break,
+                    Err(error) => {
+                        tracing::warn!(%error, "[slack] typed ingress is waiting for sink acceptance");
+                        tokio::time::sleep(self.reconnect_backoff).await;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn run_connection_typed(
+        &self,
+        url: &str,
+        delivery_tx: &tokio::sync::mpsc::Sender<SocketDelivery>,
+    ) -> Flow {
+        let Ok((stream, _)) = tokio_tungstenite::connect_async(url).await else {
+            tracing::warn!("[slack] typed socket connection failed");
+            return Flow::Continue;
+        };
+        let (mut write, mut read) = stream.split();
+        while let Some(Ok(frame)) = read.next().await {
+            match frame {
+                Message::Ping(payload) => {
+                    if write.send(Message::Pong(payload)).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
+                Message::Pong(_) => continue,
+                Message::Close(_) => break,
+                Message::Text(text) => {
+                    let Ok(envelope) = serde_json::from_str::<Value>(text.as_str()) else {
+                        continue;
+                    };
+                    let kind = envelope
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if kind == "disconnect" {
+                        tracing::info!("[slack] server requested a typed reconnect");
+                        break;
+                    }
+                    let payload = envelope.get("payload").unwrap_or(&Value::Null);
+                    if matches!(kind, "events_api" | "interactive") {
+                        let delivery = SocketDelivery {
+                            kind: kind.to_owned(),
+                            payload: payload.clone(),
+                        };
+                        match delivery_tx.try_send(delivery) {
+                            Ok(()) => {}
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                // Do not acknowledge an envelope we could not
+                                // retain; Slack will redeliver after reconnect.
+                                tracing::warn!(
+                                    "[slack] typed ingress queue is full; reconnecting without ack"
+                                );
+                                break;
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                return Flow::Stop;
+                            }
+                        }
+                    }
+                    if let Some(id) = envelope.get("envelope_id").and_then(Value::as_str) {
+                        let ack = serde_json::json!({ "envelope_id": id }).to_string();
+                        if write.send(Message::Text(ack.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                _ => continue,
+            }
+        }
+        Flow::Continue
     }
 
     /// Serve one websocket connection until it closes or Slack asks us to
@@ -134,6 +261,47 @@ impl SlackChannel {
                 if self.handle_event(&event, Some(tx)).await == Flow::Stop {
                     return Ok(());
                 }
+                oldest = ts.to_owned();
+            }
+        }
+    }
+
+    pub(crate) async fn listen_polling_typed(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+        channel_id: &str,
+    ) -> anyhow::Result<()> {
+        tracing::info!("[slack] typed polling history of the configured channel");
+        let mut oldest = String::new();
+        loop {
+            tokio::time::sleep(self.poll_interval).await;
+            let mut query = vec![("channel", channel_id.to_owned()), ("limit", "10".into())];
+            if !oldest.is_empty() {
+                query.push(("oldest", oldest.clone()));
+            }
+            let response = self
+                .http_client()
+                .get(self.api_url("conversations.history"))
+                .bearer_auth(&self.bot_token)
+                .query(&query)
+                .send()
+                .await?;
+            let data = response.json::<Value>().await?;
+            let messages = data.get("messages").and_then(Value::as_array);
+            for message in messages.into_iter().flatten().rev() {
+                let ts = message
+                    .get("ts")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if ts <= oldest.as_str() {
+                    continue;
+                }
+                let mut event = message.clone();
+                event["type"] = "message".into();
+                event["channel"] = channel_id.into();
+                self.handle_event_typed(&event, sink)
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error.message))?;
                 oldest = ts.to_owned();
             }
         }
