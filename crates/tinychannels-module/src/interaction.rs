@@ -51,11 +51,9 @@ fn draft_intent(
             .as_ref()
             .and_then(|channel| channel.account_id.clone());
     }
-    if message.subject.is_none() {
-        intent.payload = tinychannels_bus::OutboundPayload::Text {
-            text: message.content.clone(),
-        };
-    }
+    intent.payload = tinychannels_bus::OutboundPayload::Text {
+        text: compatibility_text(message),
+    };
     if is_telegram {
         // The frozen Telegram DTO uses `recipient` for chat/topic routing and
         // `thread_ts` for the parent message. The generic converter cannot
@@ -70,6 +68,13 @@ fn draft_intent(
         }
     }
     intent
+}
+
+pub(crate) fn compatibility_text(message: &tinychannels::SendMessage) -> String {
+    match message.subject.as_deref() {
+        Some(subject) => format!("Subject: {}\n{}", subject.trim().replace(['\r', '\n'], " "), message.content),
+        None => message.content.clone(),
+    }
 }
 
 /// Route draft start/update/finalize through an adapter's typed draft port.
