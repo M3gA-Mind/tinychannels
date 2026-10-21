@@ -102,34 +102,7 @@ pub fn conversation_history_key_candidates(msg: &ChannelMessage) -> LegacySessio
     }
 }
 
-/// Derive a stable host-local thread key from inbound channel facts.
-pub fn derive_inbound_thread_id(
-    channel: &str,
-    sender: Option<&str>,
-    reply_target: Option<&str>,
-    thread_ts: Option<&str>,
-) -> String {
-    let mut key = format!(
-        "channel:{}",
-        encode_identity_component(channel, &['/', '#', '%'])
-    );
-    if let Some(sender) = sender.and_then(nonempty) {
-        key.push('/');
-        key.push_str(&encode_identity_component(sender, &['/', '#', '%']));
-    }
-    if let Some(reply_target) = reply_target.and_then(nonempty) {
-        key.push('/');
-        key.push_str(&encode_identity_component(reply_target, &['/', '#', '%']));
-    }
-    let provider = channel.split(':').next().unwrap_or("");
-    if !matches!(provider, "telegram" | "tg")
-        && let Some(thread_ts) = thread_ts.and_then(nonempty)
-    {
-        key.push_str("#thread:");
-        key.push_str(&encode_identity_component(thread_ts, &['/', '#', '%']));
-    }
-    key
-}
+pub use tinychannels_bus::channel::derive_inbound_thread_id;
 
 /// Derive a stable client identifier for an inbound channel sender.
 pub fn derive_inbound_client_id(channel: &str, sender: Option<&str>) -> String {

@@ -120,5 +120,7 @@ pub use module_web_output::{
 };
 
 pub use module_runtime::{
-    ChannelRuntimeDispatchPolicy, ChannelRuntimeReservation, MIN_CHANNEL_MESSAGE_TIMEOUT_SECS,
+    CHANNEL_MESSAGE_TIMEOUT_SECS, CHANNEL_TYPING_REFRESH_INTERVAL_SECS,
+    ChannelRuntimeDispatchPolicy, ChannelRuntimeReservation, DEFAULT_CHANNEL_INITIAL_BACKOFF_SECS,
+    DEFAULT_CHANNEL_MAX_BACKOFF_SECS, MAX_CHANNEL_HISTORY, MIN_CHANNEL_MESSAGE_TIMEOUT_SECS,
 };

@@ -32,7 +32,7 @@ pub use receipt::{
     ChannelSendOutcome, MessageReceipt, MessageReceiptPart, MessageReceiptPartKind,
     MessageReceiptSourceResult,
 };
-pub use session::{LegacySessionKeys, SessionKeyPolicy};
+pub use session::{LegacySessionKeys, SessionKeyPolicy, derive_inbound_thread_id};
 pub use types::{
     ChannelDescriptor, ChannelRef, ConversationKind, ConversationRef, SecretRef, SenderRef,
 };
