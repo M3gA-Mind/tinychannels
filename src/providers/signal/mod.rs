@@ -12,7 +12,7 @@
 mod capabilities;
 mod inbound;
 mod listener;
-mod native;
+mod outbound;
 
 use listener::{DataMessage, Envelope, GroupInfo, SseEnvelope};
 
@@ -351,16 +351,16 @@ impl SignalChannel {
     }
 }
 
-super::native::native_v2_adapter!(SignalChannel);
+super::outbound::native_v2_adapter!(SignalChannel);
 
 #[cfg(test)]
-#[path = "signal/fixtures_tests.rs"]
+#[path = "fixtures_tests.rs"]
 mod fixtures;
 
 #[cfg(test)]
-#[path = "signal/conformance_tests.rs"]
+#[path = "conformance_tests.rs"]
 mod conformance;
 
 #[cfg(test)]
-#[path = "signal/tests/mod.rs"]
+#[path = "tests/mod.rs"]
 mod tests;

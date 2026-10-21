@@ -8,7 +8,7 @@
 
 mod capabilities;
 mod inbound;
-mod native;
+mod outbound;
 
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::native::HostPorts as NativeState;
@@ -295,14 +295,14 @@ impl LinqChannel {
     }
 }
 
-crate::providers::native::native_v2_adapter!(LinqChannel);
+crate::providers::outbound::native_v2_adapter!(LinqChannel);
 
 #[cfg(test)]
-#[path = "linq/fixtures_tests.rs"]
+#[path = "fixtures_tests.rs"]
 mod fixtures;
 
 #[cfg(test)]
-#[path = "linq/conformance_tests.rs"]
+#[path = "conformance_tests.rs"]
 mod conformance;
 
 /// Verify a Linq webhook signature.

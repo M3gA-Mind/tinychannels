@@ -10,10 +10,10 @@ mod capabilities;
 mod db;
 mod inbound;
 mod listener;
-mod native;
+mod outbound;
 
 pub(super) use db::{fetch_new_messages, get_max_rowid};
-pub(super) use native::{escape_applescript, is_valid_chat_guid, is_valid_imessage_target};
+pub(super) use outbound::{escape_applescript, is_valid_chat_guid, is_valid_imessage_target};
 
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::native::HostPorts as NativeState;
@@ -228,16 +228,16 @@ impl IMessageChannel {
     }
 }
 
-crate::providers::native::native_v2_adapter!(IMessageChannel);
+crate::providers::outbound::native_v2_adapter!(IMessageChannel);
 
 #[cfg(test)]
-#[path = "imessage/fixtures_tests.rs"]
+#[path = "fixtures_tests.rs"]
 mod fixtures;
 
 #[cfg(test)]
-#[path = "imessage/conformance_tests.rs"]
+#[path = "conformance_tests.rs"]
 mod conformance;
 
 #[cfg(test)]
-#[path = "imessage/tests/mod.rs"]
+#[path = "tests/mod.rs"]
 mod tests;
