@@ -2467,7 +2467,8 @@ async fn configured_mattermost_reactions_use_native_v4_without_managed_fallback(
 #[tokio::test]
 async fn native_controller_conformance_uses_mattermost_wire_and_rejects_unsupported_threads() {
     use tinychannels_conformance::{
-        NativeControllerFeature as Feature, check_native_controller_feature,
+        NativeControllerFeature as Feature, NativeControllerFixture as _,
+        check_native_controller_feature,
     };
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -2556,7 +2557,8 @@ async fn native_controller_conformance_uses_mattermost_wire_and_rejects_unsuppor
 #[tokio::test]
 async fn native_controller_conformance_covers_telegram_discord_and_slack() {
     use tinychannels_conformance::{
-        NativeControllerFeature as Feature, check_native_controller_feature,
+        NativeControllerFeature as Feature, NativeControllerFixture as _,
+        check_native_controller_feature,
     };
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
