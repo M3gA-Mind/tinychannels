@@ -1162,7 +1162,7 @@ async fn confidential_media_bus_roundtrips_only_within_the_provider_turn_scope()
             .is_some_and(|id| id.starts_with("tinychannels_media_v1_"))
     );
     assert_eq!(media.url, None);
-    assert_eq!(media.local_path, None);
+    assert_eq!(media.path, None);
 
     let mut wrong_turn = scope.clone();
     wrong_turn.turn_id = "other-turn".into();
