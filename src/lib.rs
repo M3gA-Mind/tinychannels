@@ -83,9 +83,9 @@ pub use factory::{
 pub use host::{ChannelHost, ChannelHostBuilder, HostCapabilities, NoopHost, ProviderContext};
 pub use providers::long_tail::LongTailNative;
 pub use providers::{
-    CliChannel, DingTalkChannel, DiscordChannel, IMessageChannel, IrcChannel, IrcChannelConfig, LinqChannel,
-    MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel, WhatsAppChannel,
-    WhatsAppWebChannel, YuanbaoChannel,
+    CliChannel, DingTalkChannel, DiscordChannel, IMessageChannel, IrcChannel, IrcChannelConfig,
+    LinqChannel, MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel,
+    WhatsAppChannel, WhatsAppWebChannel, YuanbaoChannel,
 };
 #[allow(deprecated, reason = "re-export one-release v21 compatibility DTOs")]
 pub use tinychannels_bus::{
