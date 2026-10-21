@@ -7,6 +7,36 @@
 
 use async_trait::async_trait;
 
+use super::{MediaScope, MediaStoreRequest, MediaStreamRequest, StoredMedia};
+
+/// Durable channel media persistence with account, conversation, and turn
+/// checks enforced by the store on every operation.
+#[async_trait]
+pub trait MediaRepository: Send + Sync {
+    /// Store a fully buffered object and return a host-owned opaque reference.
+    async fn store_media(
+        &self,
+        request: MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference>;
+
+    /// Stream an untrusted source under its declared byte limit before storing.
+    async fn store_media_stream(
+        &self,
+        request: MediaStreamRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference>;
+
+    /// Resolve an opaque reference only for its exact storage scope.
+    async fn read_media(
+        &self,
+        scope: MediaScope,
+        opaque_id: String,
+        max_bytes: u64,
+    ) -> anyhow::Result<StoredMedia>;
+
+    /// Delete one object only after validating its stored scope.
+    async fn delete_media(&self, scope: MediaScope, opaque_id: String) -> anyhow::Result<bool>;
+}
+
 // ---------------------------------------------------------------------------
 // Voice: speech-to-text
 // ---------------------------------------------------------------------------

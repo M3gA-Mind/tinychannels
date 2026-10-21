@@ -488,6 +488,17 @@ impl super::MediaRepository for ScopedMediaStore {
     ) -> anyhow::Result<StoredMedia> {
         self.read(scope, &opaque_id, max_bytes).await
     }
+
+    async fn store_media_stream(
+        &self,
+        request: MediaStreamRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        self.store_stream(request).await
+    }
+
+    async fn delete_media(&self, scope: MediaScope, opaque_id: String) -> anyhow::Result<bool> {
+        self.delete(scope, &opaque_id).await
+    }
 }
 
 fn validate_scope(scope: &MediaScope) -> anyhow::Result<()> {

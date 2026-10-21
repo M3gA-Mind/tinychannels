@@ -47,9 +47,10 @@ pub use media::{
 pub use noop::{ChannelHostBuilder, NoopHost};
 pub use services::{
     AllowlistStore, ApprovalAsk, ApprovalDecision, ApprovalGate, ConversationMessage,
-    ConversationStore, EventSink, LifecycleRegistry, ReactionDecision, ReactionGate, ReactionQuery,
-    RunEventAppend, RunLedger, RunTelemetry, RunUpsert, ShutdownHook, SpeechRequest, SpeechResult,
-    SpeechSynthesizer, StorageProvider, Transcriber, TranscriptionRequest, TranscriptionResult,
+    ConversationStore, EventSink, LifecycleRegistry, MediaRepository, ReactionDecision,
+    ReactionGate, ReactionQuery, RunEventAppend, RunLedger, RunTelemetry, RunUpsert, ShutdownHook,
+    SpeechRequest, SpeechResult, SpeechSynthesizer, StorageProvider, Transcriber,
+    TranscriptionRequest, TranscriptionResult,
 };
 
 use crate::config::ChannelsConfig;
