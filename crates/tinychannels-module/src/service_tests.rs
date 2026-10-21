@@ -2874,16 +2874,17 @@ async fn telegram_v1_preparation_splits_topic_address_and_preserves_parent_reply
     message.thread_ts = Some("100".into());
 
     let prepared = channels
-        .prepare_outbound_intent(
-            "telegram".into(),
-            ChannelMessagePreparation::Typed(message),
-        )
+        .prepare_outbound_intent("telegram".into(), ChannelMessagePreparation::Typed(message))
         .await
         .unwrap();
 
     assert_eq!(prepared.intent.conversation_id, "-200");
     assert_eq!(
-        prepared.intent.conversation_ref.as_ref().and_then(|value| value.topic_id.as_deref()),
+        prepared
+            .intent
+            .conversation_ref
+            .as_ref()
+            .and_then(|value| value.topic_id.as_deref()),
         Some("42")
     );
     assert_eq!(prepared.intent.reply_to_id.as_deref(), Some("100"));
