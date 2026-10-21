@@ -748,7 +748,7 @@ fn with_api_base_trims_trailing_slash_and_defaults_to_discord() {
 #[tokio::test]
 async fn send_posts_message_to_recipient_with_bot_auth() {
     let (base, mut rx) = message_sink(StatusCode::OK).await;
-    let ch = channel_at(&base, Some("default-chan"));
+    let ch = channel_at(&base, Some("654321"));
     send_text(&ch, "hello there", "123456").await.unwrap();
     let (chan, auth, content) = rx.try_recv().unwrap();
     assert_eq!(chan, "123456");
