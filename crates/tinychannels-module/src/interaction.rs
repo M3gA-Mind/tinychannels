@@ -154,7 +154,7 @@ pub(crate) fn configured_adapter_capabilities(
     capabilities.account.proactive_target = adapter.proactive_target();
     capabilities
 }
-use tinychannels_bus::{ChannelInteraction, ChannelInteractionResult};
+use tinychannels_bus::{ChannelInteraction, ChannelInteractionInfo, ChannelInteractionResult};
 
 /// The error name of a refused webhook; hosts answer it with a client error.
 pub(crate) const WEBHOOK_REJECTED_ERROR: &str = "ai.tinyhumans.tinychannels.Error.WebhookRejected";

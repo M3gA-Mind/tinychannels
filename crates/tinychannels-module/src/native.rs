@@ -111,7 +111,7 @@ pub(crate) fn build_native_v2(
                 "irc" | "lark" | "mattermost" | "qq" | "dingtalk" | "yuanbao" => {
                     LongTailListenerMode::Adapter
                 }
-                _ => LongTailListenerMode::Legacy,
+                _ => LongTailListenerMode::Adapter,
             };
             tinychannels::factory::build_long_tail_channel_with_host(config, host, http, id)
                 .map(|channel| NativeLaunch::long_tail(display, channel, listener_mode))
