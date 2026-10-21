@@ -1,15 +1,11 @@
 //! Discord Gateway session: connect, identify, heartbeat and dispatch routing.
 
 use super::channel::DiscordChannel;
-#[cfg(test)]
-use crate::traits::ChannelMessage;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
 pub(super) enum GatewaySink {
-    #[cfg(test)]
-    Legacy(tokio::sync::mpsc::Sender<ChannelMessage>),
     Typed(tokio::sync::mpsc::Sender<tinychannels_bus::ChannelIngress>),
 }
 
@@ -161,20 +157,6 @@ impl DiscordChannel {
         Ok(())
     }
 
-    /// Route one dispatch event. Returns `false` once the legacy receiver is
-    /// gone and the session should end.
-    #[cfg(test)]
-    pub(super) async fn handle_dispatch(
-        &self,
-        event_type: &str,
-        d: &Value,
-        bot_user_id: &str,
-        tx: &tokio::sync::mpsc::Sender<ChannelMessage>,
-    ) -> bool {
-        self.handle_dispatch_to(event_type, d, bot_user_id, &GatewaySink::Legacy(tx.clone()))
-            .await
-    }
-
     async fn handle_dispatch_to(
         &self,
         event_type: &str,
@@ -184,8 +166,6 @@ impl DiscordChannel {
     ) -> bool {
         match event_type {
             "MESSAGE_CREATE" => match sink {
-                #[cfg(test)]
-                GatewaySink::Legacy(tx) => self.handle_message_create(d, bot_user_id, tx).await,
                 GatewaySink::Typed(tx) => {
                     self.handle_message_create_typed(d, bot_user_id, tx).await
                 }
@@ -194,11 +174,7 @@ impl DiscordChannel {
                 self.handle_message_update_to(
                     d,
                     bot_user_id,
-                    match sink {
-                        GatewaySink::Typed(tx) => Some(tx),
-                        #[cfg(test)]
-                        GatewaySink::Legacy(_) => None,
-                    },
+                    match sink { GatewaySink::Typed(tx) => Some(tx) },
                 )
                 .await;
                 true
@@ -206,11 +182,7 @@ impl DiscordChannel {
             "MESSAGE_DELETE" => {
                 self.handle_message_delete_to(
                     d,
-                    match sink {
-                        GatewaySink::Typed(tx) => Some(tx),
-                        #[cfg(test)]
-                        GatewaySink::Legacy(_) => None,
-                    },
+                    match sink { GatewaySink::Typed(tx) => Some(tx) },
                 )
                 .await;
                 true
@@ -220,11 +192,7 @@ impl DiscordChannel {
                     d,
                     bot_user_id,
                     true,
-                    match sink {
-                        GatewaySink::Typed(tx) => Some(tx),
-                        #[cfg(test)]
-                        GatewaySink::Legacy(_) => None,
-                    },
+                    match sink { GatewaySink::Typed(tx) => Some(tx) },
                 )
                 .await;
                 true
@@ -234,11 +202,7 @@ impl DiscordChannel {
                     d,
                     bot_user_id,
                     false,
-                    match sink {
-                        GatewaySink::Typed(tx) => Some(tx),
-                        #[cfg(test)]
-                        GatewaySink::Legacy(_) => None,
-                    },
+                    match sink { GatewaySink::Typed(tx) => Some(tx) },
                 )
                 .await;
                 true
@@ -261,11 +225,7 @@ impl DiscordChannel {
             "INTERACTION_CREATE" => {
                 self.handle_interaction_to(
                     d,
-                    match sink {
-                        GatewaySink::Typed(tx) => Some(tx),
-                        #[cfg(test)]
-                        GatewaySink::Legacy(_) => None,
-                    },
+                    match sink { GatewaySink::Typed(tx) => Some(tx) },
                 )
                 .await;
                 true
