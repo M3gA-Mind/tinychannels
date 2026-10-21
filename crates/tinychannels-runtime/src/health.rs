@@ -12,4 +12,3 @@ pub fn classify_health_result(
         Err(_) => ChannelHealthState::Timeout,
     }
 }
-

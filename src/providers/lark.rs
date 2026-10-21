@@ -870,7 +870,6 @@ impl LarkChannel {
     }
 }
 
-
 #[derive(Clone)]
 struct LarkWebhookState {
     verification_token: String,

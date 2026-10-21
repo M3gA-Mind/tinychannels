@@ -81,9 +81,9 @@ pub use factory::{
 pub use host::{ChannelHost, ChannelHostBuilder, HostCapabilities, NoopHost, ProviderContext};
 pub use providers::long_tail::LongTailNative;
 pub use providers::{
-    DingTalkChannel, DiscordChannel, IMessageChannel, IrcChannel, IrcChannelConfig,
-    LinqChannel, MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel,
-    WhatsAppChannel, WhatsAppWebChannel, YuanbaoChannel,
+    DingTalkChannel, DiscordChannel, IMessageChannel, IrcChannel, IrcChannelConfig, LinqChannel,
+    MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel, WhatsAppChannel,
+    WhatsAppWebChannel, YuanbaoChannel,
 };
 #[allow(deprecated, reason = "re-export one-release v21 compatibility DTOs")]
 pub use tinychannels_bus::{
@@ -94,17 +94,17 @@ pub use tinychannels_bus::{
     HostTranscriptionRequest, HostTranscriptionResult, HttpProxyPolicy, METHODS, OBJECT_PATH,
     OutboundPayload, Result, SendMessage, TinyChannelsError, is_compatible, methods,
 };
+#[allow(
+    deprecated,
+    reason = "re-export one-release v21 send compatibility adapter"
+)]
+pub use tinychannels_runtime::WebhookRejected;
 pub use tinychannels_runtime::channel::{
     build_session_key_for_inbound_envelope, inbound_envelope_from_legacy_message,
     legacy_message_from_inbound_envelope, legacy_message_value_from_outbound_intent,
     outbound_intent_from_legacy_message, outbound_intent_from_send_message,
     typed_message_from_inbound_envelope,
 };
-#[allow(
-    deprecated,
-    reason = "re-export one-release v21 send compatibility adapter"
-)]
-pub use tinychannels_runtime::WebhookRejected;
 // Re-exported separately so each can follow its provider's feature gate.
 #[cfg(feature = "email-send")]
 pub use providers::EmailChannel;

@@ -519,7 +519,6 @@ fn valid_file_id(file_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-
 impl MattermostChannel {
     async fn start_typing_loop(&self, recipient: &str) -> Result<()> {
         self.stop_typing_loop()?;

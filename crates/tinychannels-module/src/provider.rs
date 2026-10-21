@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tinybus::{Error, Result};
+use tinychannels::ChannelHostBuilder;
 use tinychannels::channel::ChannelAdapter;
 use tinychannels::host::{LifecycleRegistry, ShutdownHook};
-use tinychannels::ChannelHostBuilder;
 use tinychannels_bus::{
     ChannelSupervisionPolicy, ChannelsConfig, HostEventPublication, HostTranscriptionRequest,
 };
@@ -23,9 +23,18 @@ pub(crate) trait TestProviderBehavior: Send + Sync {
         capabilities.content.text.outbound = true;
         capabilities
     }
-    async fn test_start(&self, _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync)) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { std::future::pending().await }
-    async fn test_stop(&self) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { Ok(()) }
-    fn test_media_account_identity(&self) -> Option<String> { None }
+    async fn test_start(
+        &self,
+        _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync),
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        std::future::pending().await
+    }
+    async fn test_stop(&self) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Ok(())
+    }
+    fn test_media_account_identity(&self) -> Option<String> {
+        None
+    }
     async fn test_send(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
@@ -35,29 +44,53 @@ pub(crate) trait TestProviderBehavior: Send + Sync {
     > {
         Err(test_unsupported("send"))
     }
-    async fn test_start_typing(&self, _recipient: &str) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+    async fn test_start_typing(
+        &self,
+        _recipient: &str,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         Err(test_unsupported("typing"))
     }
-    async fn test_stop_typing(&self, _recipient: &str) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+    async fn test_stop_typing(
+        &self,
+        _recipient: &str,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         Err(test_unsupported("typing"))
     }
-    async fn test_start_draft(&self, _intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<Option<String>, tinychannels::channel::ChannelSendError> {
+    async fn test_start_draft(
+        &self,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<Option<String>, tinychannels::channel::ChannelSendError> {
         Err(test_unsupported("draft"))
     }
-    async fn test_update_draft(&self, _id: &str, _intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+    async fn test_update_draft(
+        &self,
+        _id: &str,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         Err(test_unsupported("draft"))
     }
-    async fn test_finalize_draft(&self, _id: &str, _intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+    async fn test_finalize_draft(
+        &self,
+        _id: &str,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         Err(test_unsupported("draft"))
     }
 }
 
 #[cfg(test)]
 pub(crate) fn test_message_text(message: &tinychannels_bus::ChannelOutboundMessage) -> String {
-    message.parts.iter().filter_map(|part| match part {
-        tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Text { text, .. } } => Some(text.as_str()),
-        _ => None,
-    }).collect::<Vec<_>>().join("")
+    message
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text, .. },
+            } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 #[cfg(test)]
@@ -105,8 +138,13 @@ impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelAdapter fo
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         self.provider.test_capabilities()
     }
-    fn media_account_identity(&self) -> Option<String> { self.provider.test_media_account_identity() }
-    async fn start(&self, _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync)) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+    fn media_account_identity(&self) -> Option<String> {
+        self.provider.test_media_account_identity()
+    }
+    async fn start(
+        &self,
+        _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync),
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         self.stopped.send_replace(false);
         let mut stopped = self.stopped.subscribe();
         tokio::select! {
@@ -118,18 +156,42 @@ impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelAdapter fo
         self.stopped.send_replace(true);
         self.provider.test_stop().await
     }
-    async fn send(&self, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<tinychannels::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
-        self.provider.test_send(&tinychannels_bus::ChannelOutboundMessage::from_intent(&intent)).await
+    async fn send(
+        &self,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<
+        tinychannels::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        self.provider
+            .test_send(&tinychannels_bus::ChannelOutboundMessage::from_intent(
+                &intent,
+            ))
+            .await
     }
-    async fn status(&self) -> std::result::Result<tinychannels::controllers::ChannelAccountSnapshot, tinychannels::channel::ChannelSendError> {
-        Ok(tinychannels::controllers::ChannelAccountSnapshot { health_state: Some("healthy".into()), ..Default::default() })
+    async fn status(
+        &self,
+    ) -> std::result::Result<
+        tinychannels::controllers::ChannelAccountSnapshot,
+        tinychannels::channel::ChannelSendError,
+    > {
+        Ok(tinychannels::controllers::ChannelAccountSnapshot {
+            health_state: Some("healthy".into()),
+            ..Default::default()
+        })
     }
 }
 
 #[cfg(test)]
 #[async_trait::async_trait]
 impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelTypedSend for TestNative<T> {
-    async fn send_typed(&self, message: &tinychannels_bus::ChannelOutboundMessage) -> std::result::Result<tinychannels::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<
+        tinychannels::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
         self.provider.test_send(message).await
     }
 }
@@ -137,35 +199,96 @@ impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelTypedSend 
 #[cfg(test)]
 #[async_trait::async_trait]
 impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelTyping for TestNative<T> {
-    async fn start_typing(&self, recipient: &str) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { self.provider.test_start_typing(recipient).await }
-    async fn stop_typing(&self, recipient: &str) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { self.provider.test_stop_typing(recipient).await }
+    async fn start_typing(
+        &self,
+        recipient: &str,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        self.provider.test_start_typing(recipient).await
+    }
+    async fn stop_typing(
+        &self,
+        recipient: &str,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        self.provider.test_stop_typing(recipient).await
+    }
 }
 
 #[cfg(test)]
 #[async_trait::async_trait]
 impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelReaction for TestNative<T> {
-    async fn send_reaction(&self, _channel: &tinychannels_bus::channel::ChannelRef, _conversation: &tinychannels_bus::channel::ConversationRef, _provider_message_id: &str, _reaction: &tinychannels_bus::channel::ChannelReaction, _remove: bool) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { Err(test_unsupported("reaction")) }
+    async fn send_reaction(
+        &self,
+        _channel: &tinychannels_bus::channel::ChannelRef,
+        _conversation: &tinychannels_bus::channel::ConversationRef,
+        _provider_message_id: &str,
+        _reaction: &tinychannels_bus::channel::ChannelReaction,
+        _remove: bool,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Err(test_unsupported("reaction"))
+    }
 }
 
 #[cfg(test)]
 #[async_trait::async_trait]
 impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelEdit for TestNative<T> {
-    async fn edit(&self, _receipt: &tinychannels_bus::channel::MessageReceipt, _intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, tinychannels::channel::ChannelSendError> { Err(test_unsupported("edit")) }
+    async fn edit(
+        &self,
+        _receipt: &tinychannels_bus::channel::MessageReceipt,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::MessageReceipt,
+        tinychannels::channel::ChannelSendError,
+    > {
+        Err(test_unsupported("edit"))
+    }
 }
 
 #[cfg(test)]
 #[async_trait::async_trait]
 impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelDelete for TestNative<T> {
-    async fn delete(&self, _receipt: &tinychannels_bus::channel::MessageReceipt) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { Err(test_unsupported("delete")) }
+    async fn delete(
+        &self,
+        _receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Err(test_unsupported("delete"))
+    }
 }
 
 #[cfg(test)]
 #[async_trait::async_trait]
-impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelStreamingDraft for TestNative<T> {
-    async fn start_draft(&self, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<Option<String>, tinychannels::channel::ChannelSendError> { self.provider.test_start_draft(intent).await }
-    async fn update_draft(&self, id: &str, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { self.provider.test_update_draft(id, intent).await }
-    async fn finalize_draft(&self, id: &str, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { self.provider.test_finalize_draft(id, intent).await }
-    async fn upsert_draft(&self, _previous: Option<&tinychannels_bus::channel::MessageReceipt>, _intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, tinychannels::channel::ChannelSendError> { Err(test_unsupported("draft")) }
+impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelStreamingDraft
+    for TestNative<T>
+{
+    async fn start_draft(
+        &self,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<Option<String>, tinychannels::channel::ChannelSendError> {
+        self.provider.test_start_draft(intent).await
+    }
+    async fn update_draft(
+        &self,
+        id: &str,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        self.provider.test_update_draft(id, intent).await
+    }
+    async fn finalize_draft(
+        &self,
+        id: &str,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        self.provider.test_finalize_draft(id, intent).await
+    }
+    async fn upsert_draft(
+        &self,
+        _previous: Option<&tinychannels_bus::channel::MessageReceipt>,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::MessageReceipt,
+        tinychannels::channel::ChannelSendError,
+    > {
+        Err(test_unsupported("draft"))
+    }
 }
 
 struct AbortOnDrop<T>(JoinHandle<T>);
@@ -225,10 +348,16 @@ async fn dispatch_interaction(
 ) -> Result<tinychannels_bus::ChannelInteractionResult> {
     match &interaction {
         tinychannels_bus::ChannelInteraction::Describe => {
-            return Ok(crate::interaction::describe_adapter(native.adapter.as_ref(), true));
+            return Ok(crate::interaction::describe_adapter(
+                native.adapter.as_ref(),
+                true,
+            ));
         }
         tinychannels_bus::ChannelInteraction::DescribeV2 => {
-            return Ok(crate::interaction::describe_adapter(native.adapter.as_ref(), false));
+            return Ok(crate::interaction::describe_adapter(
+                native.adapter.as_ref(),
+                false,
+            ));
         }
         _ => {}
     }
@@ -242,11 +371,9 @@ async fn dispatch_interaction(
     {
         return result;
     }
-    if let Some(result) = crate::interaction::dispatch_native_webhook(
-        native.adapter.as_ref(),
-        interaction.clone(),
-    )
-    .await
+    if let Some(result) =
+        crate::interaction::dispatch_native_webhook(native.adapter.as_ref(), interaction.clone())
+            .await
     {
         return result;
     }
@@ -311,12 +438,18 @@ async fn dispatch_interaction(
             Ok(tinychannels_bus::ChannelInteractionResult::Completed)
         }
         Op::StartTyping { recipient } => {
-            native.typing.start_typing(&recipient).await
+            native
+                .typing
+                .start_typing(&recipient)
+                .await
                 .map_err(|_| Error::failed("provider typing operation failed"))?;
             Ok(tinychannels_bus::ChannelInteractionResult::Completed)
         }
         Op::StopTyping { recipient } => {
-            native.typing.stop_typing(&recipient).await
+            native
+                .typing
+                .stop_typing(&recipient)
+                .await
                 .map_err(|_| Error::failed("provider typing operation failed"))?;
             Ok(tinychannels_bus::ChannelInteractionResult::Completed)
         }
@@ -348,26 +481,48 @@ async fn dispatch_interaction(
             reaction,
             remove,
         } => {
-            native.reactions.send_reaction(
-                &channel_ref, &conversation, &provider_message_id, &reaction, remove,
-            ).await.map_err(|_| Error::failed("provider reaction failed"))?;
+            native
+                .reactions
+                .send_reaction(
+                    &channel_ref,
+                    &conversation,
+                    &provider_message_id,
+                    &reaction,
+                    remove,
+                )
+                .await
+                .map_err(|_| Error::failed("provider reaction failed"))?;
             Ok(tinychannels_bus::ChannelInteractionResult::Completed)
         }
         Op::EditMessage { receipt, intent } => {
-            let receipt = native.edits.edit(&receipt, intent).await
+            let receipt = native
+                .edits
+                .edit(&receipt, intent)
+                .await
                 .map_err(|_| Error::failed("provider edit failed"))?;
             Ok(tinychannels_bus::ChannelInteractionResult::Sent(Box::new(
-                tinychannels_bus::channel::ChannelSendOutcome { receipt, error: None },
+                tinychannels_bus::channel::ChannelSendOutcome {
+                    receipt,
+                    error: None,
+                },
             )))
         }
         Op::DeleteMessage { receipt } => {
-            native.deletes.delete(&receipt).await
+            native
+                .deletes
+                .delete(&receipt)
+                .await
                 .map_err(|_| Error::failed("provider delete failed"))?;
             Ok(tinychannels_bus::ChannelInteractionResult::Completed)
         }
-        Op::SendDraft { .. } | Op::UpdateDraft { .. } | Op::FinalizeDraft { .. }
-        | Op::DeliverWebhook { .. } | Op::VerifyWebhook { .. } | Op::UpsertDraft { .. } =>
-            Err(Error::failed("provider does not implement this typed operation")),
+        Op::SendDraft { .. }
+        | Op::UpdateDraft { .. }
+        | Op::FinalizeDraft { .. }
+        | Op::DeliverWebhook { .. }
+        | Op::VerifyWebhook { .. }
+        | Op::UpsertDraft { .. } => Err(Error::failed(
+            "provider does not implement this typed operation",
+        )),
     }
 }
 
@@ -447,10 +602,7 @@ impl MediaScope {
     }
 
     /// Resolve the scope from `channel`'s authenticated identity from now on.
-    pub(crate) fn bind_source(
-        &self,
-        adapter: &Arc<dyn tinychannels::channel::ChannelAdapter>,
-    ) {
+    pub(crate) fn bind_source(&self, adapter: &Arc<dyn tinychannels::channel::ChannelAdapter>) {
         let _ = self.0.source.set(Arc::downgrade(adapter));
     }
 
@@ -1373,7 +1525,10 @@ pub(crate) enum LongTailListenerMode {
 
 impl NativePorts {
     #[cfg(test)]
-    fn test<T: TestProviderBehavior + 'static>(channel: Arc<T>, listener_mode: LongTailListenerMode) -> Self {
+    fn test<T: TestProviderBehavior + 'static>(
+        channel: Arc<T>,
+        listener_mode: LongTailListenerMode,
+    ) -> Self {
         let channel = Arc::new(TestNative::new(channel));
         let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = channel.clone();
         let typed_send: Arc<dyn tinychannels::channel::ChannelTypedSend> = channel.clone();
@@ -2077,46 +2232,35 @@ impl Running {
                                 anyhow::Error,
                             > = match worker_native.typed_send.send_typed(&message).await {
                                 Ok(outcome) => Ok(outcome),
-                                Err(error) => {
-                                    Ok(tinychannels_bus::channel::ChannelSendOutcome {
-                                            receipt: tinychannels_bus::channel::MessageReceipt {
-                                                idempotency_key: Some(
-                                                    message.idempotency_key.clone(),
-                                                ),
-                                                channel: Some(
-                                                    message.channel_ref.clone().unwrap_or_else(
-                                                        || tinychannels_bus::ChannelRef {
-                                                            id: tinychannels_bus::provider_id(
-                                                                &worker_instance,
-                                                            )
-                                                            .to_owned(),
-                                                            account_id: Some(
-                                                                worker_instance.clone(),
-                                                            ),
-                                                        },
-                                                    ),
-                                                ),
-                                                conversation: Some(
-                                                    message
-                                                        .conversation_ref
-                                                        .clone()
-                                                        .unwrap_or_else(|| {
-                                                            tinychannels_bus::ConversationRef {
-                                                                id: message.conversation_id.clone(),
-                                                                thread_id: message
-                                                                    .thread_id
-                                                                    .clone(),
-                                                                ..Default::default()
-                                                            }
-                                                        }),
-                                                ),
-                                                thread_id: message.thread_id.clone(),
-                                                reply_to_id: message.reply_to_id.clone(),
-                                                ..Default::default()
+                                Err(error) => Ok(tinychannels_bus::channel::ChannelSendOutcome {
+                                    receipt: tinychannels_bus::channel::MessageReceipt {
+                                        idempotency_key: Some(message.idempotency_key.clone()),
+                                        channel: Some(message.channel_ref.clone().unwrap_or_else(
+                                            || {
+                                                tinychannels_bus::ChannelRef {
+                                                    id: tinychannels_bus::provider_id(
+                                                        &worker_instance,
+                                                    )
+                                                    .to_owned(),
+                                                    account_id: Some(worker_instance.clone()),
+                                                }
                                             },
-                                            error: Some(error),
-                                    })
-                                }
+                                        )),
+                                        conversation: Some(
+                                            message.conversation_ref.clone().unwrap_or_else(|| {
+                                                tinychannels_bus::ConversationRef {
+                                                    id: message.conversation_id.clone(),
+                                                    thread_id: message.thread_id.clone(),
+                                                    ..Default::default()
+                                                }
+                                            }),
+                                        ),
+                                        thread_id: message.thread_id.clone(),
+                                        reply_to_id: message.reply_to_id.clone(),
+                                        ..Default::default()
+                                    },
+                                    error: Some(error),
+                                }),
                             };
                             sent.map(|mut outcome| {
                                 outcome.receipt.idempotency_key =
@@ -2147,40 +2291,29 @@ impl Running {
                             })
                             .map_err(|_| Error::failed("provider typed send failed"))
                         }
-                        ProviderOperation::NativeDraft(previous, intent) => {
-                            {
-                                match worker_native
-                                    .drafts
-                                    .upsert_draft(previous.as_ref(), intent.clone())
-                                    .await
-                                {
-                                    Ok(receipt) => Ok(
-                                        tinychannels_bus::ChannelInteractionResult::Sent(Box::new(
-                                            tinychannels_bus::channel::ChannelSendOutcome {
-                                                receipt,
-                                                error: None,
-                                            },
-                                        )),
-                                    ),
-                                    Err(error) => Ok(
-                                        tinychannels_bus::ChannelInteractionResult::Sent(Box::new(
-                                            tinychannels_bus::channel::ChannelSendOutcome {
-                                                receipt:
-                                                    tinychannels_bus::channel::MessageReceipt {
-                                                        idempotency_key: Some(
-                                                            intent.idempotency_key,
-                                                        ),
-                                                        channel: intent.channel_ref,
-                                                        conversation: intent.conversation_ref,
-                                                        ..Default::default()
-                                                    },
-                                                error: Some(error),
-                                            },
-                                        )),
-                                    ),
-                                }
-                            }
-                        }
+                        ProviderOperation::NativeDraft(previous, intent) => match worker_native
+                            .drafts
+                            .upsert_draft(previous.as_ref(), intent.clone())
+                            .await
+                        {
+                            Ok(receipt) => Ok(tinychannels_bus::ChannelInteractionResult::Sent(
+                                Box::new(tinychannels_bus::channel::ChannelSendOutcome {
+                                    receipt,
+                                    error: None,
+                                }),
+                            )),
+                            Err(error) => Ok(tinychannels_bus::ChannelInteractionResult::Sent(
+                                Box::new(tinychannels_bus::channel::ChannelSendOutcome {
+                                    receipt: tinychannels_bus::channel::MessageReceipt {
+                                        idempotency_key: Some(intent.idempotency_key),
+                                        channel: intent.channel_ref,
+                                        conversation: intent.conversation_ref,
+                                        ..Default::default()
+                                    },
+                                    error: Some(error),
+                                }),
+                            )),
+                        },
                         ProviderOperation::Interaction(interaction) => {
                             dispatch_interaction(
                                 worker_native.clone(),
@@ -2276,10 +2409,7 @@ impl Running {
                     "configuredInstance".into(),
                     self.configured_instance.clone(),
                 ),
-                (
-                    "adapterMode".into(),
-                    "native-v2".into(),
-                ),
+                ("adapterMode".into(), "native-v2".into()),
             ]),
             ..Default::default()
         }
@@ -2326,6 +2456,16 @@ impl Running {
         previous: Option<tinychannels_bus::channel::MessageReceipt>,
         mut intent: tinychannels_bus::ChannelOutboundIntent,
     ) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, RunningSendError> {
+        if !self
+            .native_ports
+            .adapter
+            .declared_capabilities()
+            .streaming_reply_pipeline
+        {
+            return Err(RunningSendError::NotDispatched(
+                "provider does not advertise a streaming reply pipeline".into(),
+            ));
+        }
         self.validate_adapter_intent(&intent)
             .map_err(|e| RunningSendError::NotDispatched(e.message))?;
         let expected_channel = tinychannels_bus::ChannelRef {
@@ -2487,7 +2627,9 @@ impl Running {
         {
             return result;
         }
-        Err(Error::failed("provider does not support this webhook operation"))
+        Err(Error::failed(
+            "provider does not support this webhook operation",
+        ))
     }
 
     async fn submit(
@@ -2659,9 +2801,12 @@ impl tinychannels::channel::ChannelAdapter for Running {
         tinychannels::controllers::ChannelAccountSnapshot,
         tinychannels::channel::ChannelSendError,
     > {
-        let healthy = self.native_ports.adapter.status().await.is_ok_and(|snapshot| {
-            snapshot.health_state.as_deref() == Some("healthy")
-        });
+        let healthy = self
+            .native_ports
+            .adapter
+            .status()
+            .await
+            .is_ok_and(|snapshot| snapshot.health_state.as_deref() == Some("healthy"));
         Ok(tinychannels::controllers::ChannelAccountSnapshot {
             channel_id: tinychannels_bus::provider_id(self.provider_name()).into(),
             account_id: Some(self.configured_instance.clone()),

@@ -33,7 +33,6 @@ impl Drop for SlackListenerGuard<'_> {
     }
 }
 
-
 #[async_trait]
 impl crate::channel::ChannelAdapter for SlackChannel {
     fn descriptor(&self) -> ChannelDescriptor {

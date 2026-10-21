@@ -520,7 +520,6 @@ fn no_redirect_client() -> reqwest::Client {
         .expect("building the DingTalk attachment HTTP client should succeed")
 }
 
-
 #[path = "dingtalk/native.rs"]
 mod native;
 

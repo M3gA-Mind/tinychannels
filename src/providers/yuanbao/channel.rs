@@ -371,7 +371,6 @@ impl YuanbaoChannel {
     }
 }
 
-
 impl YuanbaoChannel {
     pub(crate) async fn set_typing_native(
         &self,

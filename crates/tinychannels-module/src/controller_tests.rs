@@ -504,7 +504,9 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
 struct ManagedConformanceChannel(tinychannels_bus::ChannelCapabilities);
 
 impl crate::provider::TestProviderBehavior for ManagedConformanceChannel {
-    fn test_provider_id(&self) -> &'static str { "mattermost" }
+    fn test_provider_id(&self) -> &'static str {
+        "mattermost"
+    }
     fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         self.0.clone()
     }

@@ -491,10 +491,62 @@ struct CaptureChannel(tokio::sync::mpsc::Sender<SendMessage>);
 
 #[async_trait::async_trait]
 impl crate::provider::TestProviderBehavior for CaptureChannel {
-    fn test_provider_id(&self) -> &'static str { "fixture" }
-    async fn test_send(&self, message: &tinychannels_bus::ChannelOutboundMessage) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
-        let legacy = SendMessage::new(crate::provider::test_message_text(message), message.conversation_id.clone());
-        self.0.send(legacy).await.map_err(|error| tinychannels::channel::ChannelSendError { message: error.to_string(), ..Default::default() })?;
+    fn test_provider_id(&self) -> &'static str {
+        "fixture"
+    }
+    async fn test_send(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        let legacy = SendMessage::new(
+            crate::provider::test_message_text(message),
+            message.conversation_id.clone(),
+        );
+        self.0
+            .send(legacy)
+            .await
+            .map_err(|error| tinychannels::channel::ChannelSendError {
+                message: error.to_string(),
+                ..Default::default()
+            })?;
+        Ok(Default::default())
+    }
+}
+
+struct RemoteControlCaptureChannel(tokio::sync::mpsc::Sender<SendMessage>);
+
+#[async_trait::async_trait]
+impl crate::provider::TestProviderBehavior for RemoteControlCaptureChannel {
+    fn test_provider_id(&self) -> &'static str {
+        "fixture"
+    }
+    fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+        capabilities.content.text.outbound = true;
+        capabilities.remote_control = true;
+        capabilities
+    }
+    async fn test_send(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        let legacy = SendMessage::new(
+            crate::provider::test_message_text(message),
+            message.conversation_id.clone(),
+        );
+        self.0
+            .send(legacy)
+            .await
+            .map_err(|error| tinychannels::channel::ChannelSendError {
+                message: error.to_string(),
+                ..Default::default()
+            })?;
         Ok(Default::default())
     }
 }
@@ -503,7 +555,9 @@ struct CaptureTypedChannel(tokio::sync::mpsc::Sender<tinychannels_bus::ChannelOu
 
 #[async_trait::async_trait]
 impl crate::provider::TestProviderBehavior for CaptureTypedChannel {
-    fn test_provider_id(&self) -> &'static str { "fixture" }
+    fn test_provider_id(&self) -> &'static str {
+        "fixture"
+    }
     fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         let outbound = tinychannels_bus::ContentCapability {
             outbound: true,
@@ -537,8 +591,16 @@ impl crate::provider::TestProviderBehavior for CaptureTypedChannel {
     async fn test_send(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
-        self.0.send(message.clone()).await.map_err(|error| tinychannels::channel::ChannelSendError { message: error.to_string(), ..Default::default() })?;
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        self.0.send(message.clone()).await.map_err(|error| {
+            tinychannels::channel::ChannelSendError {
+                message: error.to_string(),
+                ..Default::default()
+            }
+        })?;
         Ok(Default::default())
     }
 }
@@ -549,7 +611,9 @@ struct CaptureVoiceReceiptChannel(
 
 #[async_trait::async_trait]
 impl crate::provider::TestProviderBehavior for CaptureVoiceReceiptChannel {
-    fn test_provider_id(&self) -> &'static str { "fixture" }
+    fn test_provider_id(&self) -> &'static str {
+        "fixture"
+    }
     fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         tinychannels_bus::ChannelCapabilities {
             voice_out: tinychannels_bus::VoiceCapabilities {
@@ -563,8 +627,16 @@ impl crate::provider::TestProviderBehavior for CaptureVoiceReceiptChannel {
     async fn test_send(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
-        self.0.send(message.clone()).await.map_err(|error| tinychannels::channel::ChannelSendError { message: error.to_string(), ..Default::default() })?;
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        self.0.send(message.clone()).await.map_err(|error| {
+            tinychannels::channel::ChannelSendError {
+                message: error.to_string(),
+                ..Default::default()
+            }
+        })?;
         let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
         outcome.receipt.primary_platform_message_id = Some("voice-message".into());
         outcome
@@ -576,7 +648,7 @@ impl crate::provider::TestProviderBehavior for CaptureVoiceReceiptChannel {
 }
 
 #[tokio::test]
-async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
+async fn typed_intent_preserves_durable_key_and_thread_through_module_actor() {
     let bus = tinybus::transport::memory::MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
     let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
@@ -584,7 +656,7 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         .unwrap();
     let host = HostChannels::new(connection.clone());
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
-    let channel = Arc::new(CaptureChannel(sent));
+    let channel = Arc::new(CaptureTypedChannel(sent));
     let hooks = Arc::new(Hooks::default());
     let mut running = HashMap::new();
     running.insert(
@@ -650,10 +722,11 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
     assert!(result.receipt.is_none());
     assert!(result.raw.is_none());
     let sent = received.recv().await.unwrap();
-    assert_eq!(sent.content, "hello");
-    assert_eq!(sent.recipient, "room-7");
-    assert_eq!(sent.thread_ts.as_deref(), Some("thread-9"));
-    assert_eq!(sent.idempotency_key.as_deref(), Some("delivery-42"));
+    assert_eq!(crate::provider::test_message_text(&sent), "hello");
+    assert_eq!(sent.conversation_id, "room-7");
+    assert_eq!(sent.reply_to_id.as_deref(), Some("message-3"));
+    assert_eq!(sent.thread_id.as_deref(), Some("thread-9"));
+    assert_eq!(sent.idempotency_key, "delivery-42");
     client
         .call::<()>(
             tinychannels_bus::BUS_NAME.try_into().unwrap(),
@@ -1243,10 +1316,21 @@ struct FailingChannel(Arc<std::sync::atomic::AtomicUsize>);
 
 #[async_trait::async_trait]
 impl crate::provider::TestProviderBehavior for FailingChannel {
-    fn test_provider_id(&self) -> &'static str { "fixture" }
-    async fn test_send(&self, _message: &tinychannels_bus::ChannelOutboundMessage) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
+    fn test_provider_id(&self) -> &'static str {
+        "fixture"
+    }
+    async fn test_send(
+        &self,
+        _message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Err(tinychannels::channel::ChannelSendError { message: "fixture provider failure".into(), ..Default::default() })
+        Err(tinychannels::channel::ChannelSendError {
+            message: "fixture provider failure".into(),
+            ..Default::default()
+        })
     }
 }
 
@@ -1260,11 +1344,16 @@ struct AmbiguousNoIdChannel(Arc<std::sync::atomic::AtomicUsize>);
 
 #[async_trait::async_trait]
 impl crate::provider::TestProviderBehavior for AmbiguousNoIdChannel {
-    fn test_provider_id(&self) -> &'static str { "fixture" }
+    fn test_provider_id(&self) -> &'static str {
+        "fixture"
+    }
     async fn test_send(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(tinychannels_bus::channel::ChannelSendOutcome {
             receipt: Default::default(),
@@ -1324,11 +1413,16 @@ async fn required_durable_ambiguous_send_without_ids_is_not_retried() {
 
 #[async_trait::async_trait]
 impl crate::provider::TestProviderBehavior for SuccessfulReceiptChannel {
-    fn test_provider_id(&self) -> &'static str { "fixture" }
+    fn test_provider_id(&self) -> &'static str {
+        "fixture"
+    }
     async fn test_send(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(tinychannels_bus::channel::ChannelSendOutcome {
             receipt: tinychannels_bus::channel::MessageReceipt {
@@ -1376,11 +1470,16 @@ async fn required_success_and_replay_return_same_actual_scoped_receipt_without_r
 
 #[async_trait::async_trait]
 impl crate::provider::TestProviderBehavior for PartialReceiptChannel {
-    fn test_provider_id(&self) -> &'static str { "fixture" }
+    fn test_provider_id(&self) -> &'static str {
+        "fixture"
+    }
     async fn test_send(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(tinychannels_bus::channel::ChannelSendOutcome {
             receipt: tinychannels_bus::channel::MessageReceipt {
@@ -1448,9 +1547,22 @@ async fn required_durable_partial_provider_send_persists_receipt_and_is_not_retr
 
 #[async_trait::async_trait]
 impl crate::provider::TestProviderBehavior for EndedChannel {
-    fn test_provider_id(&self) -> &'static str { "fixture" }
-    async fn test_start(&self, _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync)) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { Ok(()) }
-    async fn test_send(&self, _message: &tinychannels_bus::ChannelOutboundMessage) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
+    fn test_provider_id(&self) -> &'static str {
+        "fixture"
+    }
+    async fn test_start(
+        &self,
+        _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync),
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Ok(())
+    }
+    async fn test_send(
+        &self,
+        _message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(Default::default())
     }
@@ -2522,10 +2634,27 @@ struct OutboundOnlyFixture(tokio::sync::mpsc::Sender<SendMessage>);
 
 #[async_trait::async_trait]
 impl crate::provider::TestProviderBehavior for OutboundOnlyFixture {
-    fn test_provider_id(&self) -> &'static str { "fixture" }
-    async fn test_send(&self, message: &tinychannels_bus::ChannelOutboundMessage) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
-        let legacy = SendMessage::new(crate::provider::test_message_text(message), message.conversation_id.clone());
-        self.0.send(legacy).await.map_err(|error| tinychannels::channel::ChannelSendError { message: error.to_string(), ..Default::default() })?;
+    fn test_provider_id(&self) -> &'static str {
+        "fixture"
+    }
+    async fn test_send(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        let legacy = SendMessage::new(
+            crate::provider::test_message_text(message),
+            message.conversation_id.clone(),
+        );
+        self.0
+            .send(legacy)
+            .await
+            .map_err(|error| tinychannels::channel::ChannelSendError {
+                message: error.to_string(),
+                ..Default::default()
+            })?;
         Ok(Default::default())
     }
 }
@@ -2957,7 +3086,7 @@ async fn enable_remote_providers(channels: &Channels) {
         channels.running.lock().await.insert(
             configured_name.to_owned(),
             Running::start_test(
-                Arc::new(CaptureChannel(sender)),
+                Arc::new(RemoteControlCaptureChannel(sender)),
                 Arc::new(Hooks::default()),
                 host.clone(),
             ),

@@ -232,7 +232,6 @@ fn is_valid_chat_guid(target: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '@'))
 }
 
-
 impl IMessageChannel {
     /// Run the listener and optionally signal after its startup cursor is fixed.
     /// The readiness sender is used by tests to synchronize first-message

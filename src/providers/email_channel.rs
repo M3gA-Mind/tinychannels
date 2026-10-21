@@ -821,7 +821,6 @@ impl IdleWaitResult {
 }
 
 #[cfg(feature = "email")]
-
 #[cfg(feature = "email")]
 impl EmailChannel {
     /// Translate the bounded IMAP probe into the status vocabulary used by

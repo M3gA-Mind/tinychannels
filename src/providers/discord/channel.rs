@@ -341,7 +341,6 @@ pub(super) fn base64_decode(input: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-
 #[cfg(test)]
 #[path = "channel_tests.rs"]
 mod tests;

@@ -681,7 +681,6 @@ impl QQChannel {
     }
 }
 
-
 #[path = "qq/native.rs"]
 mod native;
 

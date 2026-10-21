@@ -393,7 +393,6 @@ fn unsupported(message: &str) -> crate::channel::ChannelSendError {
     WaFailure::unsupported(message).into_send_error()
 }
 
-
 #[async_trait]
 impl crate::channel::ChannelAdapter for WhatsAppChannel {
     fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {

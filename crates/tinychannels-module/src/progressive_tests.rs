@@ -13,12 +13,18 @@ struct ConfiguredChannelWithCapabilities {
 }
 
 impl crate::provider::TestProviderBehavior for ConfiguredChannelWithCapabilities {
-    fn test_provider_id(&self) -> &'static str { self.name }
-    fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities { self.capabilities.clone() }
+    fn test_provider_id(&self) -> &'static str {
+        self.name
+    }
+    fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.capabilities.clone()
+    }
 }
 
 impl crate::provider::TestProviderBehavior for ConfiguredChannel {
-    fn test_provider_id(&self) -> &'static str { self.0 }
+    fn test_provider_id(&self) -> &'static str {
+        self.0
+    }
 }
 
 #[test]

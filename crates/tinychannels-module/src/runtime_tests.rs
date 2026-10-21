@@ -284,16 +284,33 @@ struct MockProvider(tokio::sync::mpsc::Sender<String>);
 
 #[async_trait::async_trait]
 impl crate::provider::TestProviderBehavior for MockProvider {
-    fn test_provider_id(&self) -> &'static str { "same-provider" }
+    fn test_provider_id(&self) -> &'static str {
+        "same-provider"
+    }
     async fn test_send(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
-        let text = message.parts.iter().find_map(|part| match part {
-            tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Text { text, .. } } => Some(text.clone()),
-            _ => None,
-        }).unwrap_or_default();
-        self.0.send(text).await.map_err(|error| tinychannels::channel::ChannelSendError { message: error.to_string(), ..Default::default() })?;
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        let text = message
+            .parts
+            .iter()
+            .find_map(|part| match part {
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text { text, .. },
+                } => Some(text.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        self.0
+            .send(text)
+            .await
+            .map_err(|error| tinychannels::channel::ChannelSendError {
+                message: error.to_string(),
+                ..Default::default()
+            })?;
         Ok(Default::default())
     }
 }

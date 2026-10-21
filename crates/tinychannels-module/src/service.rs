@@ -1065,7 +1065,14 @@ impl Channels {
                 text: message.content,
             };
         }
-        self.send_channel_intent(name, intent).await.map(|_| ())
+        let result = self.send_channel_intent(name, intent).await?;
+        if let Some(error) = result.error {
+            return Err(BusError::MethodFailed {
+                name: SEND_FAILED_ERROR.to_owned(),
+                message: error.message,
+            });
+        }
+        Ok(())
     }
 
     /// Run provider interactions in the same bounded actor queue as sends.

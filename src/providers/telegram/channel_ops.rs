@@ -2205,7 +2205,6 @@ Ensure only one `openhuman` process is using this bot token."
     }
 }
 
-
 fn telegram_receipt_part(
     id: &str,
     kind: tinychannels_bus::channel::MessageReceiptPartKind,
