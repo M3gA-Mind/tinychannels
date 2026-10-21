@@ -19,10 +19,9 @@ fn create_test_db() -> (tempfile::TempDir, std::path::PathBuf) {
     (dir, db_path)
 }
 
-
-#[path = "validation_tests.rs"]
-mod validation_tests;
 #[path = "database_tests.rs"]
 mod database_tests;
 #[path = "runtime_tests.rs"]
 mod runtime_tests;
+#[path = "validation_tests.rs"]
+mod validation_tests;

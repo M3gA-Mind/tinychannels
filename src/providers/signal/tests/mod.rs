@@ -70,7 +70,6 @@ fn typed_text_intent(recipient: &str, content: &str) -> tinychannels_bus::Channe
     }
 }
 
-
 #[path = "configuration_tests.rs"]
 mod configuration_tests;
 #[path = "transport_tests.rs"]

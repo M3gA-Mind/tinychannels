@@ -467,4 +467,3 @@ fn sse_envelope_reads_source_name() {
         Some("Alice")
     );
 }
-

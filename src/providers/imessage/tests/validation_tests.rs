@@ -273,4 +273,3 @@ fn target_with_leading_trailing_whitespace_trimmed() {
 // ══════════════════════════════════════════════════════════
 // SQLite/rusqlite Database Tests (CWE-89 Prevention)
 // ══════════════════════════════════════════════════════════
-

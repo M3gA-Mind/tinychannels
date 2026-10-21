@@ -443,4 +443,3 @@ async fn typed_ingress_does_not_acknowledge_a_pending_reservation() {
     assert!(sink.items.lock().unwrap().is_empty());
     drop(reservation);
 }
-

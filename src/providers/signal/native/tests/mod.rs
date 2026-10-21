@@ -126,7 +126,6 @@ fn edit_intent(body: &str) -> ChannelOutboundIntent {
     }
 }
 
-
 #[path = "inbound_tests.rs"]
 mod inbound_tests;
 #[path = "outbound_tests.rs"]

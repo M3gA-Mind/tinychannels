@@ -165,4 +165,3 @@ async fn typed_listener_propagates_rejected_lifecycle_events() {
         .expect_err("a rejected ordered event must reach listener supervision");
     assert!(error.message.contains("listener"));
 }
-

@@ -370,4 +370,3 @@ async fn fetch_new_messages_large_rowid_edge_case() {
     let result = fetch_new_messages(&db_path, i64::MAX - 1).await.unwrap();
     assert!(result.is_empty());
 }
-

@@ -94,7 +94,6 @@ fn message(to: &str, parts: Vec<OutboundContentPart>) -> ChannelOutboundMessage 
     }
 }
 
-
 #[path = "inbound_tests.rs"]
 mod inbound_tests;
 #[path = "outbound_tests.rs"]
