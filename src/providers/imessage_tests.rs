@@ -735,9 +735,8 @@ impl ChannelInboundSink for IngressSender {
 
 #[tokio::test]
 async fn send_runs_the_escaped_script_through_the_runner() {
-    let dir = tempfile::tempdir().unwrap();
-    let out = dir.path().join("script.txt");
     let mut rig = crate::providers::imessage::fixtures::rig();
+    let out = rig.out.clone();
     rig.channel.script_command = fake_runner(&out, 0);
     let recorder = rig.spawn_messages();
 
@@ -759,7 +758,7 @@ async fn send_runs_the_escaped_script_through_the_runner() {
 }
 
 #[tokio::test]
-async fn send_reports_the_runner_stderr_on_failure() {
+async fn send_reports_a_runner_failure_without_exposing_stderr() {
     let dir = tempfile::tempdir().unwrap();
     let mut rig = crate::providers::imessage::fixtures::rig();
     rig.channel.script_command = fake_runner(&dir.path().join("script.txt"), 1);
@@ -772,6 +771,7 @@ async fn send_reports_the_runner_stderr_on_failure() {
     .unwrap_err()
     .message;
     assert!(error.contains("iMessage send failed"), "{error}");
+    assert!(!error.contains("runner said no"), "{error}");
 }
 
 #[tokio::test]
@@ -781,12 +781,10 @@ async fn send_rejects_an_invalid_target_before_running_anything() {
     let mut rig = crate::providers::imessage::fixtures::rig();
     rig.channel.script_command = fake_runner(&out, 0);
 
-    let error = ChannelTypedSend::send_typed(
-        &rig.channel,
-        &typed_text_message("hello", "not a target"),
-    )
-    .await
-    .unwrap_err();
+    let error =
+        ChannelTypedSend::send_typed(&rig.channel, &typed_text_message("hello", "not a target"))
+            .await
+            .unwrap_err();
     assert!(error.message.contains("target"), "{}", error.message);
     assert!(!out.exists(), "the runner must not be invoked");
 }
@@ -855,8 +853,8 @@ async fn listen_fails_when_the_database_is_missing() {
 
 fn insert_message(conn: &Connection, rowid: i64, handle: i64, text: &str) {
     conn.execute(
-        "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (?1, ?2, ?3, 0)",
-        rusqlite::params![rowid, handle, text],
+        "INSERT INTO message (ROWID, handle_id, text, is_from_me, date) VALUES (?1, ?2, ?3, 0, ?4)",
+        rusqlite::params![rowid, handle, text, 700_000_000_000_000_000_i64],
     )
     .unwrap();
 }
@@ -908,8 +906,13 @@ async fn listen_delivers_only_allowed_non_blank_messages() {
     assert_eq!(first.conversation.id, "+15555550123");
     assert_eq!(first.text, "hello");
     assert_eq!(first.channel.id, "imessage");
-    assert_ne!(first.message_id, "1", "rows before startup are never replayed");
-    assert!(first.timestamp_unix_ms.is_some_and(|timestamp| timestamp > 0));
+    assert_ne!(
+        first.message_id, "1",
+        "rows before startup are never replayed"
+    );
+    assert!(first
+        .timestamp_unix_ms
+        .is_some_and(|timestamp| timestamp > 0));
 
     // The receiver going away ends the listener cleanly.
     drop(rx);
@@ -921,7 +924,10 @@ async fn listen_delivers_only_allowed_non_blank_messages() {
         .await
         .expect("listen returns once the receiver is gone")
         .unwrap();
-    assert!(result.is_err(), "a closed typed ingress sink stops the listener");
+    assert!(
+        result.is_err(),
+        "a closed typed ingress sink stops the listener"
+    );
 }
 
 /// A poll that fails (here: the `handle` table is missing) is logged and

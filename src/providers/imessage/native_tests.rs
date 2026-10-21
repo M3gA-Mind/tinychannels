@@ -5,8 +5,8 @@ use crate::channel::{
 };
 use crate::providers::imessage::fixtures::*;
 use crate::providers::native::fixtures::stored_media;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 use tinychannels_bus::channel::{ChannelSendOutcome, MessageReceipt, SendErrorKind};
 use tinychannels_bus::{
@@ -14,7 +14,7 @@ use tinychannels_bus::{
     ConversationKind, ConversationRef, MediaKind, MediaReference, OutboundContentPart,
     OutboundPayload, OutboundVoice,
 };
-use tokio::sync::{Notify, oneshot, watch};
+use tokio::sync::{oneshot, watch, Notify};
 
 const TYPED_PNG: &[u8] = b"png-bytes";
 
@@ -694,17 +694,13 @@ async fn runner_failures_and_missing_rows_are_distinguished() {
 
     // The runner cannot be started at all, or is not configured.
     failing.channel.script_command = vec!["/definitely/not/a/runner".into()];
-    assert!(
-        send(&failing, &message(PEER, vec![text("x")]))
-            .await
-            .is_err()
-    );
+    assert!(send(&failing, &message(PEER, vec![text("x")]))
+        .await
+        .is_err());
     failing.channel.script_command = Vec::new();
-    assert!(
-        send(&failing, &message(PEER, vec![text("x")]))
-            .await
-            .is_err()
-    );
+    assert!(send(&failing, &message(PEER, vec![text("x")]))
+        .await
+        .is_err());
 
     // The runner succeeds but Messages never records the message: uncertain.
     let mut silent = rig();
