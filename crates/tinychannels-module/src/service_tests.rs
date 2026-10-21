@@ -4391,7 +4391,57 @@ async fn shutdown_refuses_preparation_and_execution_before_host_work() {
 
 #[tokio::test]
 async fn whatsapp_cloud_starts_normally_and_serves_webhook_ingress_over_the_bus() {
-    let service = inbound_preparation_service().await;
+    #[derive(Clone)]
+    struct WebhookHost;
+
+    #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
+    impl WebhookHost {
+        async fn deliver_inbound(
+            &self,
+            _channel: String,
+            _message: serde_json::Value,
+        ) -> tinybus::Result<()> {
+            Ok(())
+        }
+
+        async fn report_status(
+            &self,
+            _channel: String,
+            _state: String,
+            _detail: Option<String>,
+        ) -> tinybus::Result<()> {
+            Ok(())
+        }
+
+        async fn persist_allowed_identity(
+            &self,
+            _channel: String,
+            _identity: String,
+        ) -> tinybus::Result<()> {
+            Ok(())
+        }
+    }
+
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let host_server = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    host_server
+        .serve_at(
+            tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
+            WebhookHost,
+        )
+        .await
+        .unwrap();
+    host_server
+        .request_name(tinychannels_bus::HOST_BUS_NAME)
+        .await
+        .unwrap();
+    let module = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let service = Channels::new(HostChannels::new(module), None);
     let config = ChannelsConfig {
         whatsapp: Some(tinychannels_bus::config::WhatsAppConfig {
             access_token: Some("access-token".into()),
