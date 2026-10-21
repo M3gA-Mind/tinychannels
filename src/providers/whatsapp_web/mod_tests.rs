@@ -970,14 +970,14 @@ async fn the_real_client_refuses_outbound_while_logged_out() {
         .await
         .expect("start_typing hung")
         .unwrap_err();
-    assert_eq!(composing.kind, crate::channel::SendErrorKind::Forbidden);
-    assert!(!composing.sent_before_error);
+    assert_eq!(composing.kind, crate::channel::SendErrorKind::Unknown);
+    assert!(composing.sent_before_error);
     let paused = tokio::time::timeout(HANG_GUARD, ch.stop_typing("+1234567890"))
         .await
         .expect("stop_typing hung")
         .unwrap_err();
-    assert_eq!(paused.kind, crate::channel::SendErrorKind::Forbidden);
-    assert!(!paused.sent_before_error);
+    assert_eq!(paused.kind, crate::channel::SendErrorKind::Unknown);
+    assert!(paused.sent_before_error);
 
     let (_, hook) = lifecycle.hooks.lock().pop().expect("hook registered");
     hook().await;

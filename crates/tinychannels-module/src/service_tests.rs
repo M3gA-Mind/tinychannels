@@ -4317,6 +4317,64 @@ async fn v1_subjects_are_normalized_only_for_providers_that_consume_them() {
 }
 
 #[tokio::test]
+async fn v1_discord_send_uses_configured_channel_when_recipient_is_empty() {
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let rest = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/channels/555000111/messages"))
+        .and(header("authorization", "Bot MTIzNDU2.ts.hmac"))
+        .and(body_json(serde_json::json!({"content": "v1 proactive"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "123456789012345678"
+        })))
+        .expect(1)
+        .mount(&rest)
+        .await;
+
+    let (channels, _callbacks, _server) =
+        channels_with_store(Arc::new(CaptureChannel(tokio::sync::mpsc::channel(1).0))).await;
+    let instance = "discord:account-a".to_owned();
+    let channel: Arc<dyn tinychannels::LongTailNative> = Arc::new(
+        tinychannels::DiscordChannel::new(
+            "MTIzNDU2.ts.hmac".into(),
+            Some("999000333".into()),
+            Some("555000111".into()),
+            vec![],
+            false,
+            false,
+        )
+        .with_api_base(rest.uri()),
+    );
+    let running = crate::provider::Running::start_long_tail(
+        "Discord",
+        channel,
+        Arc::new(crate::provider::Hooks::default()),
+        channels.host.clone(),
+        None,
+        true,
+        crate::provider::LongTailListenerMode::Adapter,
+    );
+    channels
+        .running
+        .lock()
+        .await
+        .insert(instance.clone(), running);
+
+    channels
+        .send_message(instance, SendMessage::new("v1 proactive", ""))
+        .await
+        .expect("the configured Discord channel is the v1 fallback target");
+    let requests = rest.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url.path(), "/channels/555000111/messages");
+    assert_eq!(requests[0].body_json::<serde_json::Value>().unwrap()["content"], "v1 proactive");
+    rest.verify().await;
+    channels.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn service_send_failures_preserve_named_error_and_durable_queue_busy_refuses_admission() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (service, _callbacks, _server) =
