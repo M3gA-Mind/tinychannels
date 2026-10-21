@@ -71,7 +71,7 @@ async fn a_fully_wired_account_declares_media_voice_and_waveforms() {
 }
 
 #[tokio::test]
-async fn the_legacy_channel_reports_the_same_facts() {
+async fn adapter_capabilities_match_the_discord_provider_facts() {
     let server = MockServer::start().await;
     let (channel, ..) = full_channel(&server);
     assert_eq!(
@@ -393,7 +393,7 @@ async fn typed_gateway_delivers_the_original_rich_ingress_to_its_sink() {
 #[tokio::test]
 async fn blocked_typed_delivery_does_not_stop_gateway_heartbeat_handling() {
     use futures_util::{SinkExt, StreamExt};
-    use tokio::sync::{Notify, oneshot};
+    use tokio::sync::{oneshot, Notify};
     use tokio_tungstenite::tungstenite::Message;
     use wiremock::matchers::path;
 
@@ -600,7 +600,7 @@ async fn other_providers_cannot_drive_the_discord_extensions() {
 }
 
 #[tokio::test]
-async fn the_legacy_trait_methods_delegate_and_keep_the_typed_error() {
+async fn typed_operations_preserve_errors_and_receipts() {
     let server = MockServer::start().await;
     mount_message_post(&server, 800).await;
     Mock::given(method("PATCH"))
@@ -616,7 +616,7 @@ async fn the_legacy_trait_methods_delegate_and_keep_the_typed_error() {
         .mount(&server)
         .await;
     let channel = channel_for(&server);
-    let message = ChannelOutboundMessage::from_intent(&intent("legacy"));
+    let message = ChannelOutboundMessage::from_intent(&intent("typed"));
 
     ChannelTypedSend::send_typed(&channel, &message)
         .await
@@ -659,18 +659,21 @@ async fn the_legacy_trait_methods_delegate_and_keep_the_typed_error() {
         failed.downcast_ref::<DiscordError>().unwrap().0.kind,
         SendErrorKind::TooLong
     );
-    assert!(
-        channel
-            .delete_message(&MessageReceipt::default())
-            .await
-            .is_err()
-    );
+    assert!(channel
+        .delete_message(&MessageReceipt::default())
+        .await
+        .is_err());
     let empty = tinychannels_bus::ChannelReaction::default();
-    assert!(
-        ChannelReaction::send_reaction(&channel, &account(), &conversation(), "x", &empty, false)
-            .await
-            .is_err()
-    );
+    assert!(ChannelReaction::send_reaction(
+        &channel,
+        &account(),
+        &conversation(),
+        "x",
+        &empty,
+        false
+    )
+    .await
+    .is_err());
 }
 
 #[tokio::test]

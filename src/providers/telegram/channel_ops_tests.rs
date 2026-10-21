@@ -4,7 +4,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tinychannels_runtime::channel::{
-    ChannelAdapter, ChannelInboundSink, ChannelReaction, ChannelStreamingDraft,
+    ChannelAdapter, ChannelInboundSink, ChannelStreamingDraft,
 };
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
