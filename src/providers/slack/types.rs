@@ -169,6 +169,11 @@ impl SlackChannel {
         seen.push_back(key);
         true
     }
+
+    /// Check for a committed delivery without reserving the key.
+    pub(crate) fn has_seen(&self, key: &str) -> bool {
+        self.seen.lock().iter().any(|seen| seen == key)
+    }
 }
 
 #[cfg(test)]
