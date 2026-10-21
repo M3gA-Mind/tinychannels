@@ -291,7 +291,6 @@ async fn qq_inbound_attachment_checks_sender_allowlist_before_network_io() {
 #[tokio::test]
 async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fallback() {
     use crate::providers::native::fixtures::RecordingEvents;
-    use crate::traits::Channel;
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
@@ -381,7 +380,9 @@ async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fa
     .with_events(events.clone())
     .with_attachment_http_client(gateway.client.clone());
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let listening = tokio::spawn(async move { channel.listen(tx).await });
+    let listening = tokio::spawn(async move {
+        crate::provider_test_support::listen_v1(channel.as_ref(), tx).await
+    });
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -430,7 +431,6 @@ async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fa
 #[tokio::test]
 async fn qq_gateway_listener_publishes_group_attachment_only_message_without_legacy_fallback() {
     use crate::providers::native::fixtures::RecordingEvents;
-    use crate::traits::Channel;
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
@@ -497,7 +497,9 @@ async fn qq_gateway_listener_publishes_group_attachment_only_message_without_leg
     .with_events(events.clone())
     .with_attachment_http_client(gateway.client.clone());
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let listening = tokio::spawn(async move { channel.listen(tx).await });
+    let listening = tokio::spawn(async move {
+        crate::provider_test_support::listen_v1(channel.as_ref(), tx).await
+    });
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
