@@ -619,7 +619,6 @@ async fn relay_transport_negotiates_v2_and_returns_the_canonical_descriptor() {
         short_relay_timeouts(),
     ));
     transport.connect_v2().await.expect("connect v2");
-    let started = tokio::time::Instant::now();
     let negotiation = {
         let transport = transport.clone();
         tokio::spawn(async move { transport.negotiate_v2().await })
@@ -695,6 +694,7 @@ async fn relay_v2_ignores_unsupported_versions_and_times_out_at_one_deadline() {
         },
     ));
     transport.connect_v2().await.expect("connect v2");
+    let started = tokio::time::Instant::now();
     let negotiation = {
         let transport = transport.clone();
         tokio::spawn(async move { transport.negotiate_v2().await })
