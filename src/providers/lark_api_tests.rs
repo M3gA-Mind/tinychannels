@@ -1179,8 +1179,11 @@ async fn send_reports_failures_with_and_without_a_token_refresh() {
         }
     })
     .await;
-    let error = channel_with(&server, true)
-        .send(&SendMessage::new("x", "oc_chat"))
+    let channel = channel_with(&server, true);
+    let error = crate::provider_test_support::send_v1(
+        &channel,
+        &SendMessage::new("x", "oc_chat"),
+    )
         .await
         .unwrap_err();
     assert_eq!(
@@ -1196,8 +1199,11 @@ async fn send_reports_failures_with_and_without_a_token_refresh() {
         }
     })
     .await;
-    let error = channel_with(&server, true)
-        .send(&SendMessage::new("x", "oc_chat"))
+    let channel = channel_with(&server, true);
+    let error = crate::provider_test_support::send_v1(
+        &channel,
+        &SendMessage::new("x", "oc_chat"),
+    )
         .await
         .unwrap_err();
     assert_eq!(error.to_string(), "Lark send failed: upstream exploded");
