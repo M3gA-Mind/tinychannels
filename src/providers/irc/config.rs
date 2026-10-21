@@ -34,5 +34,4 @@ impl IrcChannel {
             listener_cancel: std::sync::Mutex::new(None),
         }
     }
-
 }

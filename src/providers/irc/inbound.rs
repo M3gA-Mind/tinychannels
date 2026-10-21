@@ -1,46 +1,13 @@
-use super::{IrcChannel, WriteHalf};
+use super::{IrcChannel, SENDER_PREFIX_RESERVE, WriteHalf, split_message};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::Mutex;
 use tokio_rustls::rustls;
 
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Monotonic counter to ensure unique message IDs under burst traffic.
 static MSG_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// IRC over TLS channel.
-///
-/// Connects to an IRC server using TLS, joins configured channels,
-/// and forwards PRIVMSG messages to the `OpenHuman` message bus.
-/// Supports both channel messages and private messages (DMs).
-pub struct IrcChannel {
-    server: String,
-    port: u16,
-    nickname: String,
-    username: String,
-    channels: Vec<String>,
-    allowed_users: Vec<String>,
-    server_password: Option<String>,
-    nickserv_password: Option<String>,
-    sasl_password: Option<String>,
-    verify_tls: bool,
-    /// Shared write half of the TLS stream for sending messages.
-    writer: Arc<Mutex<Option<WriteHalf>>>,
-    /// Cancellation for the single provider-owned native listener.
-    listener_cancel: std::sync::Mutex<Option<tokio::sync::watch::Sender<bool>>>,
-}
-
-type WriteHalf = tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
-
-struct ListenerRegistration<'a>(&'a IrcChannel);
-
-impl Drop for ListenerRegistration<'_> {
-    fn drop(&mut self) {
-        self.0.end_listener();
-    }
-}
 
 /// Style instruction prepended to every IRC message before it reaches the LLM.
 /// IRC clients render plain text only — no markdown, no HTML, no XML.
@@ -62,9 +29,9 @@ impl Drop for ListenerRegistration<'_> {
 /// A parsed IRC message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct IrcMessage {
-    prefix: Option<String>,
-    command: String,
-    params: Vec<String>,
+    pub(super) prefix: Option<String>,
+    pub(super) command: String,
+    pub(super) params: Vec<String>,
 }
 
 impl IrcMessage {
@@ -154,6 +121,7 @@ pub(super) fn encode_sasl_plain(nick: &str, password: &str) -> String {
     out
 }
 
+impl IrcChannel {
     pub(super) fn is_user_allowed(&self, nick: &str) -> bool {
         if self.allowed_users.iter().any(|u| u == "*") {
             return true;
@@ -198,7 +166,7 @@ pub(super) fn encode_sasl_plain(nick: &str, password: &str) -> String {
         Ok(())
     }
 
-    async fn send_text_connected(
+    pub(super) async fn send_text_connected(
         writer: &mut WriteHalf,
         recipient: &str,
         text: &str,
@@ -213,7 +181,9 @@ pub(super) fn encode_sasl_plain(nick: &str, password: &str) -> String {
         Ok(())
     }
 
-    fn typed_send_failure(error: anyhow::Error) -> tinychannels_bus::channel::ChannelSendError {
+    pub(super) fn typed_send_failure(
+        error: anyhow::Error,
+    ) -> tinychannels_bus::channel::ChannelSendError {
         use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
 
         tracing::debug!(%error, "[irc] typed send failed");
@@ -225,7 +195,7 @@ pub(super) fn encode_sasl_plain(nick: &str, password: &str) -> String {
         }
     }
 
-    async fn listen_owned(
+    pub(super) async fn listen_owned(
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
         mut cancellation: Option<tokio::sync::watch::Receiver<bool>>,
@@ -588,4 +558,3 @@ impl rustls::client::danger::ServerCertVerifier for NoVerify {
             .supported_schemes()
     }
 }
-

@@ -6,7 +6,7 @@ mod inbound;
 mod outbound;
 
 pub use config::IrcChannelConfig;
-pub(super) use inbound::{IrcMessage, encode_sasl_plain, IRC_STYLE_PREFIX};
+pub(super) use inbound::{IRC_STYLE_PREFIX, IrcMessage, encode_sasl_plain};
 pub(super) use outbound::split_message;
 
 use std::sync::Arc;
@@ -34,18 +34,17 @@ pub struct IrcChannel {
     listener_cancel: std::sync::Mutex<Option<tokio::sync::watch::Sender<bool>>>,
 }
 
-type WriteHalf = tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
-
-type WriteHalf = tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
+pub(super) type WriteHalf =
+    tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
 
 #[cfg(test)]
-#[path = "irc_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "irc_listen_tests.rs"]
+#[path = "listen_tests.rs"]
 mod listen_tests;
 
 #[cfg(any(test, debug_assertions))]
-#[path = "irc_test_support_tests.rs"]
+#[path = "test_support.rs"]
 pub mod test_support;

@@ -1,7 +1,7 @@
 use super::{IrcChannel, WriteHalf};
 use async_trait::async_trait;
 
-const SENDER_PREFIX_RESERVE: usize = 64;
+pub(super) const SENDER_PREFIX_RESERVE: usize = 64;
 
 /// Split a message into lines safe for IRC transmission.
 ///
@@ -191,4 +191,3 @@ impl crate::providers::long_tail::LongTail for IrcChannel {
 }
 
 crate::providers::long_tail::impl_long_tail_adapter!(IrcChannel);
-
