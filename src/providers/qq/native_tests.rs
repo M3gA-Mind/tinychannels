@@ -302,7 +302,6 @@ async fn qq_inbound_attachment_checks_sender_allowlist_before_network_io() {
 
 #[tokio::test]
 async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fallback() {
-    use crate::providers::native::fixtures::RecordingEvents;
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
@@ -381,7 +380,6 @@ async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fa
     });
 
     let media = Arc::new(StubMedia::default());
-    let events = Arc::new(RecordingEvents::delivering());
     let channel = super::super::QQChannel::with_http_client(
         "app-id".into(),
         "app-secret".into(),
@@ -437,7 +435,6 @@ async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fa
 
 #[tokio::test]
 async fn qq_gateway_listener_publishes_group_attachment_only_message_without_legacy_fallback() {
-    use crate::providers::native::fixtures::RecordingEvents;
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
