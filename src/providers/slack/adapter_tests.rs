@@ -599,11 +599,15 @@ async fn lifecycle_hooks_are_owned_by_the_module_runtime() {
     }
     let channel = Arc::new(SlackChannel::new("t".into(), Some("C1".into()), vec![]));
     let listener_channel = channel.clone();
-    let listener = tokio::spawn(async move {
-        ChannelAdapter::start(listener_channel.as_ref(), &NoSink).await
-    });
+    let listener =
+        tokio::spawn(
+            async move { ChannelAdapter::start(listener_channel.as_ref(), &NoSink).await },
+        );
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
-        while !channel.listener_running.load(std::sync::atomic::Ordering::Acquire) {
+        while !channel
+            .listener_running
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
             tokio::task::yield_now().await;
         }
     })
