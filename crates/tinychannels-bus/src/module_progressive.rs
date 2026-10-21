@@ -235,9 +235,7 @@ pub enum ProgressiveCommand {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum ProgressiveResult {
-    Opened {
-        handle: String,
-    },
+    Opened { handle: String },
     Updated,
     Closed,
 }
