@@ -40,6 +40,7 @@ pub use qq::QQChannel;
 pub use signal::SignalChannel;
 pub use slack::SlackChannel;
 pub use telegram::TelegramChannel;
+pub use tinychannels_runtime::CliChannel;
 pub use whatsapp::WhatsAppChannel;
 pub use whatsapp_web::WhatsAppWebChannel;
 pub use yuanbao::YuanbaoChannel;

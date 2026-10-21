@@ -5,6 +5,7 @@
 
 use rand::RngExt as _;
 
+mod cli;
 mod dispatch;
 mod health;
 #[allow(
@@ -14,6 +15,7 @@ mod health;
 mod session;
 
 pub use dispatch::{RuntimeChannelMessage, run_dispatch_loop};
+pub use cli::CliChannel;
 pub use health::{ChannelHealthState, classify_health_result};
 #[allow(deprecated, reason = "legacy session API remains during v22 migration")]
 pub use session::{ChannelSession, run_in_session};
