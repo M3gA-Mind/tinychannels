@@ -12,7 +12,7 @@ mod channel_ops;
 mod channel_recv;
 mod channel_send;
 mod channel_types;
-pub(crate) mod text;
+mod text;
 
 pub use channel_types::TelegramChannel;
 
