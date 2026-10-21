@@ -563,5 +563,4 @@ fn normalize_mattermost_content(
     Some(cleaned)
 }
 
-#[async_trait]
 

@@ -2,11 +2,12 @@
 
 use super::*;
 
+#[async_trait]
 impl crate::providers::long_tail::LongTail for MattermostChannel {
     const ID: &'static str = "mattermost";
     const DISPLAY: &'static str = "Mattermost";
 
-    pub(super) fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
+    fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
         use crate::providers::long_tail::{TextSpec, text_capabilities};
         let mut capabilities = text_capabilities(TextSpec {
             typing: true,
@@ -67,7 +68,7 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
         capabilities
     }
 
-    pub(super) async fn health_state(&self) -> &'static str {
+    async fn health_state(&self) -> &'static str {
         match tokio::time::timeout(
             std::time::Duration::from_secs(5),
             crate::providers::native::NativeProvider::health_state(self),
@@ -79,15 +80,15 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
         }
     }
 
-    pub(super) fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {
+    fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {
         crate::providers::native::NativeProvider::descriptor_extra(self)
     }
 
-    pub(super) fn typing_supported(&self) -> bool {
+    fn typing_supported(&self) -> bool {
         true
     }
 
-    pub(super) async fn set_typing(
+    async fn set_typing(
         &self,
         conversation_id: &str,
         start: bool,
@@ -105,7 +106,7 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
         })
     }
 
-    pub(super) async fn react(
+    async fn react(
         &self,
         channel: &tinychannels_bus::ChannelRef,
         conversation: &tinychannels_bus::ConversationRef,
@@ -119,7 +120,7 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
         NativeProvider::react(self, conversation, provider_message_id, reaction, remove).await
     }
 
-    pub(super) async fn edit(
+    async fn edit(
         &self,
         receipt: &tinychannels_bus::channel::MessageReceipt,
         intent: tinychannels_bus::ChannelOutboundIntent,
@@ -130,14 +131,14 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
         crate::providers::native::edit(self, receipt, &intent).await
     }
 
-    pub(super) async fn delete(
+    async fn delete(
         &self,
         receipt: &tinychannels_bus::channel::MessageReceipt,
     ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
         crate::providers::native::delete(self, receipt).await
     }
 
-    pub(super) async fn start_listener(
+    async fn start_listener(
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
     ) -> std::result::Result<(), tinychannels_bus::channel::ChannelSendError> {
@@ -163,7 +164,7 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
         self.listen_typed(sink, &mut cancellation).await
     }
 
-    pub(super) async fn stop_listener(
+    async fn stop_listener(
         &self,
     ) -> std::result::Result<(), tinychannels_bus::channel::ChannelSendError> {
         if let Some(cancel) = self.listener_cancel.lock().as_ref() {
@@ -172,7 +173,7 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
         Ok(())
     }
 
-    pub(super) async fn send_typed_message(
+    async fn send_typed_message(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> Result<
