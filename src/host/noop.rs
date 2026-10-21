@@ -8,8 +8,8 @@
 
 use super::{
     AllowlistStore, ApprovalGate, ChannelHost, ConversationStore, EventSink, LifecycleRegistry,
-    MediaRepository, Memory, ReactionGate, RunLedger, SpeechSynthesizer, StorageProvider, Transcriber,
-    TurnDispatcher,
+    MediaRepository, Memory, ReactionGate, RunLedger, SpeechSynthesizer, StorageProvider,
+    Transcriber, TurnDispatcher,
 };
 use std::sync::Arc;
 
