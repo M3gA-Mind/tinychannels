@@ -74,6 +74,23 @@ async fn default_webhook_operations_are_explicitly_unsupported() {
 }
 
 #[tokio::test]
+async fn default_read_receipt_operation_is_explicitly_unsupported() {
+    let adapter = DefaultAdapter;
+    let error = adapter
+        .mark_read(
+            &tinychannels_bus::channel::ConversationRef {
+                id: "conversation-1".into(),
+                ..Default::default()
+            },
+            "provider-message-1",
+        )
+        .await
+        .unwrap_err();
+    assert!(error.unsupported);
+    assert!(!error.retryable);
+}
+
+#[tokio::test]
 async fn typed_draft_lifecycle_defaults_refuse_unimplemented_operations() {
     let adapter = DefaultAdapter;
     let start = ChannelStreamingDraft::start_draft(&adapter, ChannelOutboundIntent::default())

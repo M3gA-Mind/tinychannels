@@ -4470,6 +4470,28 @@ async fn whatsapp_cloud_starts_normally_and_serves_webhook_ingress_over_the_bus(
         running.channel.is_none(),
         "Cloud webhook launch must not retain the legacy Channel trait"
     );
+    let foreign_receipt = service
+        .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
+            channel: "whatsapp".into(),
+            interaction: tinychannels_bus::ChannelInteraction::MarkRead {
+                channel: tinychannels_bus::ChannelRef {
+                    id: "whatsapp".into(),
+                    account_id: Some("whatsapp:another-account".into()),
+                },
+                conversation: tinychannels_bus::ConversationRef {
+                    id: "15550001111".into(),
+                    kind: tinychannels_bus::ConversationKind::Dm,
+                    ..Default::default()
+                },
+                provider_message_id: "wamid.foreign".into(),
+            },
+        })
+        .await
+        .expect_err("a read receipt from another account must be refused");
+    assert!(matches!(
+        foreign_receipt,
+        BusError::MethodFailed { .. }
+    ));
     // The subscription handshake is answered through the interaction method.
     let challenge = service
         .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
