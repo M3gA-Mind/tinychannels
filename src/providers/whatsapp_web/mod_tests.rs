@@ -753,6 +753,62 @@ async fn wait_for_client(ch: &WhatsAppWebChannel) {
     .expect("bot client was never published");
 }
 
+#[cfg(feature = "whatsapp-web")]
+struct TypedRecordingSink {
+    ingress: tokio::sync::Mutex<Vec<tinychannels_bus::ChannelIngress>>,
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[async_trait]
+impl crate::channel::ChannelInboundSink for TypedRecordingSink {
+    async fn push(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.ingress.lock().await.push(ingress);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+#[cfg(feature = "whatsapp-web")]
+async fn typed_adapter_start_can_stop_and_restart_without_retaining_a_legacy_listener() {
+    use crate::channel::ChannelAdapter as _;
+
+    let channel = Arc::new(make_channel());
+    let sink = Arc::new(TypedRecordingSink {
+        ingress: tokio::sync::Mutex::new(Vec::new()),
+    });
+
+    for _ in 0..2 {
+        let adapter = Arc::clone(&channel);
+        let sink = Arc::clone(&sink);
+        let listener = tokio::spawn(async move {
+            adapter
+                .start_typed_with(sink.as_ref(), OfflineTransport, OfflineHttp)
+                .await
+        });
+
+        wait_for_client(&channel).await;
+        assert!(channel.bot_handle.lock().is_some());
+        assert!(channel.tx.lock().is_some());
+        tokio::time::timeout(HANG_GUARD, channel.stop())
+            .await
+            .expect("typed stop must cancel the active bot")
+            .unwrap();
+        tokio::time::timeout(HANG_GUARD, listener)
+            .await
+            .expect("typed listener must return after stop")
+            .expect("typed listener task panicked")
+            .unwrap();
+        assert!(channel.bot_handle.lock().is_none());
+        assert!(channel.client.lock().is_none());
+        assert!(channel.tx.lock().is_none());
+    }
+
+    assert!(sink.ingress.lock().await.is_empty());
+}
+
 async fn run_listen_until_shutdown(ch: WhatsAppWebChannel, lifecycle: Arc<RecordingLifecycle>) {
     let ch = Arc::new(ch);
     let (tx, _rx) = mpsc::channel(4);

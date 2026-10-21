@@ -833,16 +833,22 @@ impl WhatsAppWebChannel {
         }
     }
 
-    async fn listen_typed(
+    async fn start_typed_with<T, H>(
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
-        cancellation: tokio::sync::watch::Receiver<bool>,
-    ) -> Result<()> {
+        transport_factory: T,
+        http_client: H,
+    ) -> Result<()>
+    where
+        T: whatsapp_rust::transport::TransportFactory + 'static,
+        H: whatsapp_rust::http::HttpClient + 'static,
+    {
+        self.listener_cancel.send_replace(false);
         self.listen_typed_with(
             sink,
-            cancellation,
-            Self::websocket_transport(std::env::var("WHATSAPP_WS_URL").ok()),
-            whatsapp_rust_ureq_http_client::UreqHttpClient::new(),
+            self.listener_cancel.subscribe(),
+            transport_factory,
+            http_client,
         )
         .await
     }
@@ -858,7 +864,8 @@ impl WhatsAppWebChannel {
         T: whatsapp_rust::transport::TransportFactory + 'static,
         H: whatsapp_rust::http::HttpClient + 'static,
     {
-        let (tx, mut legacy_rx) = tokio::sync::mpsc::channel(1);
+        let (tx, _legacy_rx) = tokio::sync::mpsc::channel(1);
+        let mut stopped = cancellation.clone();
         let mut listener = Box::pin(self.listen_with_ingress(
             tx,
             transport_factory,
@@ -869,8 +876,9 @@ impl WhatsAppWebChannel {
         tokio::select! {
             biased;
             result = &mut listener => result,
-            _ = legacy_rx.recv() => {
-                Err(anyhow!("typed WhatsApp listener received an untyped fallback message"))
+            _ = async { let _ = stopped.wait_for(|value| *value).await; } => {
+                self.stop_bot().await;
+                Ok(())
             }
         }
     }
@@ -1080,15 +1088,18 @@ impl crate::channel::ChannelAdapter for WhatsAppWebChannel {
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
     ) -> std::result::Result<(), crate::channel::ChannelSendError> {
-        self.listener_cancel.send_replace(false);
-        self.listen_typed(sink, self.listener_cancel.subscribe())
-            .await
-            .map_err(|error| crate::channel::ChannelSendError {
-                kind: crate::channel::SendErrorKind::Unknown,
-                message: error.to_string(),
-                retryable: true,
-                ..Default::default()
-            })
+        self.start_typed_with(
+            sink,
+            Self::websocket_transport(std::env::var("WHATSAPP_WS_URL").ok()),
+            whatsapp_rust_ureq_http_client::UreqHttpClient::new(),
+        )
+        .await
+        .map_err(|error| crate::channel::ChannelSendError {
+            kind: crate::channel::SendErrorKind::Unknown,
+            message: error.to_string(),
+            retryable: true,
+            ..Default::default()
+        })
     }
 
     async fn stop(&self) -> std::result::Result<(), crate::channel::ChannelSendError> {

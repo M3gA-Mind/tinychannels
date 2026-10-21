@@ -98,6 +98,81 @@ async fn publish(rig: &Rig, inbound: &InboundMessage) -> Result<bool, WaFailure>
         .await
 }
 
+#[tokio::test]
+async fn typed_listener_retries_rejected_ingress_and_dedupes_only_after_acceptance() {
+    let mut rig = rig();
+    rig.state.events = None;
+    let (typed_tx, mut deliveries) = tokio::sync::mpsc::channel(2);
+    rig.state.typed_tx = Some(typed_tx);
+    let inbound = dm("web-typed-1", text("hello from WhatsApp Web"));
+
+    let state = rig.state.clone();
+    let first_inbound = inbound.clone();
+    let first = tokio::spawn(async move {
+        state
+            .publish_typed(
+                &first_inbound,
+                "+15550001111",
+                "+15550001111",
+                Some("Ada".into()),
+                false,
+            )
+            .await
+    });
+    let rejected = deliveries.recv().await.expect("typed ingress was queued");
+    let tinychannels_bus::ChannelIngress::Inbound(envelope) = &rejected.ingress else {
+        panic!("text message must retain its inbound envelope");
+    };
+    assert_eq!(envelope.message_id, "web-typed-1");
+    assert_eq!(envelope.channel.id, "whatsapp");
+    assert_eq!(envelope.conversation.id, "+15550001111");
+    assert_eq!(envelope.sender.name.as_deref(), Some("Ada"));
+    assert_eq!(envelope.text, "hello from WhatsApp Web");
+    rejected.accepted.send(false).unwrap();
+    assert!(first.await.unwrap().is_err());
+
+    let state = rig.state.clone();
+    let retry_inbound = inbound.clone();
+    let retry = tokio::spawn(async move {
+        state
+            .publish_typed(
+                &retry_inbound,
+                "+15550001111",
+                "+15550001111",
+                Some("Ada".into()),
+                false,
+            )
+            .await
+    });
+    let accepted = deliveries
+        .recv()
+        .await
+        .expect("rejected item must be retried");
+    assert!(matches!(
+        accepted.ingress,
+        tinychannels_bus::ChannelIngress::Inbound(_)
+    ));
+    accepted.accepted.send(true).unwrap();
+    assert!(retry.await.unwrap().unwrap());
+
+    assert!(
+        rig.state
+            .publish_typed(
+                &inbound,
+                "+15550001111",
+                "+15550001111",
+                Some("Ada".into()),
+                false
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        deliveries.try_recv().is_err(),
+        "accepted duplicate is suppressed"
+    );
+}
+
 fn envelopes(rig: &Rig) -> Vec<ChannelInboundEnvelope> {
     rig.sink
         .ingress
