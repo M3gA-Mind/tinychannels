@@ -1,3 +1,6 @@
+// Scoped allowance for the one-release v21 wire DTO compatibility surface.
+#![allow(deprecated)]
+
 //! Channel-side messaging abstractions and portable channel layer types.
 
 pub mod adapter;

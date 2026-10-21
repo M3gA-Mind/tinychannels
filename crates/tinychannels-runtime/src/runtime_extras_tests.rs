@@ -1,3 +1,6 @@
+// Scoped allowance for the one-release v21 wire DTO compatibility surface.
+#![allow(deprecated)]
+
 //! Tests for the session, dispatch and health helpers.
 
 use std::sync::Arc;

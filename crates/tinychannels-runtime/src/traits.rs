@@ -1,3 +1,6 @@
+// Scoped allowance for the one-release v21 wire DTO compatibility surface.
+#![allow(deprecated)]
+
 //! Legacy wire DTOs and webhook rejection type.
 
 pub use tinychannels_bus::{ChannelMessage, SendMessage};

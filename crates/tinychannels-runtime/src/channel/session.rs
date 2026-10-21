@@ -1,3 +1,6 @@
+// Scoped allowance for the one-release v21 wire DTO compatibility surface.
+#![allow(deprecated)]
+
 //! Implementation helpers for channel session.
 use crate::channel::{
     ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef, SenderRef,

@@ -1,3 +1,6 @@
+// Scoped allowance for the one-release v21 wire DTO compatibility surface.
+#![allow(deprecated)]
+
 //! Shared channel runtime helpers.
 
 use crate::text::truncate_with_ellipsis;

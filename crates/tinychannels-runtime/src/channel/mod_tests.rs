@@ -1,3 +1,6 @@
+// Scoped allowance for the one-release v21 wire DTO compatibility surface.
+#![allow(deprecated)]
+
 use super::*;
 use serde_json::json;
 use tinychannels_bus::ContentPart;
