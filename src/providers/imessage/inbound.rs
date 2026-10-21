@@ -560,14 +560,3 @@ impl IMessageChannel {
 #[cfg(test)]
 #[path = "inbound_tests.rs"]
 mod tests;
-
-impl IMessageChannel {
-    pub(super) fn is_contact_allowed(&self, sender: &str) -> bool {
-        if self.allowed_contacts.iter().any(|u| u == "*") {
-            return true;
-        }
-        self.allowed_contacts
-            .iter()
-            .any(|u| u.eq_ignore_ascii_case(sender))
-    }
-}
