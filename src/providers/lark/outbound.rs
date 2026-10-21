@@ -1,6 +1,7 @@
 //! Lark outbound delivery and message receipt handling.
 
 use super::*;
+use super::{FILE_LIMIT, IMAGE_LIMIT};
 use crate::providers::native::{Sent, Step, Target};
 use tinychannels_bus::channel::{ChannelSendError, MessageReceiptPartKind};
 
@@ -21,7 +22,7 @@ pub(super) async fn deliver(
             Ok(vec![Sent::new(id, MessageReceiptPartKind::Text)])
         }
         Step::File(file) if file.kind == tinychannels_bus::MediaKind::Image => {
-            if file.bytes.len() as u64 > 10 * 1024 * 1024 {
+            if file.bytes.len() as u64 > IMAGE_LIMIT {
                 return Err(known_unsent("Lark image exceeds the 10 MiB limit"));
             }
             let key = channel.upload_image(file).await?;
@@ -52,7 +53,7 @@ pub(super) async fn deliver(
                     "Lark file/audio captions",
                 ));
             }
-            if file.bytes.len() as u64 > 30 * 1024 * 1024 {
+            if file.bytes.len() as u64 > FILE_LIMIT {
                 return Err(known_unsent("Lark file exceeds the 30 MiB limit"));
             }
             let voice = matches!(step, Step::Voice(_));
