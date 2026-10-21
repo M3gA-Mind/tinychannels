@@ -1,8 +1,8 @@
 use super::*;
 use crate::channel::ChannelAdapter;
 use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::tungstenite::Message;
 use tinychannels_bus::{ChannelInboundEnvelope, ChannelIngress};
+use tokio_tungstenite::tungstenite::Message;
 
 fn discord_units(text: &str) -> usize {
     text.encode_utf16().count()
@@ -180,11 +180,9 @@ fn split_very_long_message() {
     // The shared chunker prefers whitespace boundaries, so it may produce more
     // than the mathematical minimum while preserving Discord's UTF-16 limit.
     assert!(chunks.len() > 1);
-    assert!(
-        chunks
-            .iter()
-            .all(|chunk| discord_units(chunk) <= DISCORD_MAX_MESSAGE_LENGTH)
-    );
+    assert!(chunks
+        .iter()
+        .all(|chunk| discord_units(chunk) <= DISCORD_MAX_MESSAGE_LENGTH));
     // Verify total content is preserved
     let reconstructed = chunks.concat();
     assert_eq!(reconstructed, msg);
@@ -269,11 +267,9 @@ fn split_multibyte_only_content_without_panics() {
     let msg = "🦀".repeat(2500);
     let chunks = split_message_for_discord(&msg);
     assert_eq!(chunks.len(), 3);
-    assert!(
-        chunks
-            .iter()
-            .all(|chunk| discord_units(chunk) <= DISCORD_MAX_MESSAGE_LENGTH)
-    );
+    assert!(chunks
+        .iter()
+        .all(|chunk| discord_units(chunk) <= DISCORD_MAX_MESSAGE_LENGTH));
     let reconstructed = chunks.concat();
     assert_eq!(reconstructed, msg);
 }
@@ -282,11 +278,9 @@ fn split_multibyte_only_content_without_panics() {
 fn split_chunks_always_within_discord_limit() {
     let msg = "x".repeat(12_345);
     let chunks = split_message_for_discord(&msg);
-    assert!(
-        chunks
-            .iter()
-            .all(|chunk| chunk.chars().count() <= DISCORD_MAX_MESSAGE_LENGTH)
-    );
+    assert!(chunks
+        .iter()
+        .all(|chunk| chunk.chars().count() <= DISCORD_MAX_MESSAGE_LENGTH));
 }
 
 #[test]
@@ -598,7 +592,7 @@ fn proactive_target_uses_configured_channel_id() {
 // ── REST + Gateway against loopback mocks ─────────────────────
 
 use axum::{
-    Json, Router, extract::Path, http::HeaderMap, http::StatusCode, routing::get, routing::post,
+    extract::Path, http::HeaderMap, http::StatusCode, routing::get, routing::post, Json, Router,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -967,8 +961,7 @@ async fn listen_handles_dm_mentions_and_bots_then_stops_on_invalid_session() {
 
     let msg = next_inbound(&mut rx);
     assert!(
-        msg.message_id.starts_with("discord_")
-            && msg.message_id.len() > "discord_".len() + 30,
+        msg.message_id.starts_with("discord_") && msg.message_id.len() > "discord_".len() + 30,
         "{}",
         msg.message_id
     );
