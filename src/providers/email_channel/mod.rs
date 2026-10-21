@@ -1,5 +1,3 @@
-mod outbound;
-mod config;
 #![allow(clippy::uninlined_format_args)]
 #![allow(clippy::map_unwrap_or)]
 #![allow(clippy::redundant_closure_for_method_calls)]
@@ -9,6 +7,9 @@ mod config;
 #![allow(clippy::doc_markdown)]
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::unnecessary_map_or)]
+
+mod config;
+mod outbound;
 
 use anyhow::Result;
 #[cfg(feature = "email")]

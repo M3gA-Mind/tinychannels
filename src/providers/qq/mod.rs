@@ -98,8 +98,6 @@ impl QQChannel {
         self.attachment_http_client = client;
         self
     }
-pl QQChannel {
-}
 
 #[path = "native.rs"]
 mod native;

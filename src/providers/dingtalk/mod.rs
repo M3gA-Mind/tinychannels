@@ -56,8 +56,6 @@ impl DingTalkChannel {
         self.attachment_http_client = client;
         self
     }
-mpl DingTalkChannel {
-}
 
 async fn send_callback_ack<S>(write: &mut S, frame: &serde_json::Value) -> bool
 where
