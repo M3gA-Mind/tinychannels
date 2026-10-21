@@ -682,7 +682,7 @@ fn outbound(content: &str, recipient: &str) -> tinychannels_bus::ChannelOutbound
         }),
         channel_id: "discord".into(),
         conversation_id: recipient.into(),
-        conversation_ref: Some(tinychannels_bus::ConversationRef {
+        conversation_ref: (!recipient.is_empty()).then(|| tinychannels_bus::ConversationRef {
             kind: tinychannels_bus::ConversationKind::Channel,
             id: recipient.into(),
             ..Default::default()
@@ -729,7 +729,16 @@ async fn message_sink(
                         .to_string();
                     let content = body["content"].as_str().unwrap_or_default().to_string();
                     let _ = tx.send((channel_id, auth, content));
-                    (status, "rate limited body")
+                    let body = if status.is_success() {
+                        r#"{"id":"message-123"}"#
+                    } else {
+                        "rate limited body"
+                    };
+                    axum::http::Response::builder()
+                        .status(status)
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(body))
+                        .expect("mock response is valid")
                 }
             },
         ),
