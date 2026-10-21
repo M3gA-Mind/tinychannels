@@ -106,6 +106,7 @@ pub(crate) fn inbound_since(
 }
 
 /// The newest `date_read` among our sent messages, or 0.
+#[cfg(test)]
 pub(crate) fn max_date_read(conn: &Connection) -> anyhow::Result<i64> {
     let value: Option<i64> = conn.query_row(
         "SELECT MAX(date_read) FROM message WHERE is_from_me = 1",
@@ -129,6 +130,7 @@ pub(crate) fn max_read_cursor(conn: &Connection) -> anyhow::Result<(i64, i64)> {
 }
 
 /// Our sent messages read after `since`, oldest read first.
+#[cfg(test)]
 pub(crate) fn read_since(conn: &Connection, since: i64) -> anyhow::Result<Vec<ReadRow>> {
     read_since_cursor(conn, since, i64::MAX)
 }

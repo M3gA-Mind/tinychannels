@@ -394,6 +394,7 @@ impl IrcChannel {
         }
     }
 
+    #[cfg(test)]
     async fn health_check(&self) -> bool {
         // Lightweight connectivity check: TLS connect + QUIT.
         match self.connect().await {

@@ -184,6 +184,7 @@ impl IMessageChannel {
         }
     }
 
+    #[cfg(test)]
     async fn dispatch_tapback(&self, row: &InboundRow, emoji: &str, removed: bool) {
         let Some(target) = row.associated_guid.as_deref().map(db::target_guid) else {
             return;
@@ -232,6 +233,7 @@ impl IMessageChannel {
 
     /// Handle one inbound row. False when the legacy receiver is gone and the
     /// listener should stop.
+    #[cfg(test)]
     pub(super) async fn dispatch_row(
         &self,
         row: InboundRow,
@@ -515,6 +517,7 @@ impl IMessageChannel {
     }
 
     /// Publish a read receipt for one of our messages.
+    #[cfg(test)]
     pub(super) async fn dispatch_read(&self, row: ReadRow) {
         if !self.is_contact_allowed(&row.recipient) {
             return;

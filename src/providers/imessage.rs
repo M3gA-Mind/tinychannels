@@ -235,6 +235,7 @@ impl IMessageChannel {
     /// Run the listener and optionally signal after its startup cursor is fixed.
     /// The readiness sender is used by tests to synchronize first-message
     /// delivery with the same cursor boundary as the production listener.
+    #[cfg(test)]
     async fn listen_with_ready(
         &self,
         tx: mpsc::Sender<ChannelMessage>,
