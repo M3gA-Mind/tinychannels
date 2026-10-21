@@ -3593,38 +3593,6 @@
           ]
         },
         {
-          "description": "A user activated an opaque provider button. The host applies any\napproval or business policy after validating this actor and scope.",
-          "type": "object",
-          "properties": {
-            "actionId": {
-              "type": "string"
-            },
-            "actor": {
-              "$ref": "#/$defs/SenderRef"
-            },
-            "providerMessageId": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "queryId": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "button_callback"
-            }
-          },
-          "required": [
-            "type",
-            "queryId",
-            "actionId",
-            "providerMessageId",
-            "actor"
-          ]
-        },
-        {
           "description": "Account or user presence changed.",
           "type": "object",
           "properties": {
@@ -4319,7 +4287,7 @@
           "default": null
         },
         "opaqueId": {
-          "description": "Stable host-owned identifier for media stored outside the channel\nprovider. It is safe to persist and does not imply a shared filesystem.",
+          "description": "Host-owned identifier for media stored outside the provider. It is\nopaque and only meaningful with the full channel, conversation, and\nturn scope used to store it.",
           "type": [
             "string",
             "null"
@@ -4428,13 +4396,6 @@
         {
           "type": "object",
           "properties": {
-            "audioBase64": {
-              "description": "Optional bounded inline payload for one native upload. The durable\nreference remains the canonical media identity.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "codec": {
               "type": [
                 "string",
@@ -4455,17 +4416,6 @@
             },
             "media": {
               "$ref": "#/$defs/MediaReference"
-            },
-            "waveform": {
-              "description": "Normalised 0.0-1.0 loudness preview for providers that draw one\n(WhatsApp push-to-talk). Absent when the codec path produced none.",
-              "type": [
-                "array",
-                "null"
-              ],
-              "items": {
-                "type": "number",
-                "format": "float"
-              }
             }
           },
           "required": [
