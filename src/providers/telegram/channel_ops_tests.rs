@@ -1669,7 +1669,7 @@ async fn typed_voice_keeps_transcript_as_caption_and_sends_one_native_receipt() 
         }],
     };
     message.parts.insert(
-        0,
+        1,
         tinychannels_bus::OutboundContentPart::Content {
             part: tinychannels_bus::ContentPart::Text {
                 text: "recognized words".into(),
