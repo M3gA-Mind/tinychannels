@@ -5358,7 +5358,7 @@ async fn adapter_start_polls_and_delivers_original_typed_telegram_ingress() {
     assert_eq!(envelope.channel.id, "telegram");
     assert_eq!(envelope.conversation.id, "-10042");
     assert_eq!(envelope.conversation.topic_id.as_deref(), Some("73"));
-    assert_eq!(envelope.provider_message_id.as_deref(), Some("9"));
+    assert_eq!(envelope.message_id, "telegram_-10042_9");
     assert!(matches!(envelope.parts.as_slice(), [tinychannels_bus::ContentPart::Text { text, .. }] if text == "hello from a forum topic"));
     drop(items);
     crate::channel::ChannelAdapter::stop(channel.as_ref()).await.unwrap();
