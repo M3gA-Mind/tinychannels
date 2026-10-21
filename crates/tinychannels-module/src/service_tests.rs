@@ -1449,7 +1449,7 @@ async fn required_durable_partial_provider_send_persists_receipt_and_is_not_retr
 #[async_trait::async_trait]
 impl crate::provider::TestProviderBehavior for EndedChannel {
     fn test_provider_id(&self) -> &'static str { "fixture" }
-    fn test_listener_ends(&self) -> bool { true }
+    async fn test_start(&self, _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync)) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { Ok(()) }
     async fn test_send(&self, _message: &tinychannels_bus::ChannelOutboundMessage) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(Default::default())
