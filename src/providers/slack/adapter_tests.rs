@@ -597,7 +597,7 @@ async fn lifecycle_hooks_are_owned_by_the_module_runtime() {
             Ok(())
         }
     }
-    let channel = SlackChannel::new("t".into(), None, vec![]);
+    let channel = SlackChannel::new("t".into(), Some("C1".into()), vec![]);
     channel.start(&NoSink).await.unwrap();
     channel.stop().await.unwrap();
     let status = channel.status().await.unwrap();
