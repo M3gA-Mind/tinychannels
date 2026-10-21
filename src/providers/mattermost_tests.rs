@@ -539,8 +539,14 @@ async fn rest_requests_preserve_auth_thread_routing_and_server_errors() {
         crate::provider_test_support::send_v1(&channel, &SendMessage::new("top-level", "room"))
             .await
             .unwrap_err();
-    assert!(error.to_string().contains("403"));
-    assert!(error.to_string().contains("permission denied"));
+    let error = error
+        .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+        .expect("typed send errors preserve their structured classification")
+        .0
+        .clone();
+    assert_eq!(error.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!error.sent_before_error);
+    assert!(!error.message.contains("permission denied"));
     server.verify().await;
     server.reset().await;
     Mock::given(method("GET"))
