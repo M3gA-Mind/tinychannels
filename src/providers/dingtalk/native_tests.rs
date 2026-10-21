@@ -143,11 +143,10 @@ async fn v1_subject_is_a_markdown_title_not_part_of_dingtalk_body() {
         vec!["alice".into()],
         server.client.clone(),
     );
-    channel
-        .session_webhooks
-        .write()
-        .await
-        .insert("chat-1".into(), "https://api.dingtalk.com/session-webhook".into());
+    channel.session_webhooks.write().await.insert(
+        "chat-1".into(),
+        "https://api.dingtalk.com/session-webhook".into(),
+    );
 
     crate::provider_test_support::send_v1(
         &channel,
