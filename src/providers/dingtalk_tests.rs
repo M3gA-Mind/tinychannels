@@ -173,13 +173,12 @@ async fn gateway_registration_and_webhook_replies_preserve_payloads_and_errors()
         .expect(1)
         .mount(&webhook)
         .await;
-    assert!(
-        crate::provider_test_support::send_v1(&channel, &reply)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("denied")
-    );
+    let error = crate::provider_test_support::send_v1(&channel, &reply)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("DingTalk webhook reply was rejected"));
+    assert!(!error.contains("denied"));
     webhook.verify().await;
     channel
         .session_webhooks
