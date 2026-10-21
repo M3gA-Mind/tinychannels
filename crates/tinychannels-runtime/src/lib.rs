@@ -7,6 +7,9 @@ use rand::RngExt as _;
 
 mod cli;
 mod dispatch;
+#[cfg(test)]
+#[path = "traits_tests.rs"]
+mod traits_tests;
 mod health;
 #[allow(
     deprecated,

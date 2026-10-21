@@ -56,6 +56,8 @@ pub mod host;
     reason = "provider implementations migrate to typed sends in issue #103"
 )]
 pub mod providers;
+#[cfg(test)]
+mod provider_test_support;
 pub mod relay;
 pub mod remote;
 pub mod routes;
