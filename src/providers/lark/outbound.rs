@@ -109,7 +109,7 @@ impl LarkChannel {
 
 }
 
-fn known_unsent(message: &str) -> ChannelSendError {
+pub(super) fn known_unsent(message: &str) -> ChannelSendError {
     ChannelSendError {
         kind: tinychannels_bus::channel::SendErrorKind::Transient,
         message: message.into(),
@@ -119,7 +119,7 @@ fn known_unsent(message: &str) -> ChannelSendError {
     }
 }
 
-fn uncertain_send(message: &str) -> ChannelSendError {
+pub(super) fn uncertain_send(message: &str) -> ChannelSendError {
     ChannelSendError {
         kind: tinychannels_bus::channel::SendErrorKind::Unknown,
         message: message.into(),

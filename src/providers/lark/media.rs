@@ -3,6 +3,7 @@
 use super::*;
 use base64::Engine as _;
 use crate::providers::native::FileStep;
+use super::outbound::known_unsent;
 use tinychannels_bus::channel::ChannelSendError;
 
 impl LarkChannel {
@@ -217,5 +218,44 @@ fn uncertain_send(message: &str) -> ChannelSendError {
     }
 }
 
+
+    pub(super) async fn prepare_steps(
+        &self,
+        _target: &crate::providers::native::Target,
+        steps: &mut [crate::providers::native::Step],
+    ) -> Result<(), ChannelSendError> {
+        for step in steps {
+            let is_voice = matches!(step, crate::providers::native::Step::Voice(_));
+            let file = match step {
+                crate::providers::native::Step::Text(_) => continue,
+                crate::providers::native::Step::File(file) if file.kind == tinychannels_bus::MediaKind::Image => {
+                    if file.bytes.len() as u64 > super::IMAGE_LIMIT {
+                        return Err(crate::providers::native::pre_dispatch("Lark image exceeds the 10 MiB limit"));
+                    }
+                    if !matches!(file.mime.as_str(), "image/jpeg" | "image/png" | "image/gif" | "image/webp") {
+                        return Err(crate::providers::native::pre_dispatch("Lark image type is not supported"));
+                    }
+                    continue;
+                }
+                crate::providers::native::Step::File(file) | crate::providers::native::Step::Voice(file) => file,
+            };
+            if file.caption.as_deref().is_some_and(|caption| !caption.trim().is_empty()) {
+                return Err(crate::providers::native::unsupported("Lark file/audio captions"));
+            }
+            if file.bytes.len() as u64 > super::FILE_LIMIT {
+                return Err(crate::providers::native::pre_dispatch("Lark file exceeds the 30 MiB limit"));
+            }
+            if file.kind == tinychannels_bus::MediaKind::Video && file.mime != "video/mp4" {
+                return Err(crate::providers::native::unsupported("Lark video type"));
+            }
+            if is_voice || file.kind == tinychannels_bus::MediaKind::Audio {
+                let (bytes, name) = self.opus_audio(file).await?;
+                file.bytes = bytes;
+                file.name = name;
+                file.mime = "audio/ogg".into();
+            }
+        }
+        Ok(())
+    }
 
 }
