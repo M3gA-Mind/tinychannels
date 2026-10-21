@@ -2689,7 +2689,7 @@ async fn configured_running_telegram_adapter_uploads_media_from_host_storage() {
             .with_api_base_for_test(server.uri())
             .with_media_repository(repository.clone()),
     );
-    let running = Running::start_outbound(channel, hooks, host);
+    let running = Running::start_test_outbound(channel, hooks, host);
     let adapter = running.adapter_handle();
     let result = adapter
         .send(tinychannels_bus::ChannelOutboundIntent {
@@ -2810,7 +2810,7 @@ async fn configured_adapter_marks_first_unknown_media_upload_non_retryable() {
             .with_api_base_for_test(server.uri())
             .with_media_repository(repository),
     );
-    let running = Running::start_outbound(channel, hooks, host);
+    let running = Running::start_test_outbound(channel, hooks, host);
     let adapter = running.adapter_handle();
     let error = adapter
         .send(tinychannels_bus::ChannelOutboundIntent {
@@ -3798,7 +3798,7 @@ async fn legacy_running_routes_reaction_edit_delete_and_refuses_native_drafts() 
     })
     .await
     .unwrap();
-    let running = Running::start(
+    let running = Running::start_test(
         Arc::new(InteractionChannel::default()),
         Arc::new(Hooks::default()),
         HostChannels::new(connection),
