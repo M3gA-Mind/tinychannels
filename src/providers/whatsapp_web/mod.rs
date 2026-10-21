@@ -992,6 +992,77 @@ impl WhatsAppWebChannel {
 }
 
 #[cfg(feature = "whatsapp-web")]
+impl WhatsAppWebChannel {
+    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        capabilities(&CapabilitySpec {
+            media: self.media_repository.is_some(),
+            voice_store: self.voice_media_store.is_some(),
+            voice_synthesis: self.voice_synthesis && self.voice_media_store.is_some(),
+            native_waveform: true,
+            edit_delete: true,
+            limits: outbound::MEDIA_LIMITS,
+            text_limit: outbound::TEXT_LIMIT as u64,
+        })
+    }
+
+    fn provider_media_account_identity(&self) -> Option<String> {
+        self.identity.current()
+    }
+
+    async fn mark_read_provider(
+        &self,
+        conversation: &tinychannels_bus::ConversationRef,
+        provider_message_id: &str,
+    ) -> Result<()> {
+        self.read_v2(conversation, provider_message_id)
+            .await
+            .map_err(anyhow::Error::new)
+    }
+
+    async fn start_typing_provider(&self, recipient: &str) -> Result<()> {
+        let client = self.connected_client()?;
+
+        if !self.should_allow_outbound(recipient) {
+            tracing::warn!(
+                "WhatsApp Web: typing target {} not in allowed list",
+                Self::redact_recipient(recipient)
+            );
+            return Ok(());
+        }
+
+        let to = self.recipient_to_jid(recipient)?;
+        client
+            .send_composing(&to)
+            .await
+            .map_err(|e| anyhow!("Failed to send typing state (composing): {e}"))?;
+
+        tracing::debug!("WhatsApp Web: start typing for {}", recipient);
+        Ok(())
+    }
+
+    async fn stop_typing_provider(&self, recipient: &str) -> Result<()> {
+        let client = self.connected_client()?;
+
+        if !self.should_allow_outbound(recipient) {
+            tracing::warn!(
+                "WhatsApp Web: typing target {} not in allowed list",
+                Self::redact_recipient(recipient)
+            );
+            return Ok(());
+        }
+
+        let to = self.recipient_to_jid(recipient)?;
+        client
+            .send_paused(&to)
+            .await
+            .map_err(|e| anyhow!("Failed to send typing state (paused): {e}"))?;
+
+        tracing::debug!("WhatsApp Web: stop typing for {}", recipient);
+        Ok(())
+    }
+}
+
+#[cfg(feature = "whatsapp-web")]
 #[async_trait]
 impl Channel for WhatsAppWebChannel {
     fn name(&self) -> &str {
@@ -1023,19 +1094,11 @@ impl Channel for WhatsAppWebChannel {
     }
 
     fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        capabilities(&CapabilitySpec {
-            media: self.media_repository.is_some(),
-            voice_store: self.voice_media_store.is_some(),
-            voice_synthesis: self.voice_synthesis && self.voice_media_store.is_some(),
-            native_waveform: true,
-            edit_delete: true,
-            limits: outbound::MEDIA_LIMITS,
-            text_limit: outbound::TEXT_LIMIT as u64,
-        })
+        self.declared_capabilities()
     }
 
     fn media_account_identity(&self) -> Option<String> {
-        self.identity.current()
+        self.provider_media_account_identity()
     }
 
     async fn send_typed(&self, message: &tinychannels_bus::ChannelOutboundMessage) -> Result<()> {
@@ -1069,9 +1132,7 @@ impl Channel for WhatsAppWebChannel {
         conversation: &tinychannels_bus::ConversationRef,
         provider_message_id: &str,
     ) -> Result<()> {
-        self.read_v2(conversation, provider_message_id)
-            .await
-            .map_err(anyhow::Error::new)
+        self.mark_read_provider(conversation, provider_message_id).await
     }
 
     async fn edit_message(
@@ -1121,45 +1182,11 @@ impl Channel for WhatsAppWebChannel {
     }
 
     async fn start_typing(&self, recipient: &str) -> Result<()> {
-        let client = self.connected_client()?;
-
-        if !self.should_allow_outbound(recipient) {
-            tracing::warn!(
-                "WhatsApp Web: typing target {} not in allowed list",
-                Self::redact_recipient(recipient)
-            );
-            return Ok(());
-        }
-
-        let to = self.recipient_to_jid(recipient)?;
-        client
-            .send_composing(&to)
-            .await
-            .map_err(|e| anyhow!("Failed to send typing state (composing): {e}"))?;
-
-        tracing::debug!("WhatsApp Web: start typing for {}", recipient);
-        Ok(())
+        self.start_typing_provider(recipient).await
     }
 
     async fn stop_typing(&self, recipient: &str) -> Result<()> {
-        let client = self.connected_client()?;
-
-        if !self.should_allow_outbound(recipient) {
-            tracing::warn!(
-                "WhatsApp Web: typing target {} not in allowed list",
-                Self::redact_recipient(recipient)
-            );
-            return Ok(());
-        }
-
-        let to = self.recipient_to_jid(recipient)?;
-        client
-            .send_paused(&to)
-            .await
-            .map_err(|e| anyhow!("Failed to send typing state (paused): {e}"))?;
-
-        tracing::debug!("WhatsApp Web: stop typing for {}", recipient);
-        Ok(())
+        self.stop_typing_provider(recipient).await
     }
 }
 
@@ -1188,7 +1215,7 @@ impl crate::channel::ChannelAdapter for WhatsAppWebChannel {
     }
 
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        Channel::capabilities(self)
+        self.declared_capabilities()
     }
 
     async fn start(
@@ -1231,7 +1258,7 @@ impl crate::channel::ChannelAdapter for WhatsAppWebChannel {
         conversation: &tinychannels_bus::ConversationRef,
         provider_message_id: &str,
     ) -> std::result::Result<(), crate::channel::ChannelSendError> {
-        Channel::mark_read(self, conversation, provider_message_id)
+        self.mark_read_provider(conversation, provider_message_id)
             .await
             .map_err(|error| failure_of(&error).into_send_error())
     }
@@ -1276,7 +1303,7 @@ impl crate::channel::ChannelTyping for WhatsAppWebChannel {
         &self,
         conversation_id: &str,
     ) -> std::result::Result<(), crate::channel::ChannelSendError> {
-        Channel::start_typing(self, conversation_id)
+        self.start_typing_provider(conversation_id)
             .await
             .map_err(|error| failure_of(&error).into_send_error())
     }
@@ -1285,7 +1312,7 @@ impl crate::channel::ChannelTyping for WhatsAppWebChannel {
         &self,
         conversation_id: &str,
     ) -> std::result::Result<(), crate::channel::ChannelSendError> {
-        Channel::stop_typing(self, conversation_id)
+        self.stop_typing_provider(conversation_id)
             .await
             .map_err(|error| failure_of(&error).into_send_error())
     }
