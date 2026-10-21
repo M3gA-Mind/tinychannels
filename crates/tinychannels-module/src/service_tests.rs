@@ -1074,10 +1074,8 @@ async fn channels_with_store(
 
 #[tokio::test]
 async fn module_media_handlers_roundtrip_only_within_the_provider_turn_scope() {
-    let (channels, _callbacks, _server) = channels_with_store(Arc::new(EndedChannel(Arc::new(
-        std::sync::atomic::AtomicUsize::new(0),
-    ))))
-    .await;
+    let (sink, _received) = tokio::sync::mpsc::channel(1);
+    let (channels, _callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sink))).await;
     channels.provider_activations.lock().await.insert(
         "fixture".into(),
         ProviderActivation {
