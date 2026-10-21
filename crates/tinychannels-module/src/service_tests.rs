@@ -589,7 +589,7 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
     let mut running = HashMap::new();
     running.insert(
         "fixture".to_owned(),
-        Running::start(channel, hooks, host.clone()),
+        Running::start_test(channel, hooks, host.clone()),
     );
     let channels = Channels {
         progressive: Arc::new(crate::progressive::Replies::new(
@@ -682,7 +682,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
     let mut running = HashMap::new();
     running.insert(
         "fixture".to_owned(),
-        Running::start(channel, hooks, host.clone()),
+        Running::start_test(channel, hooks, host.clone()),
     );
     let channels = Channels {
         progressive: Arc::new(crate::progressive::Replies::new(
@@ -1156,7 +1156,7 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
     let mut running = HashMap::new();
     running.insert(
         "fixture".to_owned(),
-        Running::start(channel, hooks, host.clone()),
+        Running::start_test(channel, hooks, host.clone()),
     );
     let channels = Channels {
         progressive: Arc::new(crate::progressive::Replies::new(
@@ -2190,7 +2190,7 @@ async fn nested_runtime_shutdown_failure_still_drains_root_owners_and_can_retry(
     let runtimes = Arc::new(crate::runtime::Runtimes::new(module.clone()));
     let channels = Channels::new(root_host.clone(), Some(runtimes.clone()));
     let (sent, _received) = tokio::sync::mpsc::channel(1);
-    let provider = Running::start(
+    let provider = Running::start_test(
         Arc::new(CaptureChannel(sent)),
         Arc::new(Hooks::default()),
         root_host.clone(),
@@ -2521,19 +2521,12 @@ async fn preparation_preserves_explicit_keys_and_typed_thread_before_provider_io
 struct OutboundOnlyFixture(tokio::sync::mpsc::Sender<SendMessage>);
 
 #[async_trait::async_trait]
-impl tinychannels::Channel for OutboundOnlyFixture {
-    fn name(&self) -> &str {
-        "fixture"
-    }
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        self.0.send(message.clone()).await?;
-        Ok(())
-    }
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        panic!("external webhook providers must not start a native listener")
+impl crate::provider::TestProviderBehavior for OutboundOnlyFixture {
+    fn test_provider_id(&self) -> &'static str { "fixture" }
+    async fn test_send(&self, message: &tinychannels_bus::ChannelOutboundMessage) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
+        let legacy = SendMessage::new(crate::provider::test_message_text(message), message.conversation_id.clone());
+        self.0.send(legacy).await.map_err(|error| tinychannels::channel::ChannelSendError { message: error.to_string(), ..Default::default() })?;
+        Ok(Default::default())
     }
 }
 
@@ -2546,7 +2539,7 @@ async fn outbound_only_worker_sends_and_joins_without_polling_webhook_listener()
         .unwrap();
     let host = HostChannels::new(connection);
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
-    let running = Running::start_outbound(
+    let running = Running::start_test_outbound(
         Arc::new(OutboundOnlyFixture(sent)),
         Arc::new(Hooks::default()),
         host.clone(),
@@ -2963,7 +2956,7 @@ async fn enable_remote_providers(channels: &Channels) {
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
         channels.running.lock().await.insert(
             configured_name.to_owned(),
-            Running::start(
+            Running::start_test(
                 Arc::new(CaptureChannel(sender)),
                 Arc::new(Hooks::default()),
                 host.clone(),
@@ -4586,7 +4579,7 @@ async fn a_long_tail_provider_starts_as_a_native_adapter_and_is_listed() {
 async fn starting_an_unconfigured_provider_reports_not_configured() {
     let service = inbound_preparation_service().await;
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let finished = Running::start(
+    let finished = Running::start_test(
         Arc::new(CaptureChannel(tx)),
         Arc::new(Hooks::default()),
         service.host.clone(),
