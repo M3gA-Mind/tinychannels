@@ -611,7 +611,7 @@ async fn outbound_calls_fail_before_the_bot_is_built() {
     let start_error = ch.start_typing("+1234567890").await.unwrap_err().message;
     let stop_error = ch.stop_typing("+1234567890").await.unwrap_err().message;
     for err in [send_error, start_error, stop_error] {
-        assert!(err.to_string().contains("client not connected"), "{err}");
+        assert!(err.to_string().contains("not connected"), "{err}");
     }
 }
 
@@ -663,7 +663,12 @@ async fn unparseable_recipients_are_rejected() {
     let empty = crate::provider_test_support::send_v1(&ch, &message("   ", "x"))
         .await
         .unwrap_err();
-    assert!(empty.to_string().contains("cannot be empty"), "{empty}");
+    assert_eq!(
+        empty.kind,
+        crate::channel::SendErrorKind::Forbidden,
+        "invalid recipient must be rejected before provider I/O"
+    );
+    assert!(!empty.sent_before_error);
     let no_digits = ch.start_typing("+abc").await.unwrap_err();
     assert!(
         no_digits.message.contains("valid phone number"),
@@ -697,7 +702,9 @@ async fn client_failures_surface_with_their_operation() {
     let send = crate::provider_test_support::send_v1(&ch, &message("+1234567890", "x"))
         .await
         .unwrap_err();
-    assert_eq!(send.to_string(), "send boom");
+    assert_eq!(send.kind, crate::channel::SendErrorKind::Unknown);
+    assert!(send.sent_before_error);
+    assert!(send.message.contains("send boom"), "{}", send.message);
     let composing = ch.start_typing("+1234567890").await.unwrap_err();
     assert_eq!(
         composing.message,
