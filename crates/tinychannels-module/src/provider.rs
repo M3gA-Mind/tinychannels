@@ -64,58 +64,41 @@ const MAX_TYPING_REFRESH_RECIPIENTS: usize = 64;
 const MAX_TYPING_REFRESH_INTERVAL_SECS: u64 = 60;
 
 async fn dispatch_interaction(
-    channel: Option<Arc<dyn Channel>>,
-    native: Option<NativePorts>,
+    native: NativePorts,
     configured_instance: &str,
     interaction: tinychannels_bus::ChannelInteraction,
     typing: &mut TypingRefreshes,
 ) -> Result<tinychannels_bus::ChannelInteractionResult> {
-    if let Some(native) = &native {
-        match &interaction {
-            tinychannels_bus::ChannelInteraction::Describe => {
-                return Ok(crate::interaction::describe_adapter(
-                    native.adapter.as_ref(),
-                    true,
-                ));
-            }
-            tinychannels_bus::ChannelInteraction::DescribeV2 => {
-                return Ok(crate::interaction::describe_adapter(
-                    native.adapter.as_ref(),
-                    false,
-                ));
-            }
-            _ => {}
+    match &interaction {
+        tinychannels_bus::ChannelInteraction::Describe => {
+            return Ok(crate::interaction::describe_adapter(native.adapter.as_ref(), true));
         }
-        if let Some(result) = crate::interaction::dispatch_native_draft(
-            native.adapter.as_ref(),
-            native.drafts.as_ref(),
-            configured_instance,
-            interaction.clone(),
-        )
-        .await
-        {
-            return result;
+        tinychannels_bus::ChannelInteraction::DescribeV2 => {
+            return Ok(crate::interaction::describe_adapter(native.adapter.as_ref(), false));
         }
-        if let Some(result) = crate::interaction::dispatch_native_webhook(
-            native.adapter.as_ref(),
-            interaction.clone(),
-        )
-        .await
-        {
-            return result;
-        }
+        _ => {}
+    }
+    if let Some(result) = crate::interaction::dispatch_native_draft(
+        native.adapter.as_ref(),
+        native.drafts.as_ref(),
+        configured_instance,
+        interaction.clone(),
+    )
+    .await
+    {
+        return result;
+    }
+    if let Some(result) = crate::interaction::dispatch_native_webhook(
+        native.adapter.as_ref(),
+        interaction.clone(),
+    )
+    .await
+    {
+        return result;
     }
     use tinychannels_bus::ChannelInteraction as Op;
     match interaction {
-        describe @ (Op::Describe | Op::DescribeV2) => {
-            crate::interaction::dispatch(
-                channel
-                    .as_deref()
-                    .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
-                describe,
-            )
-            .await
-        }
+        Op::Describe | Op::DescribeV2 => unreachable!("descriptions return above"),
         Op::StartTypingRefresh {
             recipient,
             interval_secs,
@@ -129,7 +112,6 @@ async fn dispatch_interaction(
                 return Err(Error::failed("typing refresh capacity is full"));
             }
             let (cancel, mut canceled) = watch::channel(false);
-            let refresh_channel = channel.clone();
             let refresh_native = native.clone();
             let refresh_recipient = recipient.clone();
             let interval = Duration::from_secs(interval_secs);
@@ -140,13 +122,8 @@ async fn dispatch_interaction(
                         _ = async { let _ = canceled.wait_for(|value| *value).await; } => break,
                         _ = tokio::time::sleep(interval) => {
                             let refresh = async {
-                                if let Some(native) = &refresh_native {
-                                    native.typing.start_typing(&refresh_recipient).await.map_err(|error| anyhow::anyhow!(error.message))
-                                } else if let Some(channel) = &refresh_channel {
-                                    channel.start_typing(&refresh_recipient).await
-                                } else {
-                                    anyhow::bail!("provider typing port is unavailable")
-                                }
+                                refresh_native.typing.start_typing(&refresh_recipient).await
+                                    .map_err(|error| anyhow::anyhow!(error.message))
                             };
                             tokio::select! {
                                 biased;
@@ -180,49 +157,20 @@ async fn dispatch_interaction(
             Ok(tinychannels_bus::ChannelInteractionResult::Completed)
         }
         Op::StartTyping { recipient } => {
-            if let Some(native) = &native {
-                native
-                    .typing
-                    .start_typing(&recipient)
-                    .await
-                    .map_err(|_| Error::failed("provider typing operation failed"))?;
-                Ok(tinychannels_bus::ChannelInteractionResult::Completed)
-            } else {
-                crate::interaction::dispatch(
-                    channel
-                        .as_deref()
-                        .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
-                    Op::StartTyping { recipient },
-                )
-                .await
-            }
+            native.typing.start_typing(&recipient).await
+                .map_err(|_| Error::failed("provider typing operation failed"))?;
+            Ok(tinychannels_bus::ChannelInteractionResult::Completed)
         }
         Op::StopTyping { recipient } => {
-            if let Some(native) = &native {
-                native
-                    .typing
-                    .stop_typing(&recipient)
-                    .await
-                    .map_err(|_| Error::failed("provider typing operation failed"))?;
-                Ok(tinychannels_bus::ChannelInteractionResult::Completed)
-            } else {
-                crate::interaction::dispatch(
-                    channel
-                        .as_deref()
-                        .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
-                    Op::StopTyping { recipient },
-                )
-                .await
-            }
+            native.typing.stop_typing(&recipient).await
+                .map_err(|_| Error::failed("provider typing operation failed"))?;
+            Ok(tinychannels_bus::ChannelInteractionResult::Completed)
         }
         Op::MarkRead {
             channel: channel_ref,
             conversation,
             provider_message_id,
         } => {
-            let native = native
-                .as_ref()
-                .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?;
             if channel_ref.id != tinychannels_bus::provider_id(configured_instance)
                 || channel_ref.account_id.as_deref() != Some(configured_instance)
                 || conversation.id.trim().is_empty()
@@ -246,85 +194,26 @@ async fn dispatch_interaction(
             reaction,
             remove,
         } => {
-            if let Some(native) = &native {
-                native
-                    .reactions
-                    .send_reaction(
-                        &channel_ref,
-                        &conversation,
-                        &provider_message_id,
-                        &reaction,
-                        remove,
-                    )
-                    .await
-                    .map_err(|_| Error::failed("provider reaction failed"))?;
-                Ok(tinychannels_bus::ChannelInteractionResult::Completed)
-            } else {
-                crate::interaction::dispatch(
-                    channel
-                        .as_deref()
-                        .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
-                    Op::SendReaction {
-                        channel: channel_ref,
-                        conversation,
-                        provider_message_id,
-                        reaction,
-                        remove,
-                    },
-                )
-                .await
-            }
+            native.reactions.send_reaction(
+                &channel_ref, &conversation, &provider_message_id, &reaction, remove,
+            ).await.map_err(|_| Error::failed("provider reaction failed"))?;
+            Ok(tinychannels_bus::ChannelInteractionResult::Completed)
         }
         Op::EditMessage { receipt, intent } => {
-            if let Some(native) = &native {
-                let receipt = native
-                    .edits
-                    .edit(&receipt, intent)
-                    .await
-                    .map_err(|_| Error::failed("provider edit failed"))?;
-                Ok(tinychannels_bus::ChannelInteractionResult::Sent(Box::new(
-                    tinychannels_bus::channel::ChannelSendOutcome {
-                        receipt,
-                        error: None,
-                    },
-                )))
-            } else {
-                crate::interaction::dispatch(
-                    channel
-                        .as_deref()
-                        .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
-                    Op::EditMessage { receipt, intent },
-                )
-                .await
-            }
+            let receipt = native.edits.edit(&receipt, intent).await
+                .map_err(|_| Error::failed("provider edit failed"))?;
+            Ok(tinychannels_bus::ChannelInteractionResult::Sent(Box::new(
+                tinychannels_bus::channel::ChannelSendOutcome { receipt, error: None },
+            )))
         }
         Op::DeleteMessage { receipt } => {
-            if let Some(native) = &native {
-                native
-                    .deletes
-                    .delete(&receipt)
-                    .await
-                    .map_err(|_| Error::failed("provider delete failed"))?;
-                Ok(tinychannels_bus::ChannelInteractionResult::Completed)
-            } else {
-                crate::interaction::dispatch(
-                    channel
-                        .as_deref()
-                        .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
-                    Op::DeleteMessage { receipt },
-                )
-                .await
-            }
+            native.deletes.delete(&receipt).await
+                .map_err(|_| Error::failed("provider delete failed"))?;
+            Ok(tinychannels_bus::ChannelInteractionResult::Completed)
         }
-        interaction => {
-            crate::interaction::dispatch(
-                channel
-                    .as_deref()
-                    .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
-                interaction,
-            )
-            .await
-        }
+        Op::SendDraft { .. } | Op::UpdateDraft { .. } | Op::FinalizeDraft { .. }
+        | Op::DeliverWebhook { .. } | Op::VerifyWebhook { .. } | Op::UpsertDraft { .. } =>
+            Err(Error::failed("provider does not implement this typed operation")),
     }
 }
 
