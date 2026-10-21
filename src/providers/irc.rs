@@ -307,15 +307,6 @@ impl IrcChannel {
         Ok(())
     }
 
-    async fn send_text(&self, recipient: &str, text: &str) -> anyhow::Result<()> {
-        let mut guard = self.writer.lock().await;
-        let writer = guard
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("IRC not connected"))?;
-
-        Self::send_text_connected(writer, recipient, text).await
-    }
-
     async fn send_text_connected(
         writer: &mut WriteHalf,
         recipient: &str,

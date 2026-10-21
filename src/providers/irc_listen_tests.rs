@@ -122,12 +122,14 @@ impl Peer {
 async fn recv(
     rx: &mut mpsc::UnboundedReceiver<tinychannels_bus::ChannelIngress>,
 ) -> tinychannels_bus::channel::ChannelInboundEnvelope {
-    tokio::time::timeout(GUARD, rx.recv())
+    let ingress = tokio::time::timeout(GUARD, rx.recv())
         .await
         .unwrap()
-        .expect("listener dropped its sender")
-        .into_inbound()
-        .expect("IRC listener emits inbound envelopes")
+        .expect("listener dropped its sender");
+    let tinychannels_bus::ChannelIngress::Inbound(envelope) = ingress else {
+        panic!("IRC listener should emit inbound messages");
+    };
+    envelope
 }
 
 #[derive(Clone)]
@@ -783,7 +785,7 @@ async fn listen_registers_authenticates_and_forwards_allowed_privmsgs() {
         .unwrap()
         .unwrap()
         .unwrap_err();
-    assert!(error.to_string().contains("password mismatch"), "{error}");
+    assert_eq!(error.message, "IRC listener stopped");
     assert!(rx.try_recv().is_err(), "no other message was forwarded");
 }
 
@@ -822,7 +824,7 @@ async fn listen_continues_without_sasl_when_the_server_refuses_it() {
         .unwrap()
         .unwrap()
         .unwrap_err();
-    assert!(error.to_string().contains("closed by server"), "{error}");
+    assert_eq!(error.message, "IRC listener stopped");
 }
 
 #[tokio::test]
@@ -859,7 +861,7 @@ async fn listen_ends_sasl_on_failure_and_stops_when_the_receiver_is_gone() {
         .await
         .unwrap()
         .unwrap()
-        .expect("a closed receiver ends listen cleanly");
+        .expect_err("the typed sink reports closure to the adapter");
 }
 
 #[tokio::test]
