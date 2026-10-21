@@ -1,6 +1,9 @@
 //! Lark event intake over the webhook and WebSocket transports.
 
 use super::*;
+use tinychannels_bus::{
+    ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef, SenderRef,
+};
 
 impl LarkChannel {
     pub(super) fn http_client(&self) -> reqwest::Client {
@@ -861,4 +864,263 @@ pub(super) fn strip_at_placeholders(text: &str) -> String {
 /// In group chats, only respond when the bot is explicitly @-mentioned.
 pub(super) fn should_respond_in_group(mentions: &[serde_json::Value]) -> bool {
     !mentions.is_empty()
+}
+
+impl LarkChannel {
+    pub(crate) async fn inbound_envelope(
+        &self,
+        event: &serde_json::Value,
+    ) -> Option<ChannelInboundEnvelope> {
+        self.inbound_envelope_with_listener(event, false).await
+    }
+
+    pub(crate) async fn inbound_envelope_for_listener(
+        &self,
+        event: &serde_json::Value,
+        typed_sink_available: bool,
+    ) -> Option<ChannelInboundEnvelope> {
+        self.inbound_envelope_with_listener(event, typed_sink_available)
+            .await
+    }
+
+    async fn inbound_envelope_with_listener(
+        &self,
+        event: &serde_json::Value,
+        typed_sink_available: bool,
+    ) -> Option<ChannelInboundEnvelope> {
+        use crate::providers::native::inbound::{
+            InboundFile, Ingest, Ingested, assemble, media_of,
+        };
+
+        let message = event.get("message")?;
+        let message_id = message.get("message_id")?.as_str()?.to_owned();
+        if self.native.has_seen(&format!("lark:{message_id}")) {
+            return None;
+        }
+        let chat_id = message.get("chat_id")?.as_str()?.to_owned();
+        let chat_type = message
+            .get("chat_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let message_type = message
+            .get("message_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let sender_id = event
+            .pointer("/sender/sender_id/open_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if sender_id.is_empty()
+            || !self.is_user_allowed(sender_id)
+            || event
+                .pointer("/sender/sender_type")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind == "app" || kind == "bot")
+            || (chat_type == "group"
+                && !super::should_respond_in_group(
+                    message
+                        .get("mentions")
+                        .and_then(serde_json::Value::as_array)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
+                ))
+        {
+            return None;
+        }
+        let content: serde_json::Value = serde_json::from_str(
+            message
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("{}"),
+        )
+        .ok()?;
+        let text = match message_type {
+            "text" => content
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            "post" => super::parse_post_content(
+                message
+                    .get("content")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+            )
+            .unwrap_or_default(),
+            _ => String::new(),
+        };
+        // Feishu inserts these placeholders into plain text for mentioned
+        // users. Keep the historical user-facing text on the typed path too.
+        let text = super::strip_at_placeholders(&text).trim().to_owned();
+        let thread_id = message
+            .get("thread_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        let conversation = ConversationRef {
+            kind: if thread_id.is_some() {
+                ConversationKind::Thread
+            } else if chat_type == "p2p" {
+                ConversationKind::Dm
+            } else {
+                ConversationKind::Group
+            },
+            id: chat_id,
+            parent_id: message
+                .get("root_id")
+                .or_else(|| message.get("parent_id"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            thread_id,
+            ..Default::default()
+        };
+        let sender = SenderRef {
+            id: sender_id.to_owned(),
+            ..Default::default()
+        };
+        let mut ingested = Ingested::default();
+        let (key, resource_type, voice, default_mime) = match message_type {
+            "image" => (
+                content.get("image_key").and_then(serde_json::Value::as_str),
+                "image",
+                false,
+                "image/jpeg",
+            ),
+            "audio" => (
+                content.get("file_key").and_then(serde_json::Value::as_str),
+                "file",
+                true,
+                "audio/ogg",
+            ),
+            "media" => (
+                content.get("file_key").and_then(serde_json::Value::as_str),
+                "file",
+                false,
+                "video/mp4",
+            ),
+            "file" => (
+                content.get("file_key").and_then(serde_json::Value::as_str),
+                "file",
+                false,
+                "application/octet-stream",
+            ),
+            _ => (None, "file", false, "application/octet-stream"),
+        };
+        if (self.native.events.is_some() || typed_sink_available)
+            && (self.native.media_repository.is_some() || self.native.voice_media_store.is_some())
+            && let Some(key) = key.filter(|key| !key.is_empty())
+            && let Some(file) = self
+                .download_resource(&message_id, key, resource_type, default_mime)
+                .await
+        {
+            Ingest {
+                provider: "lark",
+                channel: ChannelRef {
+                    id: "lark".into(),
+                    account_id: None,
+                },
+                repository: self.native.media_repository.as_ref(),
+                voice_store: self.native.voice_media_store.as_ref(),
+                transcriber: self.native.transcriber.as_ref(),
+                file_bytes: if resource_type == "image" {
+                    IMAGE_LIMIT
+                } else {
+                    FILE_LIMIT
+                },
+                voice_bytes: FILE_LIMIT,
+            }
+            .add(
+                &mut ingested,
+                &conversation,
+                &message_id,
+                InboundFile {
+                    bytes: file.0,
+                    mime: file.1,
+                    name: content
+                        .get("file_name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                        .or(file.2),
+                    duration_ms: content.get("duration").and_then(serde_json::Value::as_u64),
+                    voice,
+                    dedupe_key: format!("{message_id}:{key}"),
+                    transcript: None,
+                },
+            )
+            .await;
+        }
+        let parts = assemble(&text, None, ingested);
+        if parts.is_empty() {
+            return None;
+        }
+        let timestamp_unix_ms = message
+            .get("create_time")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| value.parse::<u64>().ok());
+        Some(ChannelInboundEnvelope {
+            channel: ChannelRef {
+                id: "lark".into(),
+                account_id: None,
+            },
+            message_id: message_id.clone(),
+            timestamp_unix_ms,
+            conversation,
+            sender,
+            text,
+            media: media_of(&parts),
+            parts,
+            raw: Some(serde_json::json!({"providerMessageId": message_id})),
+            ..Default::default()
+        })
+    }
+
+    async fn download_resource(
+        &self,
+        message_id: &str,
+        key: &str,
+        resource_type: &str,
+        default_mime: &str,
+    ) -> Option<(Vec<u8>, String, Option<String>)> {
+        let token = self.get_tenant_access_token().await.ok()?;
+        let url = format!(
+            "{}/im/v1/messages/{}/resources/{}?type={}",
+            self.api_base(),
+            urlencoding::encode(message_id),
+            urlencoding::encode(key),
+            resource_type
+        );
+        let response = self
+            .http_client()
+            .get(url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let mime = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(crate::providers::native::inbound::normalize_mime)
+            .filter(|mime| !mime.is_empty() && mime != "application/octet-stream")
+            .unwrap_or_else(|| default_mime.into());
+        let limit = if resource_type == "image" {
+            IMAGE_LIMIT
+        } else {
+            FILE_LIMIT
+        };
+        let mut response = response;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.ok()? {
+            if bytes.len().saturating_add(chunk.len()) as u64 > limit {
+                return None;
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        if bytes.is_empty() {
+            return None;
+        }
+        Some((bytes, mime, None))
+    }
 }

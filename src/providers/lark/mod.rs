@@ -1,6 +1,11 @@
 mod capabilities;
 mod config;
 mod inbound;
+mod media;
+mod outbound;
+
+pub(super) const IMAGE_LIMIT: u64 = 10 * 1024 * 1024;
+pub(super) const FILE_LIMIT: u64 = 30 * 1024 * 1024;
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceCodec, VoiceMediaStore};
 use crate::traits::ChannelMessage;
 use futures_util::{SinkExt, StreamExt};

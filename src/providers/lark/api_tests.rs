@@ -1152,6 +1152,65 @@ async fn host_aware_factory_sends_typed_image_through_lark_image_upload() {
 }
 
 #[tokio::test]
+async fn lark_file_upload_validates_size_and_preserves_audio_duration() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let upload = Arc::new(AtomicUsize::new(0));
+    let server = HttpsServer::start({
+        let upload = upload.clone();
+        move |request| {
+            if is_token_request(request) {
+                token_ok("t-file-upload")
+            } else if request.target == "/open-apis/im/v1/files" {
+                if upload.fetch_add(1, Ordering::SeqCst) == 0 {
+                    (503, r#"{"code":99991663}"#.into())
+                } else {
+                    (
+                        200,
+                        r#"{"code":0,"data":{"file_key":"file-duration"}}"#.into(),
+                    )
+                }
+            } else {
+                panic!("unexpected Lark request: {}", request.target)
+            }
+        }
+    })
+    .await;
+    let channel = channel_with(&server, false);
+
+    for bytes in [&[][..], &vec![0; (super::FILE_LIMIT + 1) as usize][..]] {
+        let error = channel
+            .upload_file(bytes, "audio.opus", "opus", Some(1_200))
+            .await
+            .unwrap_err();
+        assert!(error.message.contains("empty or exceeds"));
+        assert!(!error.sent_before_error);
+    }
+    assert!(server.requests.lock().unwrap().is_empty());
+
+    let rejected = channel
+        .upload_file(b"audio-bytes", "audio.opus", "opus", Some(1_200))
+        .await
+        .unwrap_err();
+    assert!(!rejected.sent_before_error);
+    let key = channel
+        .upload_file(b"audio-bytes", "audio.opus", "opus", Some(1_200))
+        .await
+        .unwrap();
+    assert_eq!(key, "file-duration");
+    let requests = server.requests.lock().unwrap().clone();
+    let upload_requests = requests
+        .iter()
+        .filter(|request| request.target == "/open-apis/im/v1/files")
+        .collect::<Vec<_>>();
+    assert_eq!(upload_requests.len(), 2);
+    assert!(
+        String::from_utf8_lossy(&upload_requests[1].raw_body)
+            .contains("name=\"duration\"\r\n\r\n1200")
+    );
+}
+
+#[tokio::test]
 async fn send_refreshes_an_expired_token_and_retries_once() {
     let tokens = Arc::new(AtomicUsize::new(0));
     let sends = Arc::new(AtomicUsize::new(0));

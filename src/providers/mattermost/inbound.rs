@@ -160,81 +160,6 @@ impl MattermostChannel {
         })
     }
 
-    pub(super) async fn file_info(
-        &self,
-        post: &serde_json::Value,
-        file_id: &str,
-    ) -> Option<(String, Option<String>, Option<u64>)> {
-        if let Some(file) = post
-            .pointer("/metadata/files")
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .find(|file| file.get("id").and_then(serde_json::Value::as_str) == Some(file_id))
-        {
-            return Some((
-                file.get("mime_type")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("application/octet-stream")
-                    .to_owned(),
-                file.get("name")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned),
-                file.get("size").and_then(serde_json::Value::as_u64),
-            ));
-        }
-        if !valid_file_id(file_id) {
-            return None;
-        }
-        let info = self
-            .http_client()
-            .get(format!("{}/api/v4/files/{file_id}/info", self.base_url))
-            .bearer_auth(&self.bot_token)
-            .send()
-            .await
-            .ok()?;
-        if !info.status().is_success() {
-            return None;
-        }
-        let info: serde_json::Value = info.json().await.ok()?;
-        Some((
-            info.get("mime_type")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("application/octet-stream")
-                .to_owned(),
-            info.get("name")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned),
-            info.get("size").and_then(serde_json::Value::as_u64),
-        ))
-    }
-
-    pub(super) async fn download_file(&self, file_id: &str, limit: u64) -> Option<Vec<u8>> {
-        if !valid_file_id(file_id) {
-            return None;
-        }
-        let mut response = self
-            .http_client()
-            .get(format!("{}/api/v4/files/{file_id}", self.base_url))
-            .bearer_auth(&self.bot_token)
-            .send()
-            .await
-            .ok()?;
-        if !response.status().is_success()
-            || response.content_length().is_some_and(|size| size > limit)
-        {
-            return None;
-        }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.ok()? {
-            if bytes.len() as u64 + chunk.len() as u64 > limit {
-                return None;
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        (!bytes.is_empty()).then_some(bytes)
-    }
-
     pub(super) async fn listen_typed(
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
@@ -341,7 +266,7 @@ impl MattermostChannel {
     }
 }
 
-fn valid_file_id(file_id: &str) -> bool {
+pub(super) fn valid_file_id(file_id: &str) -> bool {
     !file_id.is_empty()
         && file_id
             .bytes()

@@ -1,4 +1,5 @@
 use super::*;
+use base64::Engine as _;
 
 #[tokio::test]
 async fn typed_inbound_strips_feishu_mention_placeholders_from_text() {
@@ -210,4 +211,136 @@ async fn lark_preflights_unsupported_image_and_video_formats() {
         assert!(!error.sent_before_error);
         assert!(!error.retryable);
     }
+}
+
+#[tokio::test]
+async fn lark_audio_preparation_rejects_unsupported_and_invalid_sources() {
+    use crate::host::{VoiceCodec, VoiceCodecRequest, VoiceCodecResult};
+
+    struct CodecReply(Result<String, &'static str>);
+
+    #[async_trait::async_trait]
+    impl VoiceCodec for CodecReply {
+        async fn transcode(&self, _request: VoiceCodecRequest) -> anyhow::Result<VoiceCodecResult> {
+            let audio_base64 = self
+                .0
+                .as_ref()
+                .map_err(|message| anyhow::anyhow!("{message}"))?;
+            Ok(VoiceCodecResult {
+                audio_base64: audio_base64.clone(),
+                duration_ms: None,
+                waveform: None,
+            })
+        }
+    }
+
+    let mut channel = LarkChannel::new(
+        "app-id".into(),
+        "app-secret".into(),
+        "verify-token".into(),
+        None,
+        vec!["*".into()],
+    );
+    let file = |mime: &str, bytes: &[u8]| FileStep {
+        kind: MediaKind::Audio,
+        bytes: bytes.to_vec(),
+        mime: mime.into(),
+        name: "voice.wav".into(),
+        caption: None,
+        duration_ms: None,
+    };
+
+    let unsupported = channel
+        .opus_audio(&file("audio/flac", b"audio"))
+        .await
+        .unwrap_err();
+    assert!(unsupported.unsupported);
+    assert!(!unsupported.sent_before_error);
+
+    let malformed = channel
+        .opus_audio(&file("audio/ogg", b"not an Ogg stream"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        malformed.kind,
+        tinychannels_bus::channel::SendErrorKind::BadFormat
+    );
+    assert!(!malformed.sent_before_error);
+
+    let missing_codec = channel
+        .opus_audio(&file("audio/wav", b"wave data"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        missing_codec.kind,
+        tinychannels_bus::channel::SendErrorKind::BadFormat
+    );
+
+    channel.voice_codec = Some(Arc::new(CodecReply(Err("codec unavailable"))));
+    let failed_codec = channel
+        .opus_audio(&file("audio/wav", b"wave data"))
+        .await
+        .unwrap_err();
+    assert!(failed_codec.message.contains("conversion failed"));
+
+    channel.voice_codec = Some(Arc::new(CodecReply(Ok("not-base64".into()))));
+    let invalid_encoding = channel
+        .opus_audio(&file("audio/wav", b"wave data"))
+        .await
+        .unwrap_err();
+    assert!(
+        invalid_encoding
+            .message
+            .contains("invalid or oversized data")
+    );
+
+    channel.voice_codec = Some(Arc::new(CodecReply(Ok(
+        base64::engine::general_purpose::STANDARD.encode(b"not Ogg Opus"),
+    ))));
+    let wrong_codec = channel
+        .opus_audio(&file("audio/wav", b"wave data"))
+        .await
+        .unwrap_err();
+    assert!(wrong_codec.message.contains("did not return Ogg Opus"));
+}
+
+#[tokio::test]
+async fn lark_audio_preparation_rejects_files_over_the_provider_limit_before_conversion() {
+    let channel = LarkChannel::new(
+        "app-id".into(),
+        "app-secret".into(),
+        "verify-token".into(),
+        None,
+        vec!["*".into()],
+    );
+    let target = Target {
+        channel: ChannelRef {
+            id: "lark".into(),
+            account_id: None,
+        },
+        conversation: ConversationRef {
+            id: "chat-1".into(),
+            ..Default::default()
+        },
+        reply_to: None,
+        thread: None,
+    };
+    let mut steps = [Step::File(FileStep {
+        kind: MediaKind::Audio,
+        bytes: vec![0; (super::super::FILE_LIMIT + 1) as usize],
+        mime: "audio/wav".into(),
+        name: "large.wav".into(),
+        caption: None,
+        duration_ms: None,
+    })];
+
+    let error = NativeProvider::prepare_steps(&channel, &target, &mut steps)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::BadFormat
+    );
+    assert!(!error.sent_before_error);
+    assert!(error.message.contains("30 MiB limit"));
 }
