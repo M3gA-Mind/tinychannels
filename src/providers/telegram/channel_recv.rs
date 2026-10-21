@@ -576,7 +576,7 @@ impl TelegramChannel {
                 }
                 None => {
                     let _ = self
-                        .send_with_outbound_intent(&SendMessage::new(
+                        .send_compat_message(&SendMessage::new(
                             "❌ Could not identify your Telegram account from /start. Ensure your account has a username or stable user ID, then try again.",
                             &chat_id,
                         ))
@@ -604,7 +604,7 @@ impl TelegramChannel {
                             }
                             None => {
                                 let _ = self
-                                    .send_with_outbound_intent(&SendMessage::new(
+                                    .send_compat_message(&SendMessage::new(
                                         "❌ Could not identify your Telegram account. Ensure your account has a username or stable user ID, then retry.",
                                         &chat_id,
                                     ))
@@ -614,7 +614,7 @@ impl TelegramChannel {
                     }
                     Ok(None) => {
                         let _ = self
-                            .send_with_outbound_intent(&SendMessage::new(
+                            .send_compat_message(&SendMessage::new(
                                 "❌ Invalid binding code. Ask operator for the latest code and retry.",
                                 &chat_id,
                             ))
@@ -622,7 +622,7 @@ impl TelegramChannel {
                     }
                     Err(lockout_secs) => {
                         let _ = self
-                            .send_with_outbound_intent(&SendMessage::new(
+                            .send_compat_message(&SendMessage::new(
                                 format!("⏳ Too many invalid attempts. Retry in {lockout_secs}s."),
                                 &chat_id,
                             ))
@@ -631,7 +631,7 @@ impl TelegramChannel {
                 }
             } else {
                 let _ = self
-                    .send_with_outbound_intent(&SendMessage::new(
+                    .send_compat_message(&SendMessage::new(
                         "ℹ️ Telegram pairing is not active. Ask operator to update allowlist in config.toml.",
                         &chat_id,
                     ))
@@ -679,7 +679,7 @@ impl TelegramChannel {
                 "[telegram][approval] pairing pending — sending /start onboarding prompt"
             );
             let _ = self
-                .send_with_outbound_intent(&SendMessage::new(
+                .send_compat_message(&SendMessage::new(
                     "🔐 This bot isn't set up yet.\n\nIf you're the operator, send /start to finish connecting your bot. \
                      Otherwise ask the operator to add your Telegram username (without '@') or numeric user ID to the bot's Allowed Users, then message again.\n\n\
                      If the operator gave you a one-time pairing code, run `/bind <code>`.".to_string(),
@@ -688,7 +688,7 @@ impl TelegramChannel {
                 .await;
         } else {
             let _ = self
-                .send_with_outbound_intent(&SendMessage::new(
+                .send_compat_message(&SendMessage::new(
                     "🔐 This bot requires operator approval.\n\nAsk the operator to add your Telegram username (without '@') or numeric user ID to the bot's Allowed Users, then send your message again.".to_string(),
                     &chat_id,
                 ))
@@ -727,7 +727,7 @@ impl TelegramChannel {
         match persist_result {
             Ok(()) => {
                 let _ = self
-                    .send_with_outbound_intent(&SendMessage::new(
+                    .send_compat_message(&SendMessage::new(
                         "✅ You're all set — OpenHuman is connected. Send me a message and I'll take it from here.",
                         chat_id,
                     ))
@@ -745,7 +745,7 @@ impl TelegramChannel {
                     "[telegram][approval] failed to persist allowlist after approval"
                 );
                 let _ = self
-                    .send_with_outbound_intent(&SendMessage::new(
+                    .send_compat_message(&SendMessage::new(
                         "⚠️ Connected for now, but I couldn't save it — access may be lost after a restart. Check the config file permissions.",
                         chat_id,
                     ))
