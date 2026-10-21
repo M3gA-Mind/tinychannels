@@ -218,54 +218,6 @@ impl MattermostChannel {
             })
     }
 
-    async fn upload_file(
-        &self,
-        channel_id: &str,
-        file: &crate::providers::native::FileStep,
-    ) -> Result<String, ChannelSendError> {
-        let part = reqwest::multipart::Part::bytes(file.bytes.clone())
-            .file_name(file.name.clone())
-            .mime_str(&file.mime)
-            .map_err(|_| crate::providers::native::pre_dispatch("invalid Mattermost media type"))?;
-        let form = reqwest::multipart::Form::new()
-            .text("channel_id", channel_id.to_owned())
-            .part("files", part);
-        let response = self
-            .http_client()
-            .post(format!("{}/api/v4/files", self.base_url))
-            .bearer_auth(&self.bot_token)
-            .multipart(form)
-            .send()
-            .await
-            .map_err(|_| ChannelSendError {
-                kind: SendErrorKind::Transient,
-                message: "Mattermost media upload did not complete".into(),
-                retryable: true,
-                sent_before_error: false,
-                ..Default::default()
-            })?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(http_error(status, "media upload", false));
-        }
-        let body: serde_json::Value = response.json().await.map_err(|_| ChannelSendError {
-            kind: SendErrorKind::Unknown,
-            message: "Mattermost media upload returned an unreadable response".into(),
-            sent_before_error: false,
-            ..Default::default()
-        })?;
-        body.pointer("/file_infos/0/id")
-            .and_then(serde_json::Value::as_str)
-            .filter(|id| !id.is_empty())
-            .map(str::to_owned)
-            .ok_or_else(|| ChannelSendError {
-                kind: SendErrorKind::Unknown,
-                message: "Mattermost media upload returned no file id".into(),
-                sent_before_error: false,
-                ..Default::default()
-            })
-    }
-
     async fn create_post(
         &self,
         target: &Target,
@@ -394,7 +346,11 @@ fn mattermost_status_error(
     }
 }
 
-fn http_error(status: reqwest::StatusCode, operation: &str, final_post: bool) -> ChannelSendError {
+pub(super) fn http_error(
+    status: reqwest::StatusCode,
+    operation: &str,
+    final_post: bool,
+) -> ChannelSendError {
     let server_error = status.is_server_error();
     ChannelSendError {
         kind: if final_post && server_error {

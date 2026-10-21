@@ -1,6 +1,7 @@
 mod capabilities;
 mod config;
 mod inbound;
+mod media;
 use inbound::{contains_bot_mention_mm, normalize_mattermost_content};
 mod outbound;
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
