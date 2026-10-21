@@ -216,3 +216,83 @@ async fn typed_sse_retries_failures_and_stops_after_accepted_ingress() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn typed_sse_returns_without_connecting_when_already_cancelled() {
+    use crate::channel::ChannelInboundSink;
+    use async_trait::async_trait;
+    use tokio::sync::watch;
+    use wiremock::MockServer;
+
+    struct IgnoreSink;
+    #[async_trait]
+    impl ChannelInboundSink for IgnoreSink {
+        async fn push(
+            &self,
+            _ingress: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+            Ok(())
+        }
+    }
+
+    let server = MockServer::start().await;
+    let channel = mock_signal(server.uri());
+    let (_tx, rx) = watch::channel(true);
+    let sink = IgnoreSink;
+
+    tokio::time::timeout(Duration::from_secs(2), channel.listen_typed(&sink, rx))
+        .await
+        .expect("pre-cancelled listener should stop promptly")
+        .unwrap();
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn typed_sse_cancellation_interrupts_trailing_event_delivery() {
+    use std::sync::Arc;
+    use tokio::sync::{Notify, watch};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(wiremock::matchers::path("/api/v1/events"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "data: {\"envelope\":{\"sourceNumber\":\"+1111111111\",\"dataMessage\":{\"message\":\"tail\",\"timestamp\":1}}}",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    struct BlockingSink {
+        entered: Notify,
+    }
+    #[async_trait]
+    impl ChannelInboundSink for BlockingSink {
+        async fn push(
+            &self,
+            _ingress: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+            self.entered.notify_one();
+            std::future::pending().await
+        }
+    }
+
+    let channel = mock_signal(server.uri());
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let sink = Arc::new(BlockingSink {
+        entered: Notify::new(),
+    });
+    let task = tokio::spawn({
+        let sink = sink.clone();
+        async move { channel.listen_typed(sink.as_ref(), cancel_rx).await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), sink.entered.notified())
+        .await
+        .expect("trailing event should reach the sink");
+    cancel_tx.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("cancellation should interrupt pending sink delivery")
+        .unwrap()
+        .unwrap();
+    server.verify().await;
+}
