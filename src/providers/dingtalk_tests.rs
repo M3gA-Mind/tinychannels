@@ -297,11 +297,16 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
             assert_eq!(ack["code"], 200);
         }
         release_rx.await.unwrap();
-        // The next valid message makes the listener observe the closed receiver.
+        // A callback rejected by the supplied sink must not be acknowledged;
+        // DingTalk can retry it after the host has recovered.
         ws.send(Message::Text(json!({"type": "CALLBACK", "data": {"senderStaffId": "alice", "text": {"content": "closed"}}}).to_string().into())).await.unwrap();
-        let ack: serde_json::Value =
-            serde_json::from_str(&ws.next().await.unwrap().unwrap().to_string()).unwrap();
-        assert_eq!(ack["headers"]["messageId"], "");
+        let terminal = tokio::time::timeout(std::time::Duration::from_secs(3), ws.next())
+            .await
+            .expect("rejected typed delivery should close the stream");
+        assert!(matches!(
+            terminal,
+            None | Some(Err(_)) | Some(Ok(Message::Close(_)))
+        ));
     });
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let listening_channel = channel.clone();
@@ -328,14 +333,12 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
         );
         drop(rx);
         release_tx.send(()).unwrap();
-        assert!(
-            listening
-                .await
-                .unwrap()
-                .unwrap_err()
-                .to_string()
-                .contains("stream ended")
-        );
+        assert!(listening
+            .await
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("typed ingress rejected"));
         websocket.await.unwrap();
     })
     .await
