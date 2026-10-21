@@ -706,48 +706,6 @@ impl rustls::client::danger::ServerCertVerifier for NoVerify {
     }
 }
 
-#[async_trait]
-#[allow(clippy::too_many_lines)]
-impl Channel for IrcChannel {
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        crate::providers::long_tail::LongTail::declared(self)
-    }
-
-    fn name(&self) -> &str {
-        "irc"
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        self.send_text(&message.recipient, &message.content).await
-    }
-
-    async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        let cancellation = self.begin_listener()?;
-        let _registration = ListenerRegistration(self);
-        self.listen_owned(IrcIngress::Legacy(tx), Some(cancellation))
-            .await
-    }
-
-    async fn health_check(&self) -> bool {
-        // Lightweight connectivity check: TLS connect + QUIT
-        match self.connect().await {
-            Ok(tls) => {
-                let (_, mut writer) = tokio::io::split(tls);
-                let _ = Self::send_raw(&mut writer, "QUIT :health check").await;
-                true
-            }
-            Err(_) => false,
-        }
-    }
-}
-
 #[cfg(test)]
 #[path = "irc_tests.rs"]
 mod tests;
@@ -831,7 +789,7 @@ impl crate::providers::long_tail::LongTail for IrcChannel {
                 })?;
         let _registration = ListenerRegistration(self);
         let result = self
-            .listen_owned(IrcIngress::Typed(sink), Some(cancellation))
+            .listen_owned(sink, Some(cancellation))
             .await;
         result.map_err(|error| {
             tracing::debug!(%error, "IRC typed listener stopped");
