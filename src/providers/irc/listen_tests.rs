@@ -885,6 +885,31 @@ async fn send_fails_before_listen_has_connected() {
 }
 
 #[tokio::test]
+async fn stop_recovers_a_poisoned_listener_lock_and_signals_cancellation() {
+    let channel = std::sync::Arc::new(IrcChannel::new(config(1)));
+    let (cancel, mut cancelled) = tokio::sync::watch::channel(false);
+    *channel.listener_cancel.lock().unwrap() = Some(cancel);
+
+    let poisoner = channel.clone();
+    let poisoned = std::thread::spawn(move || {
+        let _guard = poisoner.listener_cancel.lock().unwrap();
+        panic!("poison listener cancellation state for recovery test");
+    })
+    .join()
+    .is_err();
+    assert!(poisoned, "the test must exercise a genuinely poisoned lock");
+
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .expect("stop recovers the lock and cancels the owned listener");
+    tokio::time::timeout(GUARD, cancelled.changed())
+        .await
+        .expect("stop should publish cancellation")
+        .expect("the cancellation sender remains registered");
+    assert!(*cancelled.borrow());
+}
+
+#[tokio::test]
 async fn typed_send_uses_the_scoped_conversation_on_an_active_connection() {
     let (listener, port) = bind().await;
     let acceptor = acceptor(false);
