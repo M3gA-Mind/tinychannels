@@ -3,7 +3,7 @@
 
 use super::IMessageChannel;
 use super::db::{self, AttachmentRow, InboundRow, ReadRow};
-use super::native::{IMESSAGE_MAX_FILE_BYTES, IMESSAGE_MAX_VOICE_BYTES};
+use super::outbound::{IMESSAGE_MAX_FILE_BYTES, IMESSAGE_MAX_VOICE_BYTES};
 use crate::providers::native::SeenReservationResult;
 use crate::providers::native::inbound::{
     InboundFile, Ingest, Ingested, assemble, channel_event, media_of,
@@ -560,3 +560,14 @@ impl IMessageChannel {
 #[cfg(test)]
 #[path = "inbound_tests.rs"]
 mod tests;
+
+impl IMessageChannel {
+    pub(super) fn is_contact_allowed(&self, sender: &str) -> bool {
+        if self.allowed_contacts.iter().any(|u| u == "*") {
+            return true;
+        }
+        self.allowed_contacts
+            .iter()
+            .any(|u| u.eq_ignore_ascii_case(sender))
+    }
+}

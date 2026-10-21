@@ -19,26 +19,6 @@ fn linq_channel_name() {
 }
 
 #[test]
-fn linq_sender_allowed_exact() {
-    let ch = make_channel();
-    assert!(ch.is_sender_allowed("+1234567890"));
-    assert!(!ch.is_sender_allowed("+9876543210"));
-}
-
-#[test]
-fn linq_sender_allowed_wildcard() {
-    let ch = LinqChannel::new("tok".into(), "+15551234567".into(), vec!["*".into()]);
-    assert!(ch.is_sender_allowed("+1234567890"));
-    assert!(ch.is_sender_allowed("+9999999999"));
-}
-
-#[test]
-fn linq_sender_allowed_empty() {
-    let ch = LinqChannel::new("tok".into(), "+15551234567".into(), vec![]);
-    assert!(!ch.is_sender_allowed("+1234567890"));
-}
-
-#[test]
 fn linq_parse_valid_text_message() {
     let ch = make_channel();
     let payload = serde_json::json!({

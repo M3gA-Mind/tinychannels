@@ -1,7 +1,7 @@
 //! Signal as a [`NativeProvider`]: typed sends, reactions, typing, edits and
 //! remote deletes over signal-cli's JSON-RPC.
 
-use super::{RecipientTarget, SignalChannel};
+use super::SignalChannel;
 use crate::host::{MediaRepository, VoiceMediaStore};
 use crate::providers::native::{
     Address, FileStep, Limits, NativeProvider, Sent, Step, Target, pre_dispatch,
@@ -11,11 +11,20 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::{Value, json};
 use std::sync::Arc;
+use std::time::Duration;
 use tinychannels_bus::ChannelCapabilities;
 use tinychannels_bus::channel::{
     ChannelReaction, ChannelSendError, ConversationRef, MessageReceiptPartKind, SendErrorKind,
 };
+use uuid::Uuid;
 
+pub(super) const GROUP_TARGET_PREFIX: &str = "group:";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum RecipientTarget {
+    Direct(String),
+    Group(String),
+}
 /// Signal's attachment ceiling is far higher; stay inside the 16 MiB bus frame.
 pub(crate) const SIGNAL_MAX_FILE_BYTES: u64 = 12 * 1024 * 1024;
 /// Voice bytes cross TinyBus inline, so they stay below the frame cap.
@@ -232,7 +241,7 @@ impl NativeProvider for SignalChannel {
             generation,
         };
         let result = self.listen_typed(sink, cancellation).await;
-        result.map_err(|error| super::native::rpc_error(&error, "listener"))
+        result.map_err(|error| rpc_error(&error, "listener"))
     }
 
     async fn stop_listener(&self) -> Result<(), ChannelSendError> {
@@ -343,5 +352,79 @@ impl NativeProvider for SignalChannel {
 }
 
 #[cfg(test)]
-#[path = "native_tests.rs"]
+#[path = "outbound/tests/mod.rs"]
 mod tests;
+
+impl SignalChannel {
+    pub(super) fn is_e164(recipient: &str) -> bool {
+        let Some(number) = recipient.strip_prefix('+') else {
+            return false;
+        };
+        (2..=15).contains(&number.len()) && number.chars().all(|c| c.is_ascii_digit())
+    }
+
+    /// Check whether a string is a valid UUID (signal-cli uses these for
+    /// privacy-enabled users who have opted out of sharing their phone number).
+    pub(super) fn is_uuid(s: &str) -> bool {
+        Uuid::parse_str(s).is_ok()
+    }
+
+    pub(super) fn parse_recipient_target(recipient: &str) -> RecipientTarget {
+        if let Some(group_id) = recipient.strip_prefix(GROUP_TARGET_PREFIX) {
+            return RecipientTarget::Group(group_id.to_string());
+        }
+
+        if Self::is_e164(recipient) || Self::is_uuid(recipient) {
+            RecipientTarget::Direct(recipient.to_string())
+        } else {
+            RecipientTarget::Group(recipient.to_string())
+        }
+    }
+
+    pub(super) async fn rpc_request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> anyhow::Result<Option<serde_json::Value>> {
+        let url = format!("{}/api/v1/rpc", self.http_url);
+        let id = Uuid::new_v4().to_string();
+
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+            "id": id,
+        });
+
+        let resp = self
+            .http_client()
+            .post(&url)
+            .timeout(Duration::from_secs(30))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        // 201 = success with no body (e.g. typing indicators)
+        if resp.status().as_u16() == 201 {
+            return Ok(None);
+        }
+
+        let text = resp.text().await?;
+        if text.is_empty() {
+            return Ok(None);
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(&text)?;
+        if let Some(err) = parsed.get("error") {
+            let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+            let msg = err
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown");
+            anyhow::bail!("Signal RPC error {code}: {msg}");
+        }
+
+        Ok(parsed.get("result").cloned())
+    }
+}

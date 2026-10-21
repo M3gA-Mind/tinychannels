@@ -2,17 +2,19 @@
 //! messages (text, images, files, voice notes) on the ordered ingress path.
 
 use super::LinqChannel;
-use super::native::{LINQ_MAX_FILE_BYTES, LINQ_MAX_VOICE_BYTES};
+use super::outbound::{LINQ_MAX_FILE_BYTES, LINQ_MAX_VOICE_BYTES};
 use crate::WebhookRejected;
 use crate::providers::native::inbound::normalize_mime;
 use crate::providers::native::inbound::{
     InboundFile, Ingest, Ingested, assemble, media_of, publish,
 };
+use crate::traits::ChannelMessage;
 use serde_json::{Value, json};
 use tinychannels_bus::{
     ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef, SenderRef,
     WebhookDeliveryOutcome,
 };
+use uuid::Uuid;
 
 fn linq_ref() -> ChannelRef {
     ChannelRef {
@@ -285,3 +287,209 @@ impl LinqChannel {
 #[cfg(test)]
 #[path = "inbound_tests.rs"]
 mod tests;
+
+impl LinqChannel {
+    fn is_sender_allowed(&self, phone: &str) -> bool {
+        self.allowed_senders.iter().any(|n| n == "*" || n == phone)
+    }
+
+    /// Parse an incoming webhook payload from Linq and extract messages.
+    ///
+    /// Linq webhook envelope:
+    /// ```json
+    /// {
+    ///   "api_version": "v3",
+    ///   "event_type": "message.received",
+    ///   "event_id": "...",
+    ///   "created_at": "...",
+    ///   "trace_id": "...",
+    ///   "data": {
+    ///     "chat_id": "...",
+    ///     "from": "+1...",
+    ///     "recipient_phone": "+1...",
+    ///     "is_from_me": false,
+    ///     "service": "iMessage",
+    ///     "message": {
+    ///       "id": "...",
+    ///       "parts": [{ "type": "text", "value": "..." }]
+    ///     }
+    ///   }
+    /// }
+    /// ```
+    pub fn parse_webhook_payload(&self, payload: &serde_json::Value) -> Vec<ChannelMessage> {
+        let mut messages = Vec::new();
+
+        // Only handle message.received events
+        let event_type = payload
+            .get("event_type")
+            .and_then(|e| e.as_str())
+            .unwrap_or("");
+        if event_type != "message.received" {
+            tracing::debug!("Linq: skipping non-message event: {event_type}");
+            return messages;
+        }
+
+        let Some(data) = payload.get("data") else {
+            return messages;
+        };
+
+        // Skip messages sent by the bot itself
+        if data
+            .get("is_from_me")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            tracing::debug!("Linq: skipping is_from_me message");
+            return messages;
+        }
+
+        // Get sender phone number
+        let Some(from) = data.get("from").and_then(|f| f.as_str()) else {
+            return messages;
+        };
+
+        // Normalize to E.164 format
+        let normalized_from = if from.starts_with('+') {
+            from.to_string()
+        } else {
+            format!("+{from}")
+        };
+
+        // Check allowlist
+        if !self.is_sender_allowed(&normalized_from) {
+            tracing::warn!(
+                "Linq: ignoring message from unauthorized sender: {normalized_from}. \
+                Add to allowed_senders in config.toml."
+            );
+            return messages;
+        }
+
+        // Get chat_id for reply routing
+        let chat_id = data
+            .get("chat_id")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Extract text from message parts
+        let Some(message) = data.get("message") else {
+            return messages;
+        };
+
+        let Some(parts) = message.get("parts").and_then(|p| p.as_array()) else {
+            return messages;
+        };
+
+        let content_parts: Vec<String> = parts
+            .iter()
+            .filter_map(|part| {
+                let part_type = part.get("type").and_then(|t| t.as_str())?;
+                match part_type {
+                    "text" => part
+                        .get("value")
+                        .and_then(|v| v.as_str())
+                        .map(ToString::to_string),
+                    // Media parts are typed content on the v2 ingress path
+                    // (`ingest_webhook`); this text-only parse never encodes
+                    // them into the message body.
+                    "media" | "image" => {
+                        tracing::debug!("Linq: media part carried by typed ingress, not text");
+                        None
+                    }
+                    _ => {
+                        tracing::debug!("Linq: skipping {part_type} part");
+                        None
+                    }
+                }
+            })
+            .collect();
+
+        if content_parts.is_empty() {
+            return messages;
+        }
+
+        let content = content_parts.join("\n").trim().to_string();
+
+        if content.is_empty() {
+            return messages;
+        }
+
+        // Get timestamp from created_at or use current time
+        let timestamp = payload
+            .get("created_at")
+            .and_then(|t| t.as_str())
+            .and_then(|t| {
+                chrono::DateTime::parse_from_rfc3339(t)
+                    .ok()
+                    .map(|dt| dt.timestamp().cast_unsigned())
+            })
+            .unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            });
+
+        // Use chat_id as reply_target so replies go to the right conversation
+        let reply_target = if chat_id.is_empty() {
+            normalized_from.clone()
+        } else {
+            chat_id
+        };
+
+        messages.push(ChannelMessage {
+            id: Uuid::new_v4().to_string(),
+            reply_target,
+            sender: normalized_from,
+            content,
+            channel: "linq".to_string(),
+            timestamp,
+            topic_id: None,
+            reply_to_id: None,
+            thread_ts: None,
+            sender_name: None,
+        });
+
+        messages
+    }
+}
+
+/// Verify a Linq webhook signature.
+///
+/// Linq signs webhooks with HMAC-SHA256 over `"{timestamp}.{body}"`.
+/// The signature is sent in `X-Webhook-Signature` (hex-encoded) and the
+/// timestamp in `X-Webhook-Timestamp`. Reject timestamps older than 300s.
+pub fn verify_linq_signature(secret: &str, body: &str, timestamp: &str, signature: &str) -> bool {
+    use hmac::{Hmac, KeyInit, Mac};
+    use sha2::Sha256;
+
+    // Reject stale timestamps (>300s old)
+    if let Ok(ts) = timestamp.parse::<i64>() {
+        let now = chrono::Utc::now().timestamp();
+        if (now - ts).unsigned_abs() > 300 {
+            tracing::warn!("Linq: rejecting stale webhook timestamp ({ts}, now={now})");
+            return false;
+        }
+    } else {
+        tracing::warn!("Linq: invalid webhook timestamp: {timestamp}");
+        return false;
+    }
+
+    // Compute HMAC-SHA256 over "{timestamp}.{body}"
+    let message = format!("{timestamp}.{body}");
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(secret.as_bytes()) else {
+        return false;
+    };
+    mac.update(message.as_bytes());
+    let signature_hex = signature
+        .trim()
+        .strip_prefix("sha256=")
+        .unwrap_or(signature);
+    let Ok(provided) = hex::decode(signature_hex.trim()) else {
+        tracing::warn!("Linq: invalid webhook signature format");
+        return false;
+    };
+
+    // Constant-time comparison via HMAC verify.
+    mac.verify_slice(&provided).is_ok()
+}

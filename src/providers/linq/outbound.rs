@@ -318,5 +318,5 @@ impl NativeProvider for LinqChannel {
 }
 
 #[cfg(test)]
-#[path = "native_tests.rs"]
+#[path = "outbound/tests/mod.rs"]
 mod tests;
