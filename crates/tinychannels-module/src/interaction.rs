@@ -52,7 +52,7 @@ fn draft_intent(
             .and_then(|channel| channel.account_id.clone());
     }
     intent.payload = tinychannels_bus::OutboundPayload::Text {
-        text: compatibility_text(message),
+        text: compatibility_text(&descriptor.id, message),
     };
     if is_telegram {
         // The frozen Telegram DTO uses `recipient` for chat/topic routing and
@@ -70,10 +70,14 @@ fn draft_intent(
     intent
 }
 
-pub(crate) fn compatibility_text(message: &tinychannels::SendMessage) -> String {
-    match message.subject.as_deref() {
-        Some(subject) => format!("Subject: {}\n{}", subject.trim().replace(['\r', '\n'], " "), message.content),
-        None => message.content.clone(),
+pub(crate) fn compatibility_text(provider: &str, message: &tinychannels::SendMessage) -> String {
+    match (provider, message.subject.as_deref()) {
+        ("email" | "dingtalk", Some(subject)) => format!(
+            "Subject: {}\n{}",
+            subject.trim().replace(['\r', '\n'], " "),
+            message.content
+        ),
+        _ => message.content.clone(),
     }
 }
 

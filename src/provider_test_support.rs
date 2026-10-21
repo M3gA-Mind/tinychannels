@@ -70,13 +70,13 @@ pub(crate) async fn send_v1<C: ChannelAdapter>(
     let mut intent = outbound_intent_from_send_message(&channel.descriptor().id, message);
     // Mirror the module's immediate v1-to-v2 conversion: preserve a legacy
     // subject through the text convention consumed by mail-style providers.
-    let text = match message.subject.as_deref() {
-        Some(subject) => format!(
+    let text = match (channel.descriptor().id.as_str(), message.subject.as_deref()) {
+        ("email" | "dingtalk", Some(subject)) => format!(
             "Subject: {}\n{}",
             subject.trim().replace(['\r', '\n'], " "),
             message.content
         ),
-        None => message.content.clone(),
+        _ => message.content.clone(),
     };
     intent.payload = OutboundPayload::Text { text };
     let outcome = channel

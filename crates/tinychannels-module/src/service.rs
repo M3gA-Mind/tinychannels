@@ -956,13 +956,12 @@ impl Channels {
                 let mut intent = tinychannels::outbound_intent_from_send_message(channel, &message);
                 // Keep the legacy JSON projection and deterministic key for
                 // existing callers, but immediately convert the DTO into the
-                // canonical text payload. A subject is represented as the
-                // established first-line convention consumed by mail and
-                // webhook providers.
+                // canonical text payload. Only providers that historically
+                // consumed `subject` receive its text convention.
                 let legacy_message =
                     tinychannels::legacy_message_value_from_outbound_intent(&intent);
                 intent.payload = tinychannels_bus::OutboundPayload::Text {
-                    text: super::interaction::compatibility_text(&message),
+                    text: super::interaction::compatibility_text(&channel, &message),
                 };
                 (intent, legacy_message)
             }
@@ -1059,7 +1058,7 @@ impl Channels {
     async fn send_message(&self, name: String, message: SendMessage) -> BusResult<()> {
         let mut intent = tinychannels::outbound_intent_from_send_message(&name, &message);
         intent.payload = tinychannels_bus::OutboundPayload::Text {
-            text: super::interaction::compatibility_text(&message),
+            text: super::interaction::compatibility_text(&name, &message),
         };
         let result = self.send_channel_intent(name, intent).await?;
         if let Some(error) = result.error {
