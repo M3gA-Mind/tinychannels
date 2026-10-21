@@ -583,7 +583,7 @@ fn the_descriptor_status_and_capabilities_identify_the_native_adapter() {
     assert!(capabilities.remote_control && capabilities.chat_approvals);
     assert!(
         capabilities.reactions
-            && capabilities.content.presentation.supports_edit
+            && capabilities.actions.supported.iter().any(|action| action == "edit")
             && capabilities
                 .actions
                 .supported
