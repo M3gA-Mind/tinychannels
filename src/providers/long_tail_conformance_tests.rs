@@ -578,6 +578,16 @@ impl LongTailFixture {
             .await
             .expect("DingTalk callback should establish native conversation context")
             .expect("DingTalk Stream fixture should complete callback");
+        let initial_ingress =
+            tokio::time::timeout(std::time::Duration::from_secs(5), sink_rx.recv())
+                .await
+                .expect("DingTalk context callback should reach the configured sink")
+                .expect("DingTalk context callback should be an ingress event");
+        assert!(matches!(
+            initial_ingress,
+            tinychannels_bus::ChannelIngress::Inbound(ref envelope)
+                if envelope.message_id == "provider-ingress-1"
+        ));
         Self {
             id: "dingtalk",
             channel,
