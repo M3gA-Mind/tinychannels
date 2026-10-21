@@ -129,6 +129,7 @@ struct Callback {
     released: Arc<Notify>,
     voice_policy: Arc<Mutex<Option<tinychannels_bus::HostVoiceReplyPolicy>>>,
     voice_policy_requests: Arc<Mutex<Vec<tinychannels_bus::HostVoiceReplyPolicyRequest>>>,
+    synthesis_requests: Arc<Mutex<Vec<tinychannels_bus::HostSpeechSynthesisRequest>>>,
     synthesis_calls: Arc<AtomicUsize>,
     voice_store_calls: Arc<AtomicUsize>,
     published_voice_media: Arc<Mutex<Vec<tinychannels_bus::MediaReference>>>,
@@ -214,9 +215,10 @@ impl Callback {
 
     async fn synthesize_speech(
         &self,
-        _request: tinychannels_bus::HostSpeechSynthesisRequest,
+        request: tinychannels_bus::HostSpeechSynthesisRequest,
     ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
         self.synthesis_calls.fetch_add(1, Ordering::SeqCst);
+        self.synthesis_requests.lock().await.push(request);
         if self.block_synthesis.load(Ordering::SeqCst) {
             self.entered.notify_one();
             self.released.notified().await;
@@ -5408,13 +5410,13 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         host: host.clone(),
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
-        channel: "telegram:bot-1".into(),
+        channel: "telegram:42".into(),
         hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
         sender,
-        "telegram:bot-1",
+        "telegram:42",
         capabilities.clone(),
         context.clone(),
     );
@@ -5459,6 +5461,20 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     }
     assert_eq!(codec_ops.load(Ordering::SeqCst), 1);
     assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 1);
+    let synthesis = callback.synthesis_requests.lock().await;
+    assert_eq!(synthesis.len(), 1);
+    assert_eq!(synthesis[0].scope.configured_instance, "telegram:bot-1");
+    assert_eq!(synthesis[0].scope.channel, context.channel);
+    assert_eq!(synthesis[0].scope.conversation, context.conversation);
+    assert_eq!(synthesis[0].scope.turn_id, context.turn_id);
+    drop(synthesis);
+    let stored_request = callback.published_voice_requests.lock().await;
+    assert_eq!(stored_request.len(), 1);
+    assert_eq!(stored_request[0].scope.configured_instance, "telegram:bot-1");
+    assert_eq!(stored_request[0].scope.channel, context.channel);
+    assert_eq!(stored_request[0].scope.conversation, context.conversation);
+    assert_eq!(stored_request[0].scope.turn_id, context.turn_id);
+    drop(stored_request);
     let published = callback.published_voice_media.lock().await[0].clone();
     let sent_id = callback
         .requests
