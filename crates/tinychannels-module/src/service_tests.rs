@@ -1,8 +1,8 @@
 use super::*;
 use base64::Engine as _;
 use hmac::{KeyInit as _, Mac as _};
-use tinychannels_bus::config::WhatsAppConfig;
 use tinychannels_bus::ChannelsConfig;
+use tinychannels_bus::config::WhatsAppConfig;
 
 #[tokio::test]
 async fn v1_email_subject_reaches_the_configured_smtp_wire() {
@@ -473,18 +473,20 @@ async fn shutdown_closes_web_turn_admission_before_clearing_projection_state() {
 
     assert!(begin.await.is_err());
     shutdown.await.unwrap();
-    assert!(channels
-        .web_turns
-        .lock()
-        .await
-        .project(tinychannels_bus::ProjectWebOutput {
-            handle: active.handle,
-            event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
-                text: "after shutdown".into(),
-                iteration: Some(1),
-            },
-        })
-        .is_err());
+    assert!(
+        channels
+            .web_turns
+            .lock()
+            .await
+            .project(tinychannels_bus::ProjectWebOutput {
+                handle: active.handle,
+                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                    text: "after shutdown".into(),
+                    iteration: Some(1),
+                },
+            })
+            .is_err()
+    );
     let late = tinychannels_bus::BeginWebTurn {
         scope_key: "tenant-a".into(),
         context: tinychannels_bus::WebEventContext {
@@ -561,16 +563,18 @@ async fn service_web_projection_routes_events_and_closes_turns() {
         [tinychannels_bus::WebChannelEvent::ChatDone { context, .. }]
             if context.request_id == "active" && context.seq == Some(2) && context.ts.is_some()
     ));
-    assert!(channels
-        .project_web_output(tinychannels_bus::ProjectWebOutput {
-            handle: active.handle,
-            event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
-                text: "late".into(),
-                iteration: Some(1),
-            },
-        })
-        .await
-        .is_err());
+    assert!(
+        channels
+            .project_web_output(tinychannels_bus::ProjectWebOutput {
+                handle: active.handle,
+                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                    text: "late".into(),
+                    iteration: Some(1),
+                },
+            })
+            .await
+            .is_err()
+    );
 
     let explicitly_ended = channels
         .begin_web_turn(tinychannels_bus::BeginWebTurn {
@@ -585,35 +589,41 @@ async fn service_web_projection_routes_events_and_closes_turns() {
         })
         .await
         .unwrap();
-    assert!(channels
-        .project_web_output(tinychannels_bus::ProjectWebOutput {
-            handle: explicitly_ended.handle,
-            event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
-                text: "after end".into(),
-                iteration: Some(1),
-            },
-        })
-        .await
-        .is_err());
+    assert!(
+        channels
+            .project_web_output(tinychannels_bus::ProjectWebOutput {
+                handle: explicitly_ended.handle,
+                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                    text: "after end".into(),
+                    iteration: Some(1),
+                },
+            })
+            .await
+            .is_err()
+    );
 
     channels.shutdown().await.unwrap();
-    assert!(channels
-        .begin_web_turn(tinychannels_bus::BeginWebTurn {
-            scope_key: "tenant-a".into(),
-            context: make_context("after-shutdown"),
-        })
-        .await
-        .is_err());
-    assert!(channels
-        .project_web_output(tinychannels_bus::ProjectWebOutput {
-            handle: "invalid-after-shutdown".into(),
-            event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
-                text: "after shutdown".into(),
-                iteration: Some(1),
-            },
-        })
-        .await
-        .is_err());
+    assert!(
+        channels
+            .begin_web_turn(tinychannels_bus::BeginWebTurn {
+                scope_key: "tenant-a".into(),
+                context: make_context("after-shutdown"),
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        channels
+            .project_web_output(tinychannels_bus::ProjectWebOutput {
+                handle: "invalid-after-shutdown".into(),
+                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                    text: "after shutdown".into(),
+                    iteration: Some(1),
+                },
+            })
+            .await
+            .is_err()
+    );
 }
 
 #[test]
@@ -1557,10 +1567,12 @@ async fn required_durable_ambiguous_send_without_ids_is_not_retried() {
     let (channels, callbacks, _server) =
         channels_with_store(Arc::new(AmbiguousNoIdChannel(sends.clone()))).await;
     let intent = required_intent("ambiguous-no-id", "body");
-    assert!(channels
-        .send_channel_intent("fixture".into(), intent.clone())
-        .await
-        .is_err());
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), intent.clone())
+            .await
+            .is_err()
+    );
     assert_eq!(sends.load(Ordering::SeqCst), 1);
     let pending = callbacks.storage.snapshot().await;
     let entry = pending
@@ -1583,10 +1595,12 @@ async fn required_durable_ambiguous_send_without_ids_is_not_retried() {
         0
     );
     drop(pending);
-    assert!(channels
-        .send_channel_intent("fixture".into(), intent)
-        .await
-        .is_err());
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), intent)
+            .await
+            .is_err()
+    );
     assert_eq!(sends.load(Ordering::SeqCst), 1);
     channels.shutdown().await.unwrap();
 }
@@ -1684,10 +1698,12 @@ async fn required_durable_partial_provider_send_persists_receipt_and_is_not_retr
     let (channels, callbacks, _server) =
         channels_with_store(Arc::new(PartialReceiptChannel(sends.clone()))).await;
     let intent = required_intent("partial-required", "multipart body");
-    assert!(channels
-        .send_channel_intent("fixture".into(), intent.clone())
-        .await
-        .is_err());
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), intent.clone())
+            .await
+            .is_err()
+    );
     assert_eq!(sends.load(Ordering::SeqCst), 1);
     let scopes = callbacks.storage.snapshot().await;
     let queue = scopes.get("scope-a").unwrap();
@@ -1709,10 +1725,12 @@ async fn required_durable_partial_provider_send_persists_receipt_and_is_not_retr
     );
     drop(scopes);
 
-    assert!(channels
-        .send_channel_intent("fixture".into(), intent)
-        .await
-        .is_err());
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), intent)
+            .await
+            .is_err()
+    );
     assert_eq!(
         sends.load(Ordering::SeqCst),
         1,
@@ -1839,13 +1857,15 @@ async fn required_send_persists_before_delivery_and_replays_lost_final_reply() {
         .await
         .unwrap();
     assert!(received.try_recv().is_err(), "retry must not resend");
-    assert!(channels
-        .send_channel_intent(
-            "fixture".into(),
-            required_intent("delivery-replay", "changed payload"),
-        )
-        .await
-        .is_err());
+    assert!(
+        channels
+            .send_channel_intent(
+                "fixture".into(),
+                required_intent("delivery-replay", "changed payload"),
+            )
+            .await
+            .is_err()
+    );
 
     let scopes = callbacks.storage.snapshot().await;
     let scope = scopes.get("scope-a").unwrap();
@@ -1863,10 +1883,12 @@ async fn pending_persistence_failure_refuses_before_provider_send() {
         .faults
         .fail_pending_write
         .store(true, Ordering::SeqCst);
-    assert!(channels
-        .send_channel_intent("fixture".into(), required_intent("persist-fail", "body"))
-        .await
-        .is_err());
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), required_intent("persist-fail", "body"))
+            .await
+            .is_err()
+    );
     assert!(received.try_recv().is_err());
     assert!(
         channels.delivery_admission.try_lock().is_ok(),
@@ -1885,26 +1907,32 @@ async fn required_send_refuses_invalid_and_oversized_intents_before_persistence(
 
     let mut invalid_key = required_intent("invalid-key", "body");
     invalid_key.idempotency_key.clear();
-    assert!(channels
-        .send_channel_intent("fixture".into(), invalid_key)
-        .await
-        .is_err());
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), invalid_key)
+            .await
+            .is_err()
+    );
 
     let mut invalid_channel = required_intent("invalid-channel", "body");
     invalid_channel.channel_id = " fixture".into();
-    assert!(channels
-        .send_channel_intent(" fixture".into(), invalid_channel)
-        .await
-        .is_err());
+    assert!(
+        channels
+            .send_channel_intent(" fixture".into(), invalid_channel)
+            .await
+            .is_err()
+    );
 
     let oversized = required_intent(
         "oversized",
         &"x".repeat(tinychannels_bus::module_delivery::DELIVERY_RECORD_BYTES),
     );
-    assert!(channels
-        .send_channel_intent("fixture".into(), oversized)
-        .await
-        .is_err());
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), oversized)
+            .await
+            .is_err()
+    );
     assert!(received.try_recv().is_err());
     assert!(callbacks.storage.snapshot().await.is_empty());
     channels.shutdown().await.unwrap();
@@ -1999,10 +2027,12 @@ async fn missing_required_delivery_target_keeps_the_intent_pending() {
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
     channels.running.lock().await.remove("fixture");
 
-    assert!(channels
-        .send_channel_intent("fixture".into(), required_intent("no-target", "body"))
-        .await
-        .is_err());
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), required_intent("no-target", "body"))
+            .await
+            .is_err()
+    );
     assert!(received.try_recv().is_err());
     let scopes = callbacks.storage.snapshot().await;
     assert_eq!(scopes.get("scope-a").unwrap().pending.len(), 1);
@@ -2031,10 +2061,12 @@ async fn ended_provider_does_not_mark_unstarted_delivery_as_unknown_send() {
     .await
     .unwrap();
 
-    assert!(channels
-        .send_channel_intent("fixture".into(), required_intent("ended-provider", "body"))
-        .await
-        .is_err());
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), required_intent("ended-provider", "body"))
+            .await
+            .is_err()
+    );
     assert_eq!(send_calls.load(Ordering::SeqCst), 0);
     let scopes = callbacks.storage.snapshot().await;
     let queue = scopes.get("scope-a").unwrap();
@@ -2175,27 +2207,33 @@ async fn failed_and_pending_keys_refuse_reuse_with_different_intents() {
         .await
         .unwrap();
 
-    assert!(channels
-        .send_channel_intent(
-            "fixture".into(),
-            required_intent("failed-conflict", "original"),
-        )
-        .await
-        .is_err());
-    assert!(channels
-        .send_channel_intent(
-            "fixture".into(),
-            required_intent("failed-conflict", "changed"),
-        )
-        .await
-        .is_err());
-    assert!(channels
-        .send_channel_intent(
-            "fixture".into(),
-            required_intent("pending-conflict", "changed"),
-        )
-        .await
-        .is_err());
+    assert!(
+        channels
+            .send_channel_intent(
+                "fixture".into(),
+                required_intent("failed-conflict", "original"),
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        channels
+            .send_channel_intent(
+                "fixture".into(),
+                required_intent("failed-conflict", "changed"),
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        channels
+            .send_channel_intent(
+                "fixture".into(),
+                required_intent("pending-conflict", "changed"),
+            )
+            .await
+            .is_err()
+    );
     assert!(received.try_recv().is_err());
     let scopes = callbacks.storage.snapshot().await;
     let queue = scopes.get("scope-a").unwrap();
@@ -2222,13 +2260,15 @@ async fn changed_intent_cannot_reuse_a_terminal_result_key() {
         )
         .await;
 
-    assert!(channels
-        .send_channel_intent(
-            "fixture".into(),
-            required_intent("result-conflict", "different intent"),
-        )
-        .await
-        .is_err());
+    assert!(
+        channels
+            .send_channel_intent(
+                "fixture".into(),
+                required_intent("result-conflict", "different intent"),
+            )
+            .await
+            .is_err()
+    );
     assert!(received.try_recv().is_err());
     channels.shutdown().await.unwrap();
 }
@@ -2292,10 +2332,12 @@ async fn provider_failure_stays_pending_then_recovery_fails_closed_once() {
     let (channels, callbacks, _server) =
         channels_with_store(Arc::new(FailingChannel(calls.clone()))).await;
     let intent = required_intent("provider-fail", "body");
-    assert!(channels
-        .send_channel_intent("fixture".into(), intent.clone())
-        .await
-        .is_err());
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), intent.clone())
+            .await
+            .is_err()
+    );
     {
         let scopes = callbacks.storage.snapshot().await;
         let scope = scopes.get("scope-a").unwrap();
@@ -2579,13 +2621,15 @@ async fn full_durable_queue_applies_backpressure_before_provider_send() {
             )
             .await;
     }
-    assert!(channels
-        .send_channel_intent(
-            "fixture".into(),
-            required_intent("queue-overflow", "must stay queued"),
-        )
-        .await
-        .is_err());
+    assert!(
+        channels
+            .send_channel_intent(
+                "fixture".into(),
+                required_intent("queue-overflow", "must stay queued"),
+            )
+            .await
+            .is_err()
+    );
     assert!(received.try_recv().is_err());
     assert_eq!(
         callbacks.storage.pending("scope-a").await.len(),
@@ -2802,13 +2846,15 @@ async fn preparation_preserves_explicit_keys_and_typed_thread_before_provider_io
         rendered.legacy_message["idempotencyKey"],
         "existing-required-key"
     );
-    assert!(channels
-        .prepare_outbound_intent(
-            "discord".into(),
-            ChannelMessagePreparation::Intent(original)
-        )
-        .await
-        .is_err());
+    assert!(
+        channels
+            .prepare_outbound_intent(
+                "discord".into(),
+                ChannelMessagePreparation::Intent(original)
+            )
+            .await
+            .is_err()
+    );
     assert!(channels.running.lock().await.is_empty());
     channels.shutdown().await.unwrap();
 }
@@ -2868,14 +2914,16 @@ async fn outbound_only_worker_sends_and_joins_without_polling_webhook_listener()
     assert!(!running.is_finished());
     running.stop().await.unwrap();
     assert!(running.is_finished());
-    assert!(running
-        .send_typed(crate::provider::typed_test_message(
-            "fixture",
-            "closed",
-            "recipient",
-        ))
-        .await
-        .is_err());
+    assert!(
+        running
+            .send_typed(crate::provider::typed_test_message(
+                "fixture",
+                "closed",
+                "recipient",
+            ))
+            .await
+            .is_err()
+    );
     host.shutdown().await.unwrap();
 }
 
@@ -3069,18 +3117,20 @@ async fn inbound_voice_transcript_projects_to_legacy_text_and_preserves_typed_sc
             unreachable!("the voice note follows the caption");
         };
         voice_note.transcript = transcript;
-        assert!(service
-            .prepare_channel_inbound(PrepareChannelInboundRequest {
-                source: ChannelInboundSource::Envelope {
-                    envelope: incomplete,
-                    timestamp: 43,
-                },
-                namespace: "openhuman".into(),
-                session_policy: Default::default(),
-                preparation_mode: Default::default(),
-            })
-            .await
-            .is_err());
+        assert!(
+            service
+                .prepare_channel_inbound(PrepareChannelInboundRequest {
+                    source: ChannelInboundSource::Envelope {
+                        envelope: incomplete,
+                        timestamp: 43,
+                    },
+                    namespace: "openhuman".into(),
+                    session_policy: Default::default(),
+                    preparation_mode: Default::default(),
+                })
+                .await
+                .is_err()
+        );
     }
     service.shutdown().await.unwrap();
 }
@@ -3373,10 +3423,12 @@ async fn runtime_command_preparation_covers_supported_commands_and_limits() {
     assert!(service.prepare_runtime_command(oversized).await.is_err());
 
     service.shutdown().await.unwrap();
-    assert!(service
-        .prepare_runtime_command(request("/models"))
-        .await
-        .is_err());
+    assert!(
+        service
+            .prepare_runtime_command(request("/models"))
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -3506,20 +3558,24 @@ async fn inbound_preparation_refuses_mismatched_identity_oversized_payload_and_s
         session_policy: Default::default(),
         preparation_mode: Default::default(),
     };
-    assert!(service
-        .prepare_channel_inbound(request.clone())
-        .await
-        .is_err());
+    assert!(
+        service
+            .prepare_channel_inbound(request.clone())
+            .await
+            .is_err()
+    );
     let identity = PrepareChannelIdentityRequest {
         channel: "discord".into(),
         sender: Some("x".repeat(4096)),
         reply_target: None,
         thread_ts: None,
     };
-    assert!(service
-        .prepare_channel_identity(identity.clone())
-        .await
-        .is_err());
+    assert!(
+        service
+            .prepare_channel_identity(identity.clone())
+            .await
+            .is_err()
+    );
     service.shutdown().await.unwrap();
     assert!(service.prepare_channel_inbound(request).await.is_err());
     assert!(service.prepare_channel_identity(identity).await.is_err());
@@ -3568,12 +3624,14 @@ async fn progressive_reply_is_opened_owned_and_closed_inside_the_module() {
         ProgressiveResult::Closed
     );
     service.shutdown().await.unwrap();
-    assert!(service
-        .execute_progressive(ProgressiveCommand::Open {
-            channel: "telegram:fixture".into()
-        })
-        .await
-        .is_err());
+    assert!(
+        service
+            .execute_progressive(ProgressiveCommand::Open {
+                channel: "telegram:fixture".into()
+            })
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -3712,13 +3770,15 @@ async fn host_control_facts_preserve_module_timeout_floor_and_overflow_classific
     assert!(capabilities.remote_control);
     assert_eq!(capabilities.account.configured, Some(true));
     service.shutdown().await.unwrap();
-    assert!(service
-        .prepare_channel_control(Request::Approval {
-            tool_name: "shell".into(),
-            action_summary: "echo fixture".into()
-        })
-        .await
-        .is_err());
+    assert!(
+        service
+            .prepare_channel_control(Request::Approval {
+                tool_name: "shell".into(),
+                action_summary: "echo fixture".into()
+            })
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -3850,13 +3910,15 @@ async fn linq_starts_with_module_ingress_and_rejects_duplicate_ownership() {
         .await
         .unwrap();
     service.shutdown().await.unwrap();
-    assert!(service
-        .start_outbound_channel("linq".into(), config, Default::default())
-        .await
-        .map(|_| ())
-        .expect_err("request must fail")
-        .to_string()
-        .contains("shutting down"));
+    assert!(
+        service
+            .start_outbound_channel("linq".into(), config, Default::default())
+            .await
+            .map(|_| ())
+            .expect_err("request must fail")
+            .to_string()
+            .contains("shutting down")
+    );
 }
 
 #[tokio::test]
@@ -3890,13 +3952,20 @@ async fn channel_start_variants_refuse_missing_configuration_and_excessive_backo
             max_backoff_secs: 86_401,
         },
     ] {
-        assert!(service
-            .start_channel_supervised("unknown".into(), config.clone(), Default::default(), policy)
-            .await
-            .map(|_| ())
-            .expect_err("request must fail")
-            .to_string()
-            .contains("exceeds one day"));
+        assert!(
+            service
+                .start_channel_supervised(
+                    "unknown".into(),
+                    config.clone(),
+                    Default::default(),
+                    policy
+                )
+                .await
+                .map(|_| ())
+                .expect_err("request must fail")
+                .to_string()
+                .contains("exceeds one day")
+        );
     }
     service.shutdown().await.unwrap();
 }
@@ -3948,13 +4017,15 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         codec: None,
         byte_count: bytes.len(),
     };
-    assert!(service
-        .begin_media_upload(MediaUploadBegin {
-            instance: "missing".into(),
-            ..begin.clone()
-        })
-        .await
-        .is_err());
+    assert!(
+        service
+            .begin_media_upload(MediaUploadBegin {
+                instance: "missing".into(),
+                ..begin.clone()
+            })
+            .await
+            .is_err()
+    );
     let handle = service.begin_media_upload(begin.clone()).await.unwrap();
     assert_eq!(
         service
@@ -3987,15 +4058,17 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         media: result.clone(),
         max_bytes: bytes_len(&result),
     };
-    assert!(service
-        .begin_media_read(MediaReadBegin {
-            instance: "missing".into(),
-            ..read_request.clone()
-        })
-        .await
-        .expect_err("inactive provider cannot resolve media")
-        .to_string()
-        .contains("not running"));
+    assert!(
+        service
+            .begin_media_read(MediaReadBegin {
+                instance: "missing".into(),
+                ..read_request.clone()
+            })
+            .await
+            .expect_err("inactive provider cannot resolve media")
+            .to_string()
+            .contains("not running")
+    );
     service.provider_activations.lock().await.insert(
         "fixture-no-identity".into(),
         super::ProviderActivation {
@@ -4009,24 +4082,28 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         .lock()
         .await
         .insert("fixture-no-identity".into(), running_fixture);
-    assert!(service
-        .begin_media_read(MediaReadBegin {
-            instance: "fixture-no-identity".into(),
-            ..read_request.clone()
-        })
-        .await
-        .expect_err("provider without stable identity fails closed")
-        .to_string()
-        .contains("no stable media identity"));
-    assert!(service
-        .begin_media_read(MediaReadBegin {
-            max_bytes: 0,
-            ..read_request.clone()
-        })
-        .await
-        .expect_err("zero-byte bound is invalid")
-        .to_string()
-        .contains("request is invalid"));
+    assert!(
+        service
+            .begin_media_read(MediaReadBegin {
+                instance: "fixture-no-identity".into(),
+                ..read_request.clone()
+            })
+            .await
+            .expect_err("provider without stable identity fails closed")
+            .to_string()
+            .contains("no stable media identity")
+    );
+    assert!(
+        service
+            .begin_media_read(MediaReadBegin {
+                max_bytes: 0,
+                ..read_request.clone()
+            })
+            .await
+            .expect_err("zero-byte bound is invalid")
+            .to_string()
+            .contains("request is invalid")
+    );
     let read = service
         .begin_media_read(read_request.clone())
         .await
@@ -4060,13 +4137,15 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         .await
         .unwrap();
     assert!(service.media_reads.binding(&aborted_handle).await.is_err());
-    assert!(service
-        .read_media_chunk(MediaReadChunk {
-            handle: aborted_handle,
-            sequence: 0,
-        })
-        .await
-        .is_err());
+    assert!(
+        service
+            .read_media_chunk(MediaReadChunk {
+                handle: aborted_handle,
+                sequence: 0,
+            })
+            .await
+            .is_err()
+    );
 
     let replaced_read = service
         .begin_media_read(MediaReadBegin {
@@ -4087,17 +4166,21 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
             )),
         },
     );
-    assert!(service
-        .read_media_chunk(MediaReadChunk {
-            handle: replaced_read.handle.clone(),
-            sequence: 0,
-        })
-        .await
-        .is_err());
-    assert!(service
-        .abort_media_read(MediaReadFinish(replaced_read.handle.clone()))
-        .await
-        .is_err());
+    assert!(
+        service
+            .read_media_chunk(MediaReadChunk {
+                handle: replaced_read.handle.clone(),
+                sequence: 0,
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .abort_media_read(MediaReadFinish(replaced_read.handle.clone()))
+            .await
+            .is_err()
+    );
     assert!(service.finish_media_upload(finish).await.is_err());
     let terminal_read = service
         .begin_media_read(MediaReadBegin {
@@ -4109,37 +4192,45 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         .await
         .unwrap();
     service.terminal.store(true, Ordering::SeqCst);
-    assert!(service
-        .begin_media_upload(MediaUploadBegin {
-            instance: "fixture".into(),
-            ..MediaUploadBegin {
-                byte_count: 1,
-                ..request_media_fixture()
-            }
-        })
-        .await
-        .is_err());
-    assert!(service
-        .begin_media_read(read_request)
-        .await
-        .expect_err("terminal module refuses begin")
-        .to_string()
-        .contains("shutting down"));
-    assert!(service
-        .read_media_chunk(MediaReadChunk {
-            handle: terminal_read.handle.clone(),
-            sequence: 0,
-        })
-        .await
-        .expect_err("terminal module refuses chunks")
-        .to_string()
-        .contains("shutting down"));
-    assert!(service
-        .abort_media_read(MediaReadFinish(terminal_read.handle))
-        .await
-        .expect_err("terminal module refuses abort")
-        .to_string()
-        .contains("shutting down"));
+    assert!(
+        service
+            .begin_media_upload(MediaUploadBegin {
+                instance: "fixture".into(),
+                ..MediaUploadBegin {
+                    byte_count: 1,
+                    ..request_media_fixture()
+                }
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .begin_media_read(read_request)
+            .await
+            .expect_err("terminal module refuses begin")
+            .to_string()
+            .contains("shutting down")
+    );
+    assert!(
+        service
+            .read_media_chunk(MediaReadChunk {
+                handle: terminal_read.handle.clone(),
+                sequence: 0,
+            })
+            .await
+            .expect_err("terminal module refuses chunks")
+            .to_string()
+            .contains("shutting down")
+    );
+    assert!(
+        service
+            .abort_media_read(MediaReadFinish(terminal_read.handle))
+            .await
+            .expect_err("terminal module refuses abort")
+            .to_string()
+            .contains("shutting down")
+    );
     service.shutdown().await.unwrap();
 }
 
@@ -4176,48 +4267,58 @@ fn request_media_fixture() -> tinychannels_bus::MediaUploadBegin {
 #[tokio::test]
 async fn identity_scoped_services_refuse_nested_runtime_management() {
     let service = inbound_preparation_service().await;
-    assert!(service
-        .reserve_runtime()
-        .await
-        .map(|_| ())
-        .expect_err("request must fail")
-        .to_string()
-        .contains("unavailable"));
-    assert!(service
-        .start_runtime("handle".into())
-        .await
-        .map(|_| ())
-        .expect_err("request must fail")
-        .to_string()
-        .contains("unavailable"));
-    assert!(service
-        .start_runtime_with_dispatch(
-            "handle".into(),
-            tinychannels_bus::ChannelRuntimeDispatchPolicy { listener_count: 1 }
-        )
-        .await
-        .map(|_| ())
-        .expect_err("request must fail")
-        .to_string()
-        .contains("unavailable"));
-    assert!(service
-        .stop_runtime("handle".into())
-        .await
-        .map(|_| ())
-        .expect_err("request must fail")
-        .to_string()
-        .contains("unavailable"));
+    assert!(
+        service
+            .reserve_runtime()
+            .await
+            .map(|_| ())
+            .expect_err("request must fail")
+            .to_string()
+            .contains("unavailable")
+    );
+    assert!(
+        service
+            .start_runtime("handle".into())
+            .await
+            .map(|_| ())
+            .expect_err("request must fail")
+            .to_string()
+            .contains("unavailable")
+    );
+    assert!(
+        service
+            .start_runtime_with_dispatch(
+                "handle".into(),
+                tinychannels_bus::ChannelRuntimeDispatchPolicy { listener_count: 1 }
+            )
+            .await
+            .map(|_| ())
+            .expect_err("request must fail")
+            .to_string()
+            .contains("unavailable")
+    );
+    assert!(
+        service
+            .stop_runtime("handle".into())
+            .await
+            .map(|_| ())
+            .expect_err("request must fail")
+            .to_string()
+            .contains("unavailable")
+    );
     service.shutdown().await.unwrap();
 }
 
 #[tokio::test]
 async fn health_and_controller_operations_refuse_requests_after_shutdown() {
     let service = inbound_preparation_service().await;
-    assert!(service
-        .check_channel_health(Default::default(), Default::default(), 100)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        service
+            .check_channel_health(Default::default(), Default::default(), 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let result = service
         .channel_controller(tinychannels_bus::ChannelControllerRequest::Status {
             config: Default::default(),
@@ -4226,23 +4327,27 @@ async fn health_and_controller_operations_refuse_requests_after_shutdown() {
         .await;
     assert!(result.is_err(), "no host backend is served");
     service.shutdown().await.unwrap();
-    assert!(service
-        .check_channel_health(Default::default(), Default::default(), 100)
-        .await
-        .map(|_| ())
-        .expect_err("request must fail")
-        .to_string()
-        .contains("shutting down"));
-    assert!(service
-        .channel_controller(tinychannels_bus::ChannelControllerRequest::Status {
-            config: Default::default(),
-            channel: None,
-        })
-        .await
-        .map(|_| ())
-        .expect_err("request must fail")
-        .to_string()
-        .contains("shutting down"));
+    assert!(
+        service
+            .check_channel_health(Default::default(), Default::default(), 100)
+            .await
+            .map(|_| ())
+            .expect_err("request must fail")
+            .to_string()
+            .contains("shutting down")
+    );
+    assert!(
+        service
+            .channel_controller(tinychannels_bus::ChannelControllerRequest::Status {
+                config: Default::default(),
+                channel: None,
+            })
+            .await
+            .map(|_| ())
+            .expect_err("request must fail")
+            .to_string()
+            .contains("shutting down")
+    );
 }
 
 #[tokio::test]
@@ -4269,52 +4374,68 @@ async fn legacy_send_and_interaction_route_to_live_provider_and_reject_unknown_c
         service.channel_status("fixture".into()).await.unwrap(),
         "connected"
     );
-    assert!(service
-        .send_message("missing".into(), SendMessage::new("hello", "room"))
-        .await
-        .is_err());
-    assert!(service
-        .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
-            channel: "missing".into(),
-            interaction: tinychannels_bus::ChannelInteraction::Describe,
-        })
-        .await
-        .is_err());
+    assert!(
+        service
+            .send_message("missing".into(), SendMessage::new("hello", "room"))
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
+                channel: "missing".into(),
+                interaction: tinychannels_bus::ChannelInteraction::Describe,
+            })
+            .await
+            .is_err()
+    );
     let mut intent = required_intent("best-effort", "hello");
     intent.durability = tinychannels::DeliveryDurability::BestEffort;
-    assert!(service
-        .send_channel_intent("wrong".into(), intent.clone())
-        .await
-        .is_err());
+    assert!(
+        service
+            .send_channel_intent("wrong".into(), intent.clone())
+            .await
+            .is_err()
+    );
     intent.channel_id = "missing".into();
-    assert!(service
-        .send_channel_intent("missing".into(), intent.clone())
-        .await
-        .is_err());
+    assert!(
+        service
+            .send_channel_intent("missing".into(), intent.clone())
+            .await
+            .is_err()
+    );
     intent.channel_id = "fixture".into();
     intent.payload = tinychannels::OutboundPayload::Text {
         text: "x".repeat(tinychannels_bus::module_relay::RELAY_FRAME_BYTES),
     };
-    assert!(service
-        .send_channel_intent("fixture".into(), intent)
-        .await
-        .is_err());
+    assert!(
+        service
+            .send_channel_intent("fixture".into(), intent)
+            .await
+            .is_err()
+    );
     service.shutdown().await.unwrap();
-    assert!(service
-        .send_message("fixture".into(), SendMessage::new("hello", "room"))
-        .await
-        .is_err());
-    assert!(service
-        .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
-            channel: "fixture".into(),
-            interaction: tinychannels_bus::ChannelInteraction::Describe,
-        })
-        .await
-        .is_err());
-    assert!(service
-        .send_channel_intent("fixture".into(), required_intent("closed", "hello"))
-        .await
-        .is_err());
+    assert!(
+        service
+            .send_message("fixture".into(), SendMessage::new("hello", "room"))
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
+                channel: "fixture".into(),
+                interaction: tinychannels_bus::ChannelInteraction::Describe,
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .send_channel_intent("fixture".into(), required_intent("closed", "hello"))
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -4528,10 +4649,12 @@ async fn service_relay_reservations_are_single_use_and_shutdown_prevents_new_own
         tinychannels_bus::module_relay::RelayPhase::Reserved
     );
     assert!(service.reserve_relay().await.is_err());
-    assert!(service
-        .send_relay_intent(id.clone(), required_intent("relay", "hello"))
-        .await
-        .is_err());
+    assert!(
+        service
+            .send_relay_intent(id.clone(), required_intent("relay", "hello"))
+            .await
+            .is_err()
+    );
     service.stop_relay(id.clone()).await.unwrap();
     assert!(service.relay_status(id.clone()).await.is_err());
     assert!(service.start_relay(id, Default::default()).await.is_err());
@@ -4570,55 +4693,67 @@ async fn service_runtime_wrappers_activate_stop_and_freeze_identity_owners() {
 async fn shutdown_refuses_preparation_and_execution_before_host_work() {
     let service = inbound_preparation_service().await;
     service.shutdown().await.unwrap();
-    assert!(service
-        .describe_configured_channels(Default::default(), Default::default())
-        .await
-        .is_err());
-    assert!(service
-        .prepare_channel_control(
-            tinychannels_bus::module_control::ChannelControlRequest::Acknowledgment {
-                content: "hello".into()
-            }
-        )
-        .await
-        .is_err());
-    assert!(service
-        .execute_remote(tinychannels_bus::module_remote::RemoteOperation::MarkTurn {
-            workspace_dir: ".".into(),
-            channel: "fixture".into(),
-            reply_target: "room".into(),
-            busy: true,
-        })
-        .await
-        .is_err());
-    assert!(service
-        .execute_progressive(
-            tinychannels_bus::module_progressive::ProgressiveCommand::Open {
-                channel: "fixture".into(),
-            }
-        )
-        .await
-        .is_err());
-    assert!(service
-        .prepare_channel_identity(
-            tinychannels_bus::module_inbound::PrepareChannelIdentityRequest {
-                channel: "fixture".into(),
-                sender: None,
-                reply_target: None,
-                thread_ts: None,
-            }
-        )
-        .await
-        .is_err());
-    assert!(service
-        .prepare_outbound_intent(
-            "fixture".into(),
-            tinychannels_bus::module_runtime::ChannelMessagePreparation::Legacy(
-                serde_json::json!({"content": "hello", "recipient": "room"})
+    assert!(
+        service
+            .describe_configured_channels(Default::default(), Default::default())
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .prepare_channel_control(
+                tinychannels_bus::module_control::ChannelControlRequest::Acknowledgment {
+                    content: "hello".into()
+                }
             )
-        )
-        .await
-        .is_err());
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .execute_remote(tinychannels_bus::module_remote::RemoteOperation::MarkTurn {
+                workspace_dir: ".".into(),
+                channel: "fixture".into(),
+                reply_target: "room".into(),
+                busy: true,
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .execute_progressive(
+                tinychannels_bus::module_progressive::ProgressiveCommand::Open {
+                    channel: "fixture".into(),
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .prepare_channel_identity(
+                tinychannels_bus::module_inbound::PrepareChannelIdentityRequest {
+                    channel: "fixture".into(),
+                    sender: None,
+                    reply_target: None,
+                    thread_ts: None,
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .prepare_outbound_intent(
+                "fixture".into(),
+                tinychannels_bus::module_runtime::ChannelMessagePreparation::Legacy(
+                    serde_json::json!({"content": "hello", "recipient": "room"})
+                )
+            )
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

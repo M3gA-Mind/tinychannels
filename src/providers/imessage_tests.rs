@@ -794,12 +794,11 @@ async fn send_rejects_an_invalid_target_before_running_anything() {
 async fn send_without_a_runner_is_an_error() {
     let mut rig = crate::providers::imessage::fixtures::rig();
     rig.channel.script_command = Vec::new();
-    assert!(ChannelTypedSend::send_typed(
-        &rig.channel,
-        &typed_text_message("hello", "+15555550123"),
-    )
-    .await
-    .is_err());
+    assert!(
+        ChannelTypedSend::send_typed(&rig.channel, &typed_text_message("hello", "+15555550123"),)
+            .await
+            .is_err()
+    );
 }
 
 #[test]
@@ -911,9 +910,11 @@ async fn listen_delivers_only_allowed_non_blank_messages() {
         first.message_id, "1",
         "rows before startup are never replayed"
     );
-    assert!(first
-        .timestamp_unix_ms
-        .is_some_and(|timestamp| timestamp > 0));
+    assert!(
+        first
+            .timestamp_unix_ms
+            .is_some_and(|timestamp| timestamp > 0)
+    );
 
     // The receiver going away ends the listener cleanly.
     drop(rx);
