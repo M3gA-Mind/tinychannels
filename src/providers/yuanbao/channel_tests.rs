@@ -592,7 +592,7 @@ async fn heartbeat_task_exits_when_disconnected_send_fails() {
 }
 
 #[tokio::test]
-async fn listener_dispatches_push_then_stops_on_kickout_and_second_listen_is_noop() {
+async fn typed_listener_dispatches_push_then_stops_on_kickout() {
     use crate::channel::ChannelAdapter;
     use crate::providers::yuanbao::connection::test_support::MockGateway;
 
