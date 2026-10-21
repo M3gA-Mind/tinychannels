@@ -346,7 +346,8 @@ async fn gateway_listener_identifies_heartbeats_filters_and_routes_private_and_g
                 ),
                 ("alice", "group:room", "second")
             );
-            assert!(Uuid::parse_str(&first.id).is_ok());
+            assert_eq!(first.id, "private");
+            assert_eq!(second.id, "group");
             assert!(first.timestamp > 0);
             drop(rx);
             release_tx.send(()).unwrap();
