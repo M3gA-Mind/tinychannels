@@ -299,10 +299,7 @@ impl WhatsAppChannel {
         })
     }
 
-    async fn mark_read_provider(
-        &self,
-        provider_message_id: &str,
-    ) -> anyhow::Result<()> {
+    async fn mark_read_provider(&self, provider_message_id: &str) -> anyhow::Result<()> {
         if provider_message_id.trim().is_empty() {
             return Err(anyhow::Error::new(WaFailure::rejected(
                 "WhatsApp read receipt needs a message id",

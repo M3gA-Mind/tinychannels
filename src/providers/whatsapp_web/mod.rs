@@ -1132,7 +1132,8 @@ impl Channel for WhatsAppWebChannel {
         conversation: &tinychannels_bus::ConversationRef,
         provider_message_id: &str,
     ) -> Result<()> {
-        self.mark_read_provider(conversation, provider_message_id).await
+        self.mark_read_provider(conversation, provider_message_id)
+            .await
     }
 
     async fn edit_message(
