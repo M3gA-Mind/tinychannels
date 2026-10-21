@@ -777,7 +777,14 @@ async fn health_check_reflects_users_me_status() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let dead = format!("http://{}", listener.local_addr().unwrap());
     drop(listener);
-    assert!(!channel_at(&dead, None).health_check().await);
+    assert_eq!(
+        ChannelAdapter::status(&channel_at(&dead, None))
+            .await
+            .unwrap()
+            .health_state
+            .as_deref(),
+        Some("unhealthy")
+    );
 }
 
 #[tokio::test]
