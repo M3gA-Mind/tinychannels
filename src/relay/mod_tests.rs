@@ -619,6 +619,7 @@ async fn relay_transport_negotiates_v2_and_returns_the_canonical_descriptor() {
         short_relay_timeouts(),
     ));
     transport.connect_v2().await.expect("connect v2");
+    let started = tokio::time::Instant::now();
     let negotiation = {
         let transport = transport.clone();
         tokio::spawn(async move { transport.negotiate_v2().await })
@@ -724,6 +725,11 @@ async fn relay_v2_ignores_unsupported_versions_and_times_out_at_one_deadline() {
         Err(RelayTransportError::Timeout {
             operation: "handshake_v2"
         })
+    );
+    assert_eq!(
+        started.elapsed(),
+        Duration::from_millis(60),
+        "unrelated frames must not restart the handshake deadline"
     );
 }
 
