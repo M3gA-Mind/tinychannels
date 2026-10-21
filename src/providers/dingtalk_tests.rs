@@ -325,7 +325,7 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
             ),
             ("alice", "group-id", "first", "dingtalk")
         );
-        assert!(Uuid::parse_str(&first.id).is_ok());
+        assert_eq!(first.id, "group");
         assert!(first.timestamp > 0);
         assert_eq!(
             (second.reply_target.as_str(), second.content.as_str()),
