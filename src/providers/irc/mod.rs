@@ -6,11 +6,11 @@ mod inbound;
 mod outbound;
 
 pub use config::IrcChannelConfig;
+#[cfg(test)]
+use inbound::IRC_STYLE_PREFIX;
 use inbound::ListenerRegistration;
 #[cfg(any(test, debug_assertions))]
 use inbound::{IrcMessage, encode_sasl_plain};
-#[cfg(test)]
-use inbound::IRC_STYLE_PREFIX;
 use outbound::split_message;
 
 use std::sync::Arc;
