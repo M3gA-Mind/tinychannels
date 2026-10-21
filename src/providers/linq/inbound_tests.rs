@@ -259,3 +259,24 @@ fn signature_headers_are_split_leniently_and_strictly() {
     assert_eq!(split_signature("t=1"), None);
     assert_eq!(split_signature("nonsense"), None);
 }
+
+#[test]
+fn linq_sender_allowed_exact() {
+    let ch = make_channel();
+    assert!(ch.is_sender_allowed("+1234567890"));
+    assert!(!ch.is_sender_allowed("+9876543210"));
+}
+
+#[test]
+fn linq_sender_allowed_wildcard() {
+    let ch = LinqChannel::new("tok".into(), "+15551234567".into(), vec!["*".into()]);
+    assert!(ch.is_sender_allowed("+1234567890"));
+    assert!(ch.is_sender_allowed("+9999999999"));
+}
+
+#[test]
+fn linq_sender_allowed_empty() {
+    let ch = LinqChannel::new("tok".into(), "+15551234567".into(), vec![]);
+    assert!(!ch.is_sender_allowed("+1234567890"));
+}
+
