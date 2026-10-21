@@ -4408,6 +4408,17 @@ async fn whatsapp_cloud_starts_normally_and_serves_webhook_ingress_over_the_bus(
         .start_channel("whatsapp".into(), config.clone())
         .await
         .expect("the module serves the Cloud webhook ingress");
+    let running = service
+        .running
+        .lock()
+        .await
+        .get("whatsapp")
+        .cloned()
+        .expect("configured WhatsApp provider is running");
+    assert!(
+        running.channel.is_none(),
+        "Cloud webhook launch must not retain the legacy Channel trait"
+    );
     // The subscription handshake is answered through the interaction method.
     let challenge = service
         .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
