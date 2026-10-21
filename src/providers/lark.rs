@@ -94,36 +94,6 @@ struct LarkEventHeader {
     event_id: String,
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct MsgReceivePayload {
-    sender: LarkSender,
-    message: LarkMessage,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct LarkSender {
-    sender_id: LarkSenderId,
-    #[serde(default)]
-    sender_type: String,
-}
-
-#[derive(Debug, serde::Deserialize, Default)]
-struct LarkSenderId {
-    open_id: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct LarkMessage {
-    message_id: String,
-    chat_id: String,
-    chat_type: String,
-    message_type: String,
-    #[serde(default)]
-    content: String,
-    #[serde(default)]
-    mentions: Vec<serde_json::Value>,
-}
-
 struct LarkListenerRegistration<'a> {
     channel: &'a LarkChannel,
     id: Uuid,
@@ -544,23 +514,24 @@ impl LarkChannel {
                     };
                     if event.header.event_type != "im.message.receive_v1" { continue; }
 
-                    let event_payload = event.event.clone();
-                    let recv: MsgReceivePayload = match serde_json::from_value(event.event) {
-                        Ok(r) => r,
-                        Err(e) => { tracing::error!("Lark: payload parse: {e}"); continue; }
+                    let event_payload = event.event;
+                    let message_id = event_payload
+                        .pointer("/message/message_id")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|value| !value.is_empty());
+                    let Some(message_id) = message_id else {
+                        tracing::debug!("Lark: event has no message ID");
+                        continue;
                     };
-
                     if !self.is_event_admitted(&event_payload) {
                         continue;
                     }
 
-                    let lark_msg = &recv.message;
-
                     // Check dedup before downloading content. Typed events are
                     // recorded only after publication succeeds so a rejected
                     // sink can receive the provider retry after reconnect.
-                    if self.ws_message_was_seen(&lark_msg.message_id).await {
-                        tracing::debug!("Lark WS: dup {}", lark_msg.message_id);
+                    if self.ws_message_was_seen(message_id).await {
+                        tracing::debug!("Lark WS: dup {message_id}");
                         continue;
                     }
 
@@ -578,7 +549,7 @@ impl LarkChannel {
                         tracing::warn!("Lark WS: typed ingress sink rejected an event");
                         break;
                     }
-                    self.mark_ws_message_seen(&lark_msg.message_id).await;
+                    self.mark_ws_message_seen(message_id).await;
                     continue;
 
                 }
