@@ -124,7 +124,6 @@ impl DingTalkChannel {
         self
     }
 
-    #[cfg(test)]
     pub(crate) fn with_attachment_http_client(mut self, client: reqwest::Client) -> Self {
         self.attachment_http_client = client;
         self
