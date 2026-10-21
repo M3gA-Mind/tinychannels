@@ -195,4 +195,3 @@ async fn native_draft_lifecycle_converts_v1_interactions_to_scoped_typed_intents
     );
 }
 
-#[derive(Default)]
