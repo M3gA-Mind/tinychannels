@@ -218,35 +218,9 @@ pub enum ProgressiveCommand {
     Open {
         channel: String,
     },
-    /// Open a turn-scoped output stream using the full configured address.
-    OpenOutput {
-        channel: crate::channel::ChannelRef,
-        conversation: crate::channel::ConversationRef,
-        turn_id: String,
-        /// Host-owned output lease in milliseconds; the host selects a value
-        /// that covers its turn backstop and closes this handle on completion.
-        lifetime_ms: u64,
-    },
-    /// Open a scoped output stream whose transport is the trusted host callback
-    /// captured by this compiled module runtime. Unlike `OpenOutput`, this
-    /// does not select a locally configured provider; the host callback owns
-    /// account authorization and delivery. Capabilities remain conservative.
-    OpenHostedOutput {
-        channel: crate::channel::ChannelRef,
-        conversation: crate::channel::ConversationRef,
-        turn_id: String,
-        /// Host-owned output lease in milliseconds.
-        lifetime_ms: u64,
-    },
     Feed {
         handle: String,
         events: Vec<ProgressiveEvent>,
-    },
-    /// Feed canonical output events without converting them through the v1
-    /// four-variant progressive projection.
-    FeedOutput {
-        handle: String,
-        events: Vec<ChannelOutputEvent>,
     },
     Finish {
         handle: String,
@@ -266,32 +240,6 @@ pub enum ProgressiveResult {
     },
     Updated,
     Closed,
-    /// V2 terminal delivery acknowledgement; carries every known platform
-    /// receipt and any partial-send failure from the provider.
-    DeliveryOutcome {
-        outcome: Box<crate::channel::ChannelSendOutcome>,
-    },
-    /// Rich content is retained for a host/provider port that does not yet
-    /// support it; it is never flattened to text or dropped.
-    DeliveryUnsupported {
-        parts: Vec<crate::channel::OutboundContentPart>,
-    },
-    DeliveryOutcomes {
-        outcomes: Vec<crate::channel::ChannelSendOutcome>,
-    },
-    DeliveryBatch {
-        outcomes: Vec<crate::channel::ChannelSendOutcome>,
-        unsupported: Vec<crate::channel::OutboundContentPart>,
-        failure: Option<ProgressiveOutputFailure>,
-    },
-}
-
-/// Content-free reason that an ordered output batch stopped before completion.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ProgressiveOutputFailure {
-    ObservationCallback,
-    ProviderTransport,
 }
 
 /// The host supplies its managed REST transport and captured credential.
