@@ -51,6 +51,7 @@ pub struct StoredIntent {
     pub reply_to_id: Option<String>,
     pub thread_id: Option<String>,
     pub durability: DeliveryDurability,
+    #[serde(with = "stored_payload")]
     pub payload: OutboundPayload,
 }
 
@@ -169,6 +170,41 @@ impl From<StoredResult> for DeliveryTerminalResult {
             completed_at_unix_ms: from_stored_ms(stored.completed_ms),
             receipt: stored.receipt,
         }
+    }
+}
+
+/// Keep the document-store payload's list keys snake_case while TinyBus uses
+/// camelCase. Typed v2 payload fields otherwise retain their contract shape.
+mod stored_payload {
+    use super::OutboundPayload;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde_json::Value;
+
+    pub fn serialize<S>(payload: &OutboundPayload, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+        if let Value::Object(fields) = &mut value {
+            let (wire_key, storage_key) = match fields.get("kind").and_then(Value::as_str) {
+                Some("media") => ("mediaUrls", "media_urls"),
+                Some("files") => ("fileUrls", "file_urls"),
+                _ => ("", ""),
+            };
+            if !wire_key.is_empty()
+                && let Some(value) = fields.remove(wire_key)
+            {
+                fields.insert(storage_key.to_owned(), value);
+            }
+        }
+        value.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<OutboundPayload, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OutboundPayload::deserialize(deserializer)
     }
 }
 
