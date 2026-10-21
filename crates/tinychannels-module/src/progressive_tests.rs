@@ -128,6 +128,7 @@ struct Callback {
     entered: Arc<Notify>,
     released: Arc<Notify>,
     voice_policy: Arc<Mutex<Option<tinychannels_bus::HostVoiceReplyPolicy>>>,
+    voice_policy_requests: Arc<Mutex<Vec<tinychannels_bus::HostVoiceReplyPolicyRequest>>>,
     synthesis_calls: Arc<AtomicUsize>,
     voice_store_calls: Arc<AtomicUsize>,
     published_voice_media: Arc<Mutex<Vec<tinychannels_bus::MediaReference>>>,
@@ -199,8 +200,9 @@ impl StubTinyVoiceCodec {
 impl Callback {
     async fn get_voice_reply_policy(
         &self,
-        _request: tinychannels_bus::HostVoiceReplyPolicyRequest,
+        request: tinychannels_bus::HostVoiceReplyPolicyRequest,
     ) -> Result<tinychannels_bus::HostVoiceReplyPolicy> {
+        self.voice_policy_requests.lock().await.push(request);
         Ok(self.voice_policy.lock().await.clone().unwrap_or(
             tinychannels_bus::HostVoiceReplyPolicy {
                 mode: tinychannels_bus::HostVoiceReplyMode::Mirror,
@@ -320,6 +322,98 @@ impl Callback {
         }
         Ok(ChannelBackendResult::ProgressiveTransport(Box::new(result)))
     }
+}
+
+#[tokio::test]
+async fn voice_scope_uses_configured_account_instead_of_progressive_route() {
+    let (replies, callback) = fixture(false).await;
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Never,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
+    let context = ProgressiveOutputContext {
+        turn_id: "turn-voice-account".into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:work".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Thread,
+            id: "room-7".into(),
+            scope_id: Some("group-3".into()),
+            parent_id: Some("room-7".into()),
+            thread_id: Some("thread-8".into()),
+            topic_id: Some("topic-9".into()),
+        },
+    };
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.voice_out.synthesis = true;
+    let sender = Sender {
+        host: replies.host.clone(),
+        media_account_scope: crate::provider::MediaScope::default(),
+        context: Some(context.clone()),
+        capabilities,
+        channel: "telegram:42".into(),
+        hosted: false,
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    };
+
+    assert!(
+        !sender
+            .should_synthesize_final("telegram:42", Some(&context), "reply")
+            .await
+            .unwrap()
+    );
+    sender
+        .send_final_parts_with_segment("telegram:42", &[], "reply", Some(&context), 1, 0)
+        .await
+        .unwrap();
+
+    let requests = callback.voice_policy_requests.lock().await;
+    assert_eq!(
+        requests.len(),
+        2,
+        "policy and final voice preparation both consult the host"
+    );
+    for request in requests.iter() {
+        assert_eq!(request.scope.configured_instance, "telegram:work");
+        assert_eq!(request.scope.channel, context.channel);
+        assert_eq!(request.scope.conversation, context.conversation);
+        assert_eq!(request.scope.turn_id, "turn-voice-account");
+    }
+    drop(requests);
+
+    let unbound_context = ProgressiveOutputContext {
+        turn_id: "turn-unbound-account".into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: None,
+        },
+        conversation: context.conversation.clone(),
+    };
+    let unbound_sender = Sender {
+        host: replies.host.clone(),
+        media_account_scope: crate::provider::MediaScope::default(),
+        context: Some(unbound_context.clone()),
+        capabilities: sender.capabilities.clone(),
+        channel: "telegram:42".into(),
+        hosted: false,
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    };
+    assert!(
+        !unbound_sender
+            .should_synthesize_final("telegram:42", Some(&unbound_context), "reply")
+            .await
+            .unwrap()
+    );
+    let requests = callback.voice_policy_requests.lock().await;
+    let unbound = requests.last().expect("unbound voice policy request");
+    assert!(unbound.scope.configured_instance.is_empty());
+    assert_eq!(unbound.scope.channel, unbound_context.channel);
+    assert_eq!(unbound.scope.conversation, unbound_context.conversation);
+    assert_eq!(unbound.scope.turn_id, "turn-unbound-account");
+    replies.shutdown().await.unwrap();
 }
 
 async fn fixture(block: bool) -> (Replies, Callback) {

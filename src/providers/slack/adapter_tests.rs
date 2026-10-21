@@ -519,6 +519,10 @@ impl AdapterFixture for SlackWireFixture {
             F::ReadReceipts => Err(crate::providers::slack::api::unsupported(
                 "Slack exposes no read receipts to bots",
             )),
+            F::ManagedReaction
+            | F::ManagedThreadCreate
+            | F::ManagedThreadUpdate
+            | F::ManagedThreadList => Err(ChannelSendError::default()),
         };
         self.harvest(feature).await;
         result

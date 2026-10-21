@@ -243,7 +243,7 @@ impl ProgressiveSender for Sender {
             return Ok(false);
         };
         let scope = tinychannels_bus::HostVoiceScope {
-            configured_instance: self.channel.clone(),
+            configured_instance: configured_instance(context),
             channel: context.channel.clone(),
             conversation: context.conversation.clone(),
             turn_id: context.turn_id.clone(),
@@ -463,7 +463,7 @@ async fn send_typed_part(
             && sender.capabilities.voice_out.synthesis
         {
             let scope = tinychannels_bus::HostVoiceScope {
-                configured_instance: sender.channel.clone(),
+                configured_instance: configured_instance(context),
                 channel: context.channel.clone(),
                 conversation: context.conversation.clone(),
                 turn_id: context.turn_id.clone(),
@@ -751,6 +751,10 @@ async fn send_typed_part(
             "typed provider send failed with unknown outcome"
         ))),
     }
+}
+
+fn configured_instance(context: &ProgressiveOutputContext) -> String {
+    context.channel.account_id.clone().unwrap_or_default()
 }
 
 enum Command {

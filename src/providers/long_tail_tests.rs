@@ -254,12 +254,19 @@ fn every_provider_describes_its_native_capability_facts() {
         assert!(declared.remote_control && declared.chat_approvals, "{id}");
         assert_eq!(declared.content.parts, ["text"], "{id}");
         assert!(declared.content.text.outbound && declared.content.text.inbound);
-        // Nothing this module cannot do is advertised.
-        assert!(!declared.reactions && !declared.progressive_edits, "{id}");
+        // Mattermost owns real reaction/edit/delete ports; the other long-tail
+        // providers in this matrix do not. These facts are checked against the
+        // actual configured adapter, while provider wire tests exercise the
+        // advertised operations.
+        let mattermost = id == "mattermost";
+        assert_eq!(declared.reactions, mattermost, "{id}");
+        assert!(!declared.progressive_edits, "{id}");
         for action in ["edit", "delete", "react", "draft-update", "voice"] {
-            assert!(
-                !declared.actions.supported.iter().any(|a| a == action),
-                "{id} must not claim {action}"
+            let supported = declared.actions.supported.iter().any(|a| a == action);
+            assert_eq!(
+                supported,
+                mattermost && matches!(action, "edit" | "delete"),
+                "{id} {action}"
             );
         }
         assert!(!declared.voice_in.supported && !declared.voice_out.supported);
@@ -325,32 +332,51 @@ async fn unimplemented_operations_are_explicitly_unsupported() {
     let reaction = tinychannels_bus::channel::ChannelReaction::default();
     for (id, display) in PROVIDERS {
         let channel = build(&config, id);
-        let errors = [
-            ChannelReaction::send_reaction(
-                channel.as_ref(),
-                &ChannelRef {
-                    id: id.into(),
-                    account_id: None,
-                },
-                &ConversationRef::default(),
-                "m",
-                &reaction,
-                false,
-            )
-            .await
-            .unwrap_err(),
-            ChannelEdit::edit(channel.as_ref(), &receipt, text_intent(id, "c", None))
+        let errors = if id == "mattermost" {
+            // Its other operations are exercised against a local platform
+            // mock by the configured provider conformance suite. Keep this
+            // unsupported case on an operation it has not implemented.
+            vec![
+                ChannelStreamingDraft::upsert_draft(
+                    channel.as_ref(),
+                    None,
+                    text_intent(id, "c", None),
+                )
+                .await
+                .unwrap_err(),
+            ]
+        } else {
+            vec![
+                ChannelReaction::send_reaction(
+                    channel.as_ref(),
+                    &ChannelRef {
+                        id: id.into(),
+                        account_id: None,
+                    },
+                    &ConversationRef::default(),
+                    "m",
+                    &reaction,
+                    false,
+                )
+                .await
+                .unwrap_err(),
+                ChannelEdit::edit(channel.as_ref(), &receipt, text_intent(id, "c", None))
+                    .await
+                    .map(|_| ())
+                    .unwrap_err(),
+                ChannelDelete::delete(channel.as_ref(), &receipt)
+                    .await
+                    .unwrap_err(),
+                ChannelStreamingDraft::upsert_draft(
+                    channel.as_ref(),
+                    None,
+                    text_intent(id, "c", None),
+                )
                 .await
                 .map(|_| ())
                 .unwrap_err(),
-            ChannelDelete::delete(channel.as_ref(), &receipt)
-                .await
-                .unwrap_err(),
-            ChannelStreamingDraft::upsert_draft(channel.as_ref(), None, text_intent(id, "c", None))
-                .await
-                .map(|_| ())
-                .unwrap_err(),
-        ];
+            ]
+        };
         for error in errors {
             assert!(error.unsupported, "{id}");
             assert!(!error.retryable && !error.sent_before_error, "{id}");

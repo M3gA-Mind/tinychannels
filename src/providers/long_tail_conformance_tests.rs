@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tinychannels_bus::channel::{
@@ -41,7 +42,7 @@ use tinychannels_conformance::{
     AdapterFixture, ConformanceFeature as Feature, ExpectedScope, WireObservation,
     check_all_features, check_feature,
 };
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 const CHANNEL: &str = "chan1";
@@ -234,6 +235,8 @@ fn unsupported_result() -> Result<Option<ChannelSendOutcome>, ChannelSendError> 
     })
 }
 
+type PostScope = (String, Option<String>);
+
 struct LongTailFixture {
     id: &'static str,
     channel: Arc<dyn LongTailNative>,
@@ -242,6 +245,8 @@ struct LongTailFixture {
     dingtalk_stream: Option<DingTalkStream>,
     /// Message ids the mock returned, in response order.
     response_ids: Arc<Mutex<Vec<String>>>,
+    /// Conversation facts associated with post IDs created by the mock wire.
+    post_scopes: Arc<Mutex<HashMap<String, PostScope>>>,
     observed: Mutex<Vec<WireObservation>>,
 }
 
@@ -255,15 +260,55 @@ impl LongTailFixture {
         }
         let server = MockServer::start().await;
         let response_ids = Arc::new(Mutex::new(Vec::new()));
+        let post_scopes = Arc::new(Mutex::new(HashMap::new()));
         let counter = Arc::new(AtomicU64::new(7000));
         let ids = response_ids.clone();
+        let scopes = post_scopes.clone();
         Mock::given(method("POST"))
             .and(path("/api/v4/posts"))
-            .respond_with(move |_: &Request| {
+            .respond_with(move |request: &Request| {
                 let id = counter.fetch_add(1, Ordering::SeqCst).to_string();
                 ids.lock().push(id.clone());
+                let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+                scopes.lock().insert(
+                    id.clone(),
+                    (
+                        body["channel_id"].as_str().unwrap_or_default().to_owned(),
+                        body["root_id"].as_str().map(str::to_owned),
+                    ),
+                );
                 ResponseTemplate::new(201).set_body_json(json!({"id": id}))
             })
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v4/users/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "conformance-bot",
+                "username": "fixture-bot"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v4/reactions"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({"id": "reaction-1"})))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path_regex(
+                r"^/api/v4/users/conformance-bot/posts/[0-9]+/reactions/thumbsup$",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "OK"})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path_regex(r"^/api/v4/posts/[0-9]+$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "updated"})))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path_regex(r"^/api/v4/posts/[0-9]+$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "OK"})))
             .mount(&server)
             .await;
         Mock::given(method("POST"))
@@ -301,6 +346,7 @@ impl LongTailFixture {
             fixed_server: None,
             dingtalk_stream: None,
             response_ids,
+            post_scopes,
             observed: Mutex::new(Vec::new()),
         }
     }
@@ -351,6 +397,7 @@ impl LongTailFixture {
             fixed_server: Some(server),
             dingtalk_stream: None,
             response_ids,
+            post_scopes: Arc::default(),
             observed: Mutex::new(Vec::new()),
         }
     }
@@ -472,6 +519,7 @@ impl LongTailFixture {
             fixed_server: Some(server),
             dingtalk_stream: Some(DingTalkStream { listener, stream }),
             response_ids,
+            post_scopes: Arc::default(),
             observed: Mutex::new(Vec::new()),
         }
     }
@@ -485,6 +533,7 @@ impl LongTailFixture {
             fixed_server: None,
             dingtalk_stream: None,
             response_ids: Arc::default(),
+            post_scopes: Arc::default(),
             observed: Mutex::new(Vec::new()),
         }
     }
@@ -573,32 +622,100 @@ impl LongTailFixture {
                 };
                 continue;
             }
+            if url_path == "/api/v4/users/me" {
+                continue;
+            }
             let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
-            let (operation, message_ids, kinds) = if url_path == "/api/v4/posts" {
-                let kinds = if body.get("file_ids").is_some() {
-                    uploaded_kind
-                        .take()
-                        .into_iter()
-                        .map(str::to_owned)
-                        .collect()
+            let (operation, message_ids, kinds, post_id, request_body) =
+                if url_path == "/api/v4/posts" {
+                    let kinds = if body.get("file_ids").is_some() {
+                        uploaded_kind
+                            .take()
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect()
+                    } else {
+                        vec!["text".to_owned()]
+                    };
+                    let response_id = ids.next().unwrap_or_default();
+                    ("send", vec![response_id.clone()], kinds, response_id, body)
+                } else if url_path == "/api/v4/reactions" {
+                    let post_id = body["post_id"].as_str().unwrap_or_default().to_owned();
+                    ("reaction_send", Vec::new(), Vec::new(), post_id, body)
+                } else if url_path.starts_with("/api/v4/users/")
+                    && url_path.contains("/posts/")
+                    && url_path.contains("/reactions/")
+                {
+                    let post_id = url_path
+                        .split("/posts/")
+                        .nth(1)
+                        .and_then(|suffix| suffix.split('/').next())
+                        .unwrap_or_default()
+                        .to_owned();
+                    (
+                        "reaction_send",
+                        Vec::new(),
+                        Vec::new(),
+                        post_id,
+                        json!({"path": url_path}),
+                    )
+                } else if matches!(request.method.as_str(), "PUT" | "DELETE")
+                    && url_path.starts_with("/api/v4/posts/")
+                {
+                    let post_id = url_path.rsplit('/').next().unwrap_or_default().to_owned();
+                    let operation = if request.method.as_str() == "PUT" {
+                        "edit"
+                    } else {
+                        "delete"
+                    };
+                    let kinds = if operation == "edit" {
+                        vec!["text".to_owned()]
+                    } else {
+                        Vec::new()
+                    };
+                    let observation = if operation == "delete" {
+                        json!({"path": url_path})
+                    } else {
+                        body
+                    };
+                    (
+                        operation,
+                        vec![post_id.clone()],
+                        kinds,
+                        post_id,
+                        observation,
+                    )
                 } else {
-                    vec!["text".to_owned()]
+                    ("typing", Vec::new(), Vec::new(), String::new(), body)
                 };
-                ("send", ids.next().into_iter().collect(), kinds)
-            } else {
-                ("typing", Vec::new(), Vec::new())
+            let scope = self.post_scopes.lock().get(&post_id).cloned();
+            let (channel_id, thread) = match scope {
+                Some(scope) => scope,
+                None if operation == "send" => (
+                    request_body["channel_id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                    request_body["root_id"].as_str().map(str::to_owned),
+                ),
+                None if operation == "typing" => (
+                    request_body["channel_id"]
+                        .as_str()
+                        .unwrap_or(CHANNEL)
+                        .to_owned(),
+                    request_body["root_id"]
+                        .as_str()
+                        .or_else(|| request_body["parent_id"].as_str())
+                        .map(str::to_owned),
+                ),
+                None => (String::new(), None),
             };
-            let channel_id = body["channel_id"].as_str().unwrap_or(CHANNEL);
-            let thread = body["root_id"]
-                .as_str()
-                .or_else(|| body["parent_id"].as_str())
-                .map(str::to_owned);
             self.observed.lock().push(WireObservation {
                 feature,
                 operation: operation.into(),
                 channel: account(self.id),
                 conversation: ConversationRef {
-                    id: channel_id.into(),
+                    id: channel_id,
                     thread_id: thread.clone(),
                     ..Default::default()
                 },
@@ -606,7 +723,7 @@ impl LongTailFixture {
                 thread_id: thread,
                 payload_kinds: kinds,
                 platform_message_ids: message_ids,
-                request: body,
+                request: request_body,
             });
         }
     }
@@ -1066,27 +1183,119 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Reactions => {
-                self.refused(ChannelReaction::send_reaction(
+                if !channel.declared_capabilities().reactions {
+                    return self
+                        .refused(ChannelReaction::send_reaction(
+                            channel,
+                            &account(self.id),
+                            &target,
+                            "m1",
+                            &tinychannels_bus::channel::ChannelReaction::default(),
+                            false,
+                        ))
+                        .await;
+                }
+                let setup = ChannelAdapter::send(
+                    channel,
+                    self.intent(
+                        feature,
+                        OutboundPayload::Text {
+                            text: "reaction target".into(),
+                        },
+                    ),
+                )
+                .await?;
+                let message_id = setup
+                    .receipt
+                    .primary_platform_message_id
+                    .as_deref()
+                    .ok_or_else(|| crate::providers::native::pre_dispatch("missing post ID"))?;
+                let before = self.request_count().await;
+                ChannelReaction::send_reaction(
                     channel,
                     &account(self.id),
                     &target,
-                    "m1",
-                    &tinychannels_bus::channel::ChannelReaction::default(),
+                    message_id,
+                    &tinychannels_bus::channel::ChannelReaction {
+                        value: "thumbsup".into(),
+                        custom_emoji_id: None,
+                    },
                     false,
-                ))
-                .await
+                )
+                .await?;
+                self.record(feature, before).await;
+                Ok(None)
             }
             Feature::Edit => {
-                self.refused(ChannelEdit::edit(
+                if !channel
+                    .declared_capabilities()
+                    .actions
+                    .supported
+                    .iter()
+                    .any(|action| action == "edit")
+                {
+                    return self
+                        .refused(ChannelEdit::edit(
+                            channel,
+                            &MessageReceipt::default(),
+                            self.intent(feature, OutboundPayload::Text { text: "e".into() }),
+                        ))
+                        .await;
+                }
+                let setup = ChannelAdapter::send(
                     channel,
-                    &MessageReceipt::default(),
-                    self.intent(feature, OutboundPayload::Text { text: "e".into() }),
-                ))
-                .await
+                    self.intent(
+                        feature,
+                        OutboundPayload::Text {
+                            text: "edit target".into(),
+                        },
+                    ),
+                )
+                .await?;
+                let before = self.request_count().await;
+                let receipt = ChannelEdit::edit(
+                    channel,
+                    &setup.receipt,
+                    self.intent(
+                        feature,
+                        OutboundPayload::Text {
+                            text: "edited text".into(),
+                        },
+                    ),
+                )
+                .await?;
+                self.record(feature, before).await;
+                Ok(Some(ChannelSendOutcome {
+                    receipt,
+                    error: None,
+                }))
             }
             Feature::Delete => {
-                self.refused(ChannelDelete::delete(channel, &MessageReceipt::default()))
-                    .await
+                if !channel
+                    .declared_capabilities()
+                    .actions
+                    .supported
+                    .iter()
+                    .any(|action| action == "delete")
+                {
+                    return self
+                        .refused(ChannelDelete::delete(channel, &MessageReceipt::default()))
+                        .await;
+                }
+                let setup = ChannelAdapter::send(
+                    channel,
+                    self.intent(
+                        feature,
+                        OutboundPayload::Text {
+                            text: "delete target".into(),
+                        },
+                    ),
+                )
+                .await?;
+                let before = self.request_count().await;
+                ChannelDelete::delete(channel, &setup.receipt).await?;
+                self.record(feature, before).await;
+                Ok(None)
             }
             Feature::StreamingDraft => {
                 self.refused(ChannelStreamingDraft::upsert_draft(
@@ -1101,6 +1310,10 @@ impl AdapterFixture for LongTailFixture {
             Feature::VoiceIn | Feature::InboundReactions | Feature::ReadReceipts => {
                 unsupported_result()
             }
+            Feature::ManagedReaction
+            | Feature::ManagedThreadCreate
+            | Feature::ManagedThreadUpdate
+            | Feature::ManagedThreadList => Err(ChannelSendError::default()),
         }
     }
 }
@@ -1119,6 +1332,45 @@ async fn the_mattermost_adapter_passes_the_full_conformance_matrix() {
     assert_eq!(results.len(), Feature::ALL.len());
     let failed = failures(&results);
     assert!(failed.is_empty(), "conformance failures: {failed:#?}");
+    check_feature(&fixture, Feature::Reactions)
+        .await
+        .expect("Mattermost reaction fixture should pass when replayed alone");
+    let observations = fixture.observations();
+    let reaction = observations
+        .iter()
+        .find(|observation| observation.feature == Feature::Reactions)
+        .expect("Mattermost reaction must have an actual wire observation");
+    assert_eq!(reaction.operation, "reaction_send");
+    assert!(
+        reaction.request["post_id"]
+            .as_str()
+            .is_some_and(|id| id.parse::<u64>().is_ok())
+    );
+    assert_eq!(reaction.request["emoji_name"], "thumbsup");
+    check_feature(&fixture, Feature::Edit)
+        .await
+        .expect("Mattermost edit fixture should pass when replayed alone");
+    let observations = fixture.observations();
+    let edit = observations
+        .iter()
+        .find(|observation| observation.feature == Feature::Edit)
+        .expect("Mattermost edit must have an actual wire observation");
+    assert_eq!(edit.operation, "edit");
+    assert_eq!(edit.request["message"], "edited text");
+    assert_eq!(edit.request["id"], edit.platform_message_ids[0]);
+    check_feature(&fixture, Feature::Delete)
+        .await
+        .expect("Mattermost delete fixture should pass when replayed alone");
+    let observations = fixture.observations();
+    let delete = observations
+        .iter()
+        .find(|observation| observation.feature == Feature::Delete)
+        .expect("Mattermost delete must have an actual wire observation");
+    assert_eq!(delete.operation, "delete");
+    assert_eq!(
+        delete.request["path"],
+        format!("/api/v4/posts/{}", delete.platform_message_ids[0])
+    );
 }
 
 #[tokio::test]
