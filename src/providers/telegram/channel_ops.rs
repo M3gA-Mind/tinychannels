@@ -197,6 +197,26 @@ pub(super) fn response_status_ok(value: &serde_json::Value) -> bool {
 }
 
 impl TelegramChannel {
+    fn supports_edit(&self) -> bool {
+        true
+    }
+
+    fn supports_reply_to_id(&self) -> bool {
+        true
+    }
+
+    fn supports_thread_id(&self) -> bool {
+        true
+    }
+
+    fn supports_draft_updates(&self) -> bool {
+        self.stream_mode != StreamMode::Off
+    }
+
+    fn supports_progressive_edits(&self) -> bool {
+        self.supports_draft_updates()
+    }
+
     pub(crate) async fn health_status(&self) -> bool {
         let timeout_duration = Duration::from_secs(5);
 
@@ -2907,11 +2927,11 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
     }
 
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.capabilities()
+        TelegramChannel::declared_capabilities(self)
     }
 
     fn proactive_target(&self) -> Option<String> {
-        Channel::proactive_target(self)
+        TelegramChannel::proactive_target(self)
     }
 
     async fn start(

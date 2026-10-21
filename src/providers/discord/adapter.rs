@@ -250,7 +250,11 @@ impl ChannelAdapter for DiscordChannel {
     }
 
     fn proactive_target(&self) -> Option<String> {
-        crate::traits::Channel::proactive_target(self)
+        self.channel_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|channel| !channel.is_empty())
+            .map(str::to_owned)
     }
 
     async fn start(
