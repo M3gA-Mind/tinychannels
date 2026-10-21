@@ -103,14 +103,23 @@ async fn configured_capabilities(
 pub(crate) struct Channels {
     pub(crate) host: HostChannels,
     email: EmailSender,
+    media_uploads: Arc<crate::media::MediaUploads>,
+    media_reads: Arc<crate::media::MediaReads>,
     progressive: Arc<crate::progressive::Replies>,
     /// Shared with each listener task so it can retire its own entry.
     pub(crate) running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    provider_activations: Mutex<HashMap<String, ProviderActivation>>,
     relays: Arc<Relays>,
     pub(crate) terminal: AtomicBool,
     runtimes: Option<Arc<crate::runtime::Runtimes>>,
     shutdown_task: Mutex<Option<JoinHandle<BusResult<()>>>>,
     delivery_admission: Arc<Mutex<()>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProviderActivation {
+    generation: String,
+    media_account_scope: Option<String>,
 }
 
 struct ModuleDeliveryHandler {
@@ -129,12 +138,31 @@ impl Channels {
             relays: Arc::new(Relays::new(host.clone())),
             host,
             email: EmailSender::new(),
+            media_uploads: Arc::new(crate::media::MediaUploads::default()),
+            media_reads: Arc::new(crate::media::MediaReads::default()),
             running,
+            provider_activations: Mutex::new(HashMap::new()),
             terminal: AtomicBool::new(false),
             runtimes,
             shutdown_task: Mutex::new(None),
             delivery_admission: Arc::new(Mutex::new(())),
         }
+    }
+
+    async fn media_activation(&self, instance: &str) -> BusResult<ProviderActivation> {
+        let running = self.running.lock().await;
+        if running
+            .get(instance)
+            .is_none_or(|provider| provider.is_finished())
+        {
+            return Err(BusError::failed("media provider instance is not running"));
+        }
+        self.provider_activations
+            .lock()
+            .await
+            .get(instance)
+            .cloned()
+            .ok_or_else(|| BusError::failed("media provider activation is unavailable"))
     }
 
     async fn start_channel_inner(
@@ -162,8 +190,13 @@ impl Channels {
             });
         }
 
+        let media_account_scope = crate::provider::configured_media_account_scope(&name, &config);
         let hooks = Arc::new(Hooks::default());
-        let owner_host: Arc<dyn ChannelHost> = hooks.host(self.host.clone(), name.clone());
+        let owner_host: Arc<dyn ChannelHost> = hooks.host(
+            self.host.clone(),
+            name.clone(),
+            media_account_scope.clone(),
+        );
         let built = build_channels(&config, &owner_host, http);
         let channel = built
             .into_iter()
@@ -195,6 +228,13 @@ impl Channels {
             None => Running::start(channel, hooks, self.host.clone()),
         };
         running.insert(name.clone(), provider);
+        self.provider_activations.lock().await.insert(
+            name.clone(),
+            ProviderActivation {
+                generation: uuid::Uuid::new_v4().simple().to_string(),
+                media_account_scope,
+            },
+        );
         drop(running);
         finish_start_admission(
             &self.host,
