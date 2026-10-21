@@ -2889,6 +2889,47 @@ async fn telegram_v1_preparation_splits_topic_address_and_preserves_parent_reply
     );
     assert_eq!(prepared.intent.reply_to_id.as_deref(), Some("100"));
     assert_eq!(prepared.intent.thread_id, None);
+
+    let topic_only = channels
+        .prepare_outbound_intent(
+            "telegram".into(),
+            ChannelMessagePreparation::Typed(SendMessage::new("topic body", "-200:42")),
+        )
+        .await
+        .unwrap();
+    assert_eq!(topic_only.intent.conversation_id, "-200");
+    assert_eq!(
+        topic_only
+            .intent
+            .conversation_ref
+            .as_ref()
+            .and_then(|value| value.topic_id.as_deref()),
+        Some("42")
+    );
+    assert_eq!(topic_only.intent.reply_to_id, None);
+
+    let canonical = tinychannels_bus::ChannelOutboundIntent {
+        channel_id: "telegram".into(),
+        conversation_id: "-200:42".into(),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            id: "-200:42".into(),
+            topic_id: Some("explicit-topic".into()),
+            ..Default::default()
+        }),
+        reply_to_id: None,
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: "canonical body".into(),
+        },
+        ..Default::default()
+    };
+    let canonical_prepared = channels
+        .prepare_outbound_intent(
+            "telegram".into(),
+            ChannelMessagePreparation::Intent(canonical.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(canonical_prepared.intent, canonical);
 }
 
 struct OutboundOnlyFixture(tokio::sync::mpsc::Sender<SendMessage>);
