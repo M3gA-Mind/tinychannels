@@ -11,7 +11,7 @@ fn discord_units(text: &str) -> usize {
 #[test]
 fn discord_channel_name() {
     let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false);
-    assert_eq!(ch.name(), "discord");
+    assert_eq!(ChannelAdapter::descriptor(&ch).id, "discord");
 }
 
 #[test]
@@ -309,7 +309,9 @@ fn typing_handle_starts_as_none() {
 async fn start_typing_sets_handle() {
     let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
         .with_api_base("http://127.0.0.1:9");
-    let _ = ch.start_typing("123456").await;
+    crate::channel::ChannelTyping::start_typing(&ch, "123456")
+        .await
+        .unwrap();
     let guard = ch.typing_handle.lock();
     assert!(guard.is_some());
 }
@@ -318,8 +320,12 @@ async fn start_typing_sets_handle() {
 async fn stop_typing_clears_handle() {
     let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
         .with_api_base("http://127.0.0.1:9");
-    let _ = ch.start_typing("123456").await;
-    let _ = ch.stop_typing("123456").await;
+    crate::channel::ChannelTyping::start_typing(&ch, "123456")
+        .await
+        .unwrap();
+    crate::channel::ChannelTyping::stop_typing(&ch, "123456")
+        .await
+        .unwrap();
     let guard = ch.typing_handle.lock();
     assert!(guard.is_none());
 }
@@ -328,16 +334,24 @@ async fn stop_typing_clears_handle() {
 async fn stop_typing_is_idempotent() {
     let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
         .with_api_base("http://127.0.0.1:9");
-    assert!(ch.stop_typing("123456").await.is_ok());
-    assert!(ch.stop_typing("123456").await.is_ok());
+    assert!(crate::channel::ChannelTyping::stop_typing(&ch, "123456")
+        .await
+        .is_ok());
+    assert!(crate::channel::ChannelTyping::stop_typing(&ch, "123456")
+        .await
+        .is_ok());
 }
 
 #[tokio::test]
 async fn start_typing_replaces_existing_task() {
     let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
         .with_api_base("http://127.0.0.1:9");
-    let _ = ch.start_typing("111").await;
-    let _ = ch.start_typing("222").await;
+    crate::channel::ChannelTyping::start_typing(&ch, "111")
+        .await
+        .unwrap();
+    crate::channel::ChannelTyping::start_typing(&ch, "222")
+        .await
+        .unwrap();
     let guard = ch.typing_handle.lock();
     assert!(guard.is_some());
 }
@@ -811,10 +825,14 @@ async fn start_typing_posts_typing_indicator_until_stopped() {
     );
     let base = spawn_http(app).await;
     let ch = channel_at(&base, None);
-    ch.start_typing("chan-9").await.unwrap();
+    crate::channel::ChannelTyping::start_typing(&ch, "chan-9")
+        .await
+        .unwrap();
     let hit = tokio::time::timeout(HANG_GUARD, rx.recv()).await.unwrap();
     assert_eq!(hit.as_deref(), Some("chan-9"));
-    ch.stop_typing("chan-9").await.unwrap();
+    crate::channel::ChannelTyping::stop_typing(&ch, "chan-9")
+        .await
+        .unwrap();
     assert!(ch.typing_handle.lock().is_none());
 }
 

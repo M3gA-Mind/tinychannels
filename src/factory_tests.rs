@@ -21,7 +21,7 @@ fn host() -> Arc<dyn ChannelHost> {
 fn names(config: &ChannelsConfig) -> Vec<String> {
     build_channels(config, &host(), &DefaultHttpClients)
         .iter()
-        .map(|channel| channel.descriptor().id)
+        .map(|channel| channel.name().to_owned())
         .collect()
 }
 
