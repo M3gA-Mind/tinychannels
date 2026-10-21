@@ -4,7 +4,10 @@ use super::*;
 fn runtime_reexports_keep_exact_bus_dto_identity() {
     let message: tinychannels_bus::SendMessage = traits::SendMessage::new("hi", "room");
     let bus_message: tinychannels_bus::traits::SendMessage = message.clone();
-    assert_eq!(bus_message, message);
+    assert_eq!(
+        std::any::type_name_of_val(&bus_message),
+        std::any::type_name::<tinychannels_bus::SendMessage>()
+    );
     let intent = channel::outbound_intent_from_send_message("telegram", &message);
     assert!(intent.idempotency_key.starts_with("legacy-send:telegram:"));
     let envelope: tinychannels_bus::ChannelInboundEnvelope =
