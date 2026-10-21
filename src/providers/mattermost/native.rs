@@ -443,7 +443,11 @@ fn mattermost_status_error(
         } else {
             SendErrorKind::BadFormat
         },
-        message: format!("Mattermost {operation} failed with HTTP {status}"),
+        message: if server_error {
+            format!("Mattermost {operation} failed")
+        } else {
+            format!("Mattermost {operation} was rejected")
+        },
         retryable: rate_limited || (server_error && !may_have_been_applied),
         sent_before_error: server_error && may_have_been_applied,
         retry_after: if rate_limited { retry_after } else { None },

@@ -353,14 +353,12 @@ async fn gateway_listener_identifies_heartbeats_filters_and_routes_private_and_g
             assert!(first.timestamp > 0);
             drop(rx);
             release_tx.send(()).unwrap();
-            assert!(
-                listening
-                    .await
-                    .unwrap()
-                    .unwrap_err()
-                    .to_string()
-                    .contains("connection closed")
-            );
+            let error = listening.await.unwrap().unwrap_err();
+            let error = error
+                .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+                .expect("typed listener failures retain their structured classification");
+            assert_eq!(error.0.kind, crate::channel::SendErrorKind::Transient);
+            assert!(error.0.retryable);
             websocket.await.unwrap();
         })
         .await

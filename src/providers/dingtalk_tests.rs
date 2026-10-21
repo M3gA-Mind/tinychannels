@@ -278,7 +278,7 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
             ("EVENT", "2", "group", " first "),
             ("CALLBACK", "1", "private", "second"),
         ] {
-            let data = json!({"senderStaffId": "alice", "conversationType": conversation_type, "conversationId": "group-id", "text": {"content": content}, "sessionWebhook": format!("https://example.test/{id}")});
+            let data = json!({"msgId": id, "senderStaffId": "alice", "conversationType": conversation_type, "conversationId": "group-id", "text": {"content": content}, "sessionWebhook": format!("https://example.test/{id}")});
             let data = if kind == "EVENT" {
                 data
             } else {
@@ -299,7 +299,7 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
         release_rx.await.unwrap();
         // A callback rejected by the supplied sink must not be acknowledged;
         // DingTalk can retry it after the host has recovered.
-        ws.send(Message::Text(json!({"type": "CALLBACK", "data": {"senderStaffId": "alice", "text": {"content": "closed"}}}).to_string().into())).await.unwrap();
+        ws.send(Message::Text(json!({"type": "CALLBACK", "data": {"msgId": "closed", "senderStaffId": "alice", "text": {"content": "closed"}}}).to_string().into())).await.unwrap();
         let terminal = tokio::time::timeout(std::time::Duration::from_secs(3), ws.next())
             .await
             .expect("rejected typed delivery should close the stream");

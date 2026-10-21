@@ -658,7 +658,12 @@ async fn listener_recovers_from_invalid_json_and_delivers_posts_in_time_order() 
             }})))
             .expect(1).mount(&server).await;
         drop(rx);
-        listener.await.unwrap().unwrap();
+        let error = listener.await.unwrap().unwrap_err();
+        let error = error
+            .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+            .expect("typed sink rejection remains a structured listener error");
+        assert_eq!(error.0.kind, crate::channel::SendErrorKind::Transient);
+        assert!(error.0.retryable);
         server.verify().await;
     }).await.unwrap();
 }
