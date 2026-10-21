@@ -406,11 +406,6 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
                     ids,
                 );
             }
-            Feature::Edit | Feature::Delete => {
-                return Err(unsupported(
-                    "native progressive controller fixture is not configured".into(),
-                ));
-            }
         }
         Ok(())
     }

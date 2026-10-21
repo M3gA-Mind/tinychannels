@@ -60,8 +60,6 @@ pub enum NativeControllerFeature {
     ThreadCreate,
     ThreadUpdate,
     ThreadList,
-    Edit,
-    Delete,
 }
 
 impl NativeControllerFeature {
@@ -80,8 +78,6 @@ impl NativeControllerFeature {
             Self::ThreadCreate => action("thread-create"),
             Self::ThreadUpdate => action("thread-update"),
             Self::ThreadList => action("thread-list"),
-            Self::Edit => action("edit"),
-            Self::Delete => action("delete") || action("unsend"),
         }
     }
 }
