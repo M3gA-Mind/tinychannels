@@ -161,7 +161,7 @@ impl WhatsAppWebChannel {
             ));
         }
         self.recipient_to_jid(conversation)
-            .map_err(|_| WaFailure::rejected("WhatsApp recipient address is invalid"))
+            .map_err(|_| WaFailure::bad_format("WhatsApp recipient address is invalid"))
     }
 
     pub(super) fn live_client(&self) -> Result<Arc<dyn OutboundClient>, WaFailure> {
