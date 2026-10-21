@@ -923,6 +923,11 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
             thread: true,
             ..Default::default()
         });
+        capabilities.reactions = true;
+        capabilities
+            .actions
+            .supported
+            .extend(["edit", "delete"].map(String::from));
         if self.media_repository.is_some() {
             capabilities
                 .content
@@ -996,6 +1001,38 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
             retryable: true,
             ..Default::default()
         })
+    }
+
+    async fn react(
+        &self,
+        channel: &tinychannels_bus::ChannelRef,
+        conversation: &tinychannels_bus::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::channel::ChannelReaction,
+        remove: bool,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        use crate::providers::native::NativeProvider;
+
+        crate::providers::native::edit::check_channel(self, channel)?;
+        NativeProvider::react(self, conversation, provider_message_id, reaction, remove).await
+    }
+
+    async fn edit(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<
+        tinychannels_bus::channel::MessageReceipt,
+        tinychannels_bus::channel::ChannelSendError,
+    > {
+        crate::providers::native::edit(self, receipt, &intent).await
+    }
+
+    async fn delete(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        crate::providers::native::delete(self, receipt).await
     }
 
     async fn start_listener(

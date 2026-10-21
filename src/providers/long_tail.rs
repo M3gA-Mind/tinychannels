@@ -142,6 +142,35 @@ pub(crate) trait LongTail: Send + Sync {
         &self,
         message: &ChannelOutboundMessage,
     ) -> Result<ChannelSendOutcome, ChannelSendError>;
+
+    /// Send or remove a platform-native reaction when this provider exposes it.
+    async fn react(
+        &self,
+        _channel: &tinychannels_bus::ChannelRef,
+        _conversation: &tinychannels_bus::ConversationRef,
+        _provider_message_id: &str,
+        _reaction: &tinychannels_bus::channel::ChannelReaction,
+        _remove: bool,
+    ) -> Result<(), ChannelSendError> {
+        Err(unsupported::<Self>("reactions"))
+    }
+
+    /// Edit a previously returned provider receipt when supported.
+    async fn edit(
+        &self,
+        _receipt: &tinychannels_bus::channel::MessageReceipt,
+        _intent: ChannelOutboundIntent,
+    ) -> Result<tinychannels_bus::channel::MessageReceipt, ChannelSendError> {
+        Err(unsupported::<Self>("message edits"))
+    }
+
+    /// Delete a previously returned provider receipt when supported.
+    async fn delete(
+        &self,
+        _receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> Result<(), ChannelSendError> {
+        Err(unsupported::<Self>("message deletion"))
+    }
 }
 
 pub(crate) fn unsupported<T: LongTail + ?Sized>(operation: &str) -> ChannelSendError {
@@ -153,7 +182,7 @@ pub(crate) fn unsupported<T: LongTail + ?Sized>(operation: &str) -> ChannelSendE
     }
 }
 
-fn check_channel<T: LongTail + ?Sized>(
+pub(super) fn check_channel<T: LongTail + ?Sized>(
     channel_id: &str,
     channel_ref: Option<&tinychannels_bus::ChannelRef>,
 ) -> Result<(), ChannelSendError> {
@@ -304,15 +333,25 @@ macro_rules! impl_long_tail_adapter {
         impl $crate::channel::ChannelReaction for $ty {
             async fn send_reaction(
                 &self,
-                _channel: &tinychannels_bus::channel::ChannelRef,
-                _conversation: &tinychannels_bus::channel::ConversationRef,
-                _provider_message_id: &str,
-                _reaction: &tinychannels_bus::channel::ChannelReaction,
-                _remove: bool,
+                channel: &tinychannels_bus::channel::ChannelRef,
+                conversation: &tinychannels_bus::channel::ConversationRef,
+                provider_message_id: &str,
+                reaction: &tinychannels_bus::channel::ChannelReaction,
+                remove: bool,
             ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-                Err($crate::providers::long_tail::unsupported::<$ty>(
-                    "reactions",
-                ))
+                $crate::providers::long_tail::check_channel::<$ty>(
+                    &<$ty as $crate::providers::long_tail::LongTail>::ID,
+                    Some(channel),
+                )?;
+                $crate::providers::long_tail::LongTail::react(
+                    self,
+                    channel,
+                    conversation,
+                    provider_message_id,
+                    reaction,
+                    remove,
+                )
+                .await
             }
         }
 
@@ -320,15 +359,13 @@ macro_rules! impl_long_tail_adapter {
         impl $crate::channel::ChannelEdit for $ty {
             async fn edit(
                 &self,
-                _receipt: &tinychannels_bus::channel::MessageReceipt,
-                _intent: tinychannels_bus::ChannelOutboundIntent,
+                receipt: &tinychannels_bus::channel::MessageReceipt,
+                intent: tinychannels_bus::ChannelOutboundIntent,
             ) -> Result<
                 tinychannels_bus::channel::MessageReceipt,
                 tinychannels_bus::channel::ChannelSendError,
             > {
-                Err($crate::providers::long_tail::unsupported::<$ty>(
-                    "message edits",
-                ))
+                $crate::providers::long_tail::LongTail::edit(self, receipt, intent).await
             }
         }
 
@@ -336,11 +373,9 @@ macro_rules! impl_long_tail_adapter {
         impl $crate::channel::ChannelDelete for $ty {
             async fn delete(
                 &self,
-                _receipt: &tinychannels_bus::channel::MessageReceipt,
+                receipt: &tinychannels_bus::channel::MessageReceipt,
             ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-                Err($crate::providers::long_tail::unsupported::<$ty>(
-                    "message deletion",
-                ))
+                $crate::providers::long_tail::LongTail::delete(self, receipt).await
             }
         }
 

@@ -458,6 +458,38 @@ impl HostBackend {
         Ok(Some(native))
     }
 
+    /// A configured Mattermost bot whose controller operations use the
+    /// provider's native v4 API rather than the managed backend.
+    fn mattermost_native(
+        &self,
+        config: &ChannelsConfig,
+        channel: &str,
+    ) -> anyhow::Result<Option<tinychannels::providers::MattermostChannel>> {
+        use tinychannels::factory::HttpClientFactory as _;
+        if channel != "mattermost" {
+            return Ok(None);
+        }
+        let Some(mattermost) = config
+            .mattermost
+            .as_ref()
+            .filter(|mattermost| !mattermost.bot_token.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        let clients = tinychannels::factory::ConfiguredHttpClients::new(self.proxy.clone())?;
+        Ok(Some(
+            tinychannels::providers::MattermostChannel::with_http_client(
+                mattermost.url.clone(),
+                mattermost.bot_token.clone(),
+                mattermost.channel_id.clone(),
+                mattermost.allowed_users.clone(),
+                mattermost.thread_replies.unwrap_or(true),
+                mattermost.mention_only.unwrap_or(false),
+                clients.client_for("channel.mattermost"),
+            ),
+        ))
+    }
+
     async fn invoke(&self, request: ChannelBackendRequest) -> anyhow::Result<ChannelBackendResult> {
         self.host
             .dispatch_controller_backend(request)
@@ -766,6 +798,36 @@ impl ChannelBackend for HostBackend {
                 &slack,
                 &tinychannels_bus::channel::ChannelRef {
                     id: "slack".into(),
+                    account_id: None,
+                },
+                &tinychannels_bus::channel::ConversationRef {
+                    kind: tinychannels_bus::ConversationKind::Channel,
+                    id: request.channel_id,
+                    ..Default::default()
+                },
+                &request.message_id,
+                &reaction,
+                request.remove,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!(error.message))?;
+            return Ok(ChannelReactionResult {
+                success: true,
+                ..Default::default()
+            });
+        }
+        if let Some(mattermost) = self.mattermost_native(config, channel)? {
+            let request =
+                tinychannels::providers::discord::DiscordReactionRequest::from_value(&reaction)
+                    .map_err(anyhow::Error::msg)?;
+            let reaction = tinychannels_bus::channel::ChannelReaction {
+                value: request.emoji.unwrap_or_default(),
+                custom_emoji_id: request.custom_emoji_id,
+            };
+            tinychannels::channel::ChannelReaction::send_reaction(
+                &mattermost,
+                &tinychannels_bus::channel::ChannelRef {
+                    id: "mattermost".into(),
                     account_id: None,
                 },
                 &tinychannels_bus::channel::ConversationRef {
