@@ -13,6 +13,7 @@ use tokio_tungstenite::tungstenite::Message;
 struct SocketDelivery {
     kind: String,
     payload: Value,
+    envelope_id: Option<String>,
     accepted: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -93,7 +94,12 @@ impl SlackChannel {
         while let Some(delivery) = deliveries.recv().await {
             loop {
                 match self
-                    .handle_socket_delivery(&delivery.kind, &delivery.payload, sink)
+                    .handle_socket_delivery(
+                        &delivery.kind,
+                        &delivery.payload,
+                        delivery.envelope_id.as_deref(),
+                        sink,
+                    )
                     .await
                 {
                     Ok(()) => {
@@ -157,21 +163,21 @@ impl SlackChannel {
                             }
                             let payload = envelope.get("payload").unwrap_or(&Value::Null);
                             if matches!(kind, "events_api" | "interactive") {
-                                let acknowledgement = envelope
+                                let envelope_id = envelope
                                     .get("envelope_id")
                                     .and_then(Value::as_str)
-                                    .map(str::to_owned)
-                                    .map(|id| {
-                                        let (accepted, wait_for_acceptance) = tokio::sync::oneshot::channel();
-                                        ((id.clone(), accepted), (id, wait_for_acceptance))
-                                    });
-                                let (accepted, wait_for_acceptance) = acknowledgement
-                                    .map(|(accepted, wait)| (Some(accepted), Some(wait)))
-                                    .unwrap_or((None, None));
+                                    .map(str::to_owned);
+                                let (accepted, wait_for_acceptance) = if let Some(id) = &envelope_id {
+                                    let (accepted, wait) = tokio::sync::oneshot::channel();
+                                    (Some(accepted), Some((id.clone(), wait)))
+                                } else {
+                                    (None, None)
+                                };
                                 let delivery = SocketDelivery {
                                     kind: kind.to_owned(),
                                     payload: payload.clone(),
-                                    accepted: accepted.map(|(_, sender)| sender),
+                                    envelope_id,
+                                    accepted,
                                 };
                                 match delivery_tx.try_send(delivery) {
                                     Ok(()) => {

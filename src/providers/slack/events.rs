@@ -140,8 +140,13 @@ impl SlackChannel {
         &self,
         kind: &str,
         payload: &Value,
+        envelope_id: Option<&str>,
         sink: &(dyn ChannelInboundSink + Send + Sync),
     ) -> Result<(), ChannelSendError> {
+        let dedupe_key = envelope_id.map(|id| format!("socket-envelope:{id}"));
+        if dedupe_key.as_deref().is_some_and(|key| self.has_seen(key)) {
+            return Ok(());
+        }
         match kind {
             "events_api" => {
                 let event = payload.get("event").unwrap_or(&Value::Null);
@@ -149,6 +154,9 @@ impl SlackChannel {
             }
             "interactive" => self.handle_interactive_to_sink(payload, Some(sink)).await?,
             _ => {}
+        }
+        if let Some(dedupe_key) = dedupe_key {
+            self.mark_seen(dedupe_key);
         }
         Ok(())
     }
