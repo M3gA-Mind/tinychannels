@@ -26,7 +26,7 @@ use tinychannels_bus::channel::{
     ChannelReaction, ChannelSendError, ConversationRef, SendErrorKind,
 };
 
-use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
+use crate::host::{EventSink, MediaRepository, Transcriber};
 pub(crate) use outbound::{FileStep, Limits};
 
 /// An explicit, non-retryable "this adapter does not do that" result.
@@ -68,7 +68,6 @@ impl std::error::Error for NativeFailure {}
 #[derive(Clone, Default)]
 pub(crate) struct HostPorts {
     pub(crate) media_repository: Option<Arc<dyn MediaRepository>>,
-    pub(crate) voice_media_store: Option<Arc<dyn VoiceMediaStore>>,
     pub(crate) transcriber: Option<Arc<dyn Transcriber>>,
     pub(crate) voice_synthesis: bool,
     pub(crate) events: Option<Arc<dyn EventSink>>,
@@ -180,7 +179,6 @@ pub(crate) trait NativeProvider: Send + Sync {
     fn display(&self) -> &'static str;
     fn limits(&self) -> Limits;
     fn media_repository(&self) -> Option<&Arc<dyn MediaRepository>>;
-    fn voice_media_store(&self) -> Option<&Arc<dyn VoiceMediaStore>>;
     fn voice_synthesis(&self) -> bool;
     /// Whether accompanying text is preserved as a voice caption instead of a
     /// separate ordered text message.
@@ -250,20 +248,6 @@ pub(crate) trait NativeProvider: Send + Sync {
             "{} draft finalization",
             self.display()
         )))
-    }
-
-    /// Optional raw webhook delivery owned by the provider. The default keeps
-    /// existing providers on their compatibility ingress until migrated.
-    fn supports_webhook_delivery(&self) -> bool {
-        false
-    }
-
-    async fn deliver_webhook(
-        &self,
-        _signature: Option<&str>,
-        _body: &[u8],
-    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
-        anyhow::bail!("provider has no typed webhook ingress")
     }
 
     /// Provider-owned health state for the typed adapter descriptor. Providers
@@ -383,19 +367,6 @@ macro_rules! native_v2_adapter {
 
             fn proactive_target(&self) -> Option<String> {
                 $crate::providers::native::NativeProvider::proactive_target(self)
-            }
-
-            fn supports_webhook_delivery(&self) -> bool {
-                $crate::providers::native::NativeProvider::supports_webhook_delivery(self)
-            }
-
-            async fn deliver_webhook(
-                &self,
-                signature: Option<&str>,
-                body: &[u8],
-            ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
-                $crate::providers::native::NativeProvider::deliver_webhook(self, signature, body)
-                    .await
             }
 
             async fn start(

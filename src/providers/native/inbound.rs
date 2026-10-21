@@ -3,7 +3,7 @@
 
 use crate::host::{
     EventSink, MediaMetadata, MediaRepository, MediaStoreRequest, Transcriber,
-    TranscriptionRequest, VoiceMediaRequest, VoiceMediaStore,
+    TranscriptionRequest,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -19,7 +19,6 @@ pub(crate) struct Ingest<'a> {
     pub(crate) provider: &'static str,
     pub(crate) channel: ChannelRef,
     pub(crate) repository: Option<&'a Arc<dyn MediaRepository>>,
-    pub(crate) voice_store: Option<&'a Arc<dyn VoiceMediaStore>>,
     /// Host speech-to-text; without one the shared ingress transcribes later.
     pub(crate) transcriber: Option<&'a Arc<dyn Transcriber>>,
     pub(crate) file_bytes: u64,
@@ -43,7 +42,6 @@ pub(crate) struct InboundFile {
 #[derive(Default)]
 pub(crate) struct Ingested {
     pub(crate) parts: Vec<ContentPart>,
-    pub(crate) voice: Option<VoiceNote>,
 }
 
 /// The media kind a MIME type belongs to.
@@ -142,7 +140,7 @@ impl Ingest<'_> {
             );
             return;
         }
-        let voice_clip = file.voice && kind == MediaKind::Audio && self.voice_store.is_some();
+        let voice_clip = file.voice && kind == MediaKind::Audio;
         let limit = if voice_clip {
             self.voice_bytes
         } else {
@@ -155,65 +153,6 @@ impl Ingest<'_> {
             );
             return;
         }
-        if voice_clip && let Some(store) = self.voice_store {
-            if into.voice.is_some() {
-                tracing::debug!(provider, "[native] only the first voice clip is kept");
-                return;
-            }
-            let codec = codec_for(&mime);
-            let stored = store
-                .store_voice(VoiceMediaRequest {
-                    audio_base64: BASE64.encode(&file.bytes),
-                    mime_type: mime.clone(),
-                    codec: codec.clone(),
-                    duration_ms: file.duration_ms,
-                    file_name: file.name.clone(),
-                    direction: HostVoiceMediaDirection::Inbound,
-                    scope: self.scope(conversation, message_id),
-                })
-                .await;
-            let Ok(stored) = stored else {
-                tracing::warn!(provider, "[native] voice clip could not be stored");
-                return;
-            };
-            let mut media = stored.media;
-            if media
-                .opaque_id
-                .as_deref()
-                .is_none_or(|id| id.trim().is_empty())
-            {
-                tracing::warn!(provider, "[native] voice store returned no reference");
-                return;
-            }
-            media.url = None;
-            media.path = None;
-            media.local_cache_path = None;
-            media.kind = MediaKind::Audio;
-            media.content_type = Some(mime);
-            media.codec = codec.clone();
-            let transcript = match file.transcript {
-                Some(transcript) => Some(transcript),
-                None => {
-                    self.transcribe(
-                        conversation,
-                        message_id,
-                        &file.bytes,
-                        &mime_for(&media),
-                        &file.name,
-                    )
-                    .await
-                }
-            };
-            into.voice = Some(VoiceNote {
-                media,
-                codec,
-                duration_ms: file.duration_ms,
-                waveform: None,
-                push_to_talk: false,
-                transcript,
-            });
-            return;
-        }
         let Some(repository) = self.repository else {
             tracing::debug!(
                 provider,
@@ -221,18 +160,19 @@ impl Ingest<'_> {
             );
             return;
         };
+        let codec = voice_clip.then(|| codec_for(&mime)).flatten();
         let stored = repository
             .store_media(MediaStoreRequest {
                 metadata: MediaMetadata {
                     scope: self.scope(conversation, message_id),
                     kind,
-                    content_type: mime,
+                    content_type: mime.clone(),
                     file_name: file.name.clone(),
                     duration_ms: file.duration_ms,
-                    codec: None,
-                    voice_direction: None,
+                    codec: codec.clone(),
+                    voice_direction: voice_clip.then_some(HostVoiceMediaDirection::Inbound),
                     dedupe_key: Some(file.dedupe_key),
-                    max_bytes: self.file_bytes,
+                    max_bytes: limit,
                 },
                 bytes: file.bytes,
             })
@@ -244,6 +184,41 @@ impl Ingest<'_> {
             );
             return;
         };
+        if voice_clip {
+            if media
+                .opaque_id
+                .as_deref()
+                .is_none_or(|id| id.trim().is_empty())
+            {
+                tracing::warn!(provider, "[native] media repository returned no opaque voice reference");
+                return;
+            }
+            let mut media = media;
+            media.url = None;
+            media.path = None;
+            media.local_cache_path = None;
+            media.kind = MediaKind::Audio;
+            media.content_type = Some(mime.clone());
+            media.codec = codec.clone();
+            let transcript = match file.transcript {
+                Some(transcript) => Some(transcript),
+                None => {
+                    self.transcribe(conversation, message_id, &file.bytes, &mime, &file.name)
+                        .await
+                }
+            };
+            into.parts.push(ContentPart::VoiceNote {
+                voice_note: VoiceNote {
+                    media,
+                    codec,
+                    duration_ms: file.duration_ms,
+                    waveform: None,
+                    push_to_talk: false,
+                    transcript,
+                },
+            });
+            return;
+        }
         into.parts.push(match kind {
             MediaKind::Image => ContentPart::Image {
                 media,
@@ -287,7 +262,7 @@ pub(crate) fn media_of(parts: &[ContentPart]) -> Vec<MediaReference> {
         .collect()
 }
 
-/// Text, the voice note and attachments as one ordered part list.
+/// Text followed by attachments in the order in which the provider received them.
 pub(crate) fn assemble(text: &str, markdown: Option<&str>, ingested: Ingested) -> Vec<ContentPart> {
     let mut parts = Vec::new();
     if !text.trim().is_empty() {
@@ -295,9 +270,6 @@ pub(crate) fn assemble(text: &str, markdown: Option<&str>, ingested: Ingested) -
             text: text.to_owned(),
             markdown_dialect: markdown.map(str::to_owned),
         });
-    }
-    if let Some(voice_note) = ingested.voice {
-        parts.push(ContentPart::VoiceNote { voice_note });
     }
     parts.extend(ingested.parts);
     parts
