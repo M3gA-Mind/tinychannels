@@ -2172,12 +2172,11 @@ Ensure only one `openhuman` process is using this bot token."
                     } else {
                         false
                     };
-                    if !delivered {
-                        if let Some(tx) = &legacy_tx {
-                            if tx.send(msg).await.is_err() {
-                                return Ok(());
-                            }
-                        }
+                    if !delivered
+                        && let Some(tx) = &legacy_tx
+                        && tx.send(msg).await.is_err()
+                    {
+                        return Ok(());
                     }
                     commit_update(&mut offset);
                 }
