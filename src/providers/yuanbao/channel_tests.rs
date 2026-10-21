@@ -1,8 +1,8 @@
 use crate::channel::{ChannelStreamingDraft, ChannelTyping};
-use std::sync::Arc;
-use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
-use tinychannels_bus::channel::{ContentPart, MediaReference, OutboundContentPart};
 use crate::traits::SendMessage;
+use std::sync::Arc;
+use tinychannels_bus::channel::{ContentPart, MediaReference, OutboundContentPart};
+use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
 
 use super::*;
 use crate::channel::ChannelAdapter;

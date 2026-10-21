@@ -184,10 +184,7 @@ impl NativeProvider for YuanbaoChannel {
             OutboundPayload::NativeChannelData { data } => data
                 .get("content")
                 .and_then(serde_json::Value::as_str)
-                .filter(|_| {
-                    data.get("subject")
-                        .is_none_or(serde_json::Value::is_null)
-                })
+                .filter(|_| data.get("subject").is_none_or(serde_json::Value::is_null))
                 .map(str::to_owned)
                 .ok_or_else(|| {
                     crate::providers::native::unsupported(
