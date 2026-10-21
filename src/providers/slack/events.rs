@@ -123,7 +123,7 @@ impl SlackChannel {
         self.handle_event_to_sink(event, tx, None)
             .await
             .unwrap_or_else(|error| {
-                tracing::debug!(%error, "[slack] event delivery failed");
+                tracing::debug!(message = %error.message, "[slack] event delivery failed");
                 Flow::Continue
             })
     }
@@ -323,7 +323,12 @@ impl SlackChannel {
         };
         let event_id = format!("slack:edit:{message_id}:{event_ts}");
         self.publish_event(
-            Self::channel_event(event_id, ts_to_ms(event_ts), Some(conversation), kind),
+            Self::channel_event(
+                event_id.clone(),
+                ts_to_ms(event_ts),
+                Some(conversation),
+                kind,
+            ),
             typed_sink,
         )
         .await?;
@@ -435,7 +440,7 @@ impl SlackChannel {
     /// Handle one Socket Mode `interactive` payload (a Block Kit button press).
     pub(crate) async fn handle_interactive(&self, payload: &Value) {
         if let Err(error) = self.handle_interactive_to_sink(payload, None).await {
-            tracing::debug!(%error, "[slack] interactive event delivery failed");
+            tracing::debug!(message = %error.message, "[slack] interactive event delivery failed");
         }
     }
 

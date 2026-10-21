@@ -96,7 +96,7 @@ impl SlackChannel {
                 {
                     Ok(()) => break,
                     Err(error) => {
-                        tracing::warn!(%error, "[slack] typed ingress is waiting for sink acceptance");
+                        tracing::warn!(message = %error.message, "[slack] typed ingress is waiting for sink acceptance");
                         tokio::time::sleep(self.reconnect_backoff).await;
                     }
                 }
