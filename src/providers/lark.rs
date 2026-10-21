@@ -1219,6 +1219,18 @@ impl crate::providers::long_tail::LongTail for LarkChannel {
         self.native_declared_capabilities(text_capabilities(TextSpec::default()))
     }
 
+    async fn health_state(&self) -> &'static str {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.get_tenant_access_token(),
+        )
+        .await
+        {
+            Ok(Ok(_)) => "healthy",
+            Ok(Err(_)) | Err(_) => "unhealthy",
+        }
+    }
+
     async fn send_typed_message(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
