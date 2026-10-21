@@ -196,7 +196,7 @@ fn the_outbound_policy_gates_addressing_before_any_client_call() {
     let (open, _) = self::channel(&[]);
     assert!(matches!(
         open.admitted_jid("@@"),
-        Err(WaFailure::Rejected(_))
+        Err(WaFailure::BadFormat(_))
     ));
 }
 

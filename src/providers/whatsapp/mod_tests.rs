@@ -1054,7 +1054,7 @@ mod v2 {
         let error = crate::channel::ChannelTyping::start_typing(&channel, "+15550001111")
             .await
             .unwrap_err();
-        assert!(error.message.contains("anchor"));
+        assert_eq!(error.kind, crate::channel::SendErrorKind::Forbidden);
         assert!(matches!(
             crate::channel::ChannelTyping::start_typing(&channel, "+15550001111").await,
             Err(error) if !error.unsupported && !error.sent_before_error

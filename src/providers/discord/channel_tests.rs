@@ -730,7 +730,7 @@ async fn message_sink(
                     let content = body["content"].as_str().unwrap_or_default().to_string();
                     let _ = tx.send((channel_id, auth, content));
                     let body = if status.is_success() {
-                        r#"{"id":"message-123"}"#
+                        r#"{"id":"123456789012345678"}"#
                     } else {
                         "rate limited body"
                     };
