@@ -2123,14 +2123,13 @@ async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
         let (cancel, _) = watch::channel(false);
         let running = Arc::new(Running {
             media_account_scope: crate::provider::MediaScope::default(),
-            channel: Some(Arc::new(InteractionChannel::default())),
             provider_name: "interaction-fixture".into(),
             configured_instance: "interaction-fixture:account-a".into(),
             send,
             cancel,
             worker: Mutex::new(None),
             finished: Arc::new(AtomicBool::new(false)),
-            native_ports: None,
+            native_ports: NativePorts::test(Arc::new(InteractionChannel::default()), LongTailListenerMode::Webhook),
         });
         let waiter = tokio::spawn({
             let running = running.clone();
@@ -2170,14 +2169,13 @@ async fn configured_adapter_rejects_account_scope_mismatch_before_dispatch() {
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
         media_account_scope: crate::provider::MediaScope::default(),
-        channel: Some(Arc::new(InteractionChannel::default())),
         provider_name: "interaction-fixture".into(),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
         cancel,
         worker: Mutex::new(None),
         finished: Arc::new(AtomicBool::new(false)),
-        native_ports: None,
+        native_ports: NativePorts::test(Arc::new(InteractionChannel::default()), LongTailListenerMode::Webhook),
     });
     let adapter = running.adapter_handle();
     let error = adapter
@@ -2205,14 +2203,13 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
         media_account_scope: crate::provider::MediaScope::default(),
-        channel: Some(Arc::new(InteractionChannel::default())),
         provider_name: "interaction-fixture".into(),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
         cancel,
         worker: Mutex::new(None),
         finished: Arc::new(AtomicBool::new(false)),
-        native_ports: None,
+        native_ports: NativePorts::test(Arc::new(InteractionChannel::default()), LongTailListenerMode::Webhook),
     });
     let adapter = running.adapter_handle();
     let task = tokio::spawn(async move {
@@ -2274,14 +2271,13 @@ async fn send_configured_outcome(
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
         media_account_scope: crate::provider::MediaScope::default(),
-        channel: Some(Arc::new(InteractionChannel::default())),
         provider_name: "interaction-fixture".into(),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
         cancel,
         worker: Mutex::new(None),
         finished: Arc::new(AtomicBool::new(false)),
-        native_ports: None,
+        native_ports: NativePorts::test(Arc::new(InteractionChannel::default()), LongTailListenerMode::Webhook),
     });
     let adapter = running.adapter_handle();
     let task = tokio::spawn(async move {
@@ -3628,14 +3624,13 @@ async fn legacy_running_adapter_reports_status_and_refuses_second_start() {
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
         media_account_scope: MediaScope::default(),
-        channel: Some(Arc::new(InteractionChannel::default())),
         provider_name: "interaction-fixture".into(),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
         cancel,
         worker: Mutex::new(None),
         finished: Arc::new(AtomicBool::new(false)),
-        native_ports: None,
+        native_ports: NativePorts::test(Arc::new(InteractionChannel::default()), LongTailListenerMode::Webhook),
     });
     struct NullSink;
     #[async_trait::async_trait]
