@@ -90,10 +90,11 @@ fn event_context_access_preserves_every_historical_wire_shape() {
             event.context().request_id,
             historical["request_id"].as_str().unwrap()
         );
+        let original_timestamp = historical.get("ts").and_then(serde_json::Value::as_u64);
         event.context_mut().ts = Some(42);
-        let mut with_timestamp = serde_json::to_value(event).unwrap();
-        assert_eq!(with_timestamp["ts"], 42);
-        with_timestamp.as_object_mut().unwrap().remove("ts");
+        assert_eq!(event.context().ts, Some(42));
+        event.context_mut().ts = original_timestamp;
+        let with_timestamp = serde_json::to_value(event).unwrap();
         assert_eq!(with_timestamp, historical);
     }
 
@@ -101,10 +102,11 @@ fn event_context_access_preserves_every_historical_wire_shape() {
         serde_json::from_str::<Vec<serde_json::Value>>(ADDITIONAL_HISTORICAL_EVENTS).unwrap()
     {
         let mut event: WebChannelEvent = serde_json::from_value(fixture.clone()).unwrap();
+        let original_timestamp = fixture.get("ts").and_then(serde_json::Value::as_u64);
         event.context_mut().ts = Some(42);
-        let mut with_timestamp = serde_json::to_value(event).unwrap();
-        assert_eq!(with_timestamp["ts"], 42);
-        with_timestamp.as_object_mut().unwrap().remove("ts");
+        assert_eq!(event.context().ts, Some(42));
+        event.context_mut().ts = original_timestamp;
+        let with_timestamp = serde_json::to_value(event).unwrap();
         assert_eq!(with_timestamp, fixture);
     }
 }
