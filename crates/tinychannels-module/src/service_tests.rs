@@ -1093,7 +1093,13 @@ async fn confidential_media_bus_roundtrips_only_within_the_provider_turn_scope()
         .request_name(tinychannels_bus::BUS_NAME)
         .await
         .unwrap();
-    let client = server.clone();
+    let client = server
+        .proxy(
+            tinychannels_bus::BUS_NAME,
+            tinychannels_bus::OBJECT_PATH,
+            tinychannels_bus::BUS_NAME,
+        )
+        .unwrap();
     let scope = tinychannels_bus::HostVoiceScope {
         conversation: tinychannels_bus::ConversationRef {
             id: "room-7".into(),
@@ -1104,13 +1110,8 @@ async fn confidential_media_bus_roundtrips_only_within_the_provider_turn_scope()
     };
     let bytes = b"private media payload".to_vec();
     let upload = client
-        .call::<tinychannels_bus::MediaUploadHandle>(
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::methods::BEGIN_MEDIA_UPLOAD
-                .try_into()
-                .unwrap(),
+        .call_confidential::<tinychannels_bus::MediaUploadHandle>(
+            tinychannels_bus::methods::BEGIN_MEDIA_UPLOAD,
             tinychannels_bus::MediaUploadBegin {
                 instance: "fixture".into(),
                 scope: scope.clone(),
@@ -1126,13 +1127,8 @@ async fn confidential_media_bus_roundtrips_only_within_the_provider_turn_scope()
         .unwrap();
     assert_eq!(
         client
-            .call::<u32>(
-                tinychannels_bus::BUS_NAME.try_into().unwrap(),
-                tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
-                tinychannels_bus::BUS_NAME.try_into().unwrap(),
-                tinychannels_bus::methods::APPEND_MEDIA_UPLOAD_CHUNK
-                    .try_into()
-                    .unwrap(),
+            .call_confidential::<u32>(
+                tinychannels_bus::methods::APPEND_MEDIA_UPLOAD_CHUNK,
                 tinychannels_bus::MediaUploadChunk {
                     handle: upload.clone(),
                     sequence: 0,
@@ -1144,13 +1140,8 @@ async fn confidential_media_bus_roundtrips_only_within_the_provider_turn_scope()
         1
     );
     let media = client
-        .call::<tinychannels_bus::MediaUploadResult>(
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::methods::FINISH_MEDIA_UPLOAD
-                .try_into()
-                .unwrap(),
+        .call_confidential::<tinychannels_bus::MediaUploadResult>(
+            tinychannels_bus::methods::FINISH_MEDIA_UPLOAD,
             tinychannels_bus::MediaUploadFinish(upload),
         )
         .await
@@ -1168,13 +1159,8 @@ async fn confidential_media_bus_roundtrips_only_within_the_provider_turn_scope()
     wrong_turn.turn_id = "other-turn".into();
     assert!(
         client
-            .call::<tinychannels_bus::MediaReadInfo>(
-                tinychannels_bus::BUS_NAME.try_into().unwrap(),
-                tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
-                tinychannels_bus::BUS_NAME.try_into().unwrap(),
-                tinychannels_bus::methods::BEGIN_MEDIA_READ
-                    .try_into()
-                    .unwrap(),
+            .call_confidential::<tinychannels_bus::MediaReadInfo>(
+                tinychannels_bus::methods::BEGIN_MEDIA_READ,
                 tinychannels_bus::MediaReadBegin {
                     instance: "fixture".into(),
                     scope: wrong_turn,
@@ -1187,13 +1173,8 @@ async fn confidential_media_bus_roundtrips_only_within_the_provider_turn_scope()
     );
 
     let read = client
-        .call::<tinychannels_bus::MediaReadInfo>(
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::methods::BEGIN_MEDIA_READ
-                .try_into()
-                .unwrap(),
+        .call_confidential::<tinychannels_bus::MediaReadInfo>(
+            tinychannels_bus::methods::BEGIN_MEDIA_READ,
             tinychannels_bus::MediaReadBegin {
                 instance: "fixture".into(),
                 scope,
@@ -1204,13 +1185,8 @@ async fn confidential_media_bus_roundtrips_only_within_the_provider_turn_scope()
         .await
         .unwrap();
     let chunk = client
-        .call::<tinychannels_bus::MediaReadChunkResult>(
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::methods::READ_MEDIA_CHUNK
-                .try_into()
-                .unwrap(),
+        .call_confidential::<tinychannels_bus::MediaReadChunkResult>(
+            tinychannels_bus::methods::READ_MEDIA_CHUNK,
             tinychannels_bus::MediaReadChunk {
                 handle: read.handle.clone(),
                 sequence: 0,
@@ -1221,13 +1197,8 @@ async fn confidential_media_bus_roundtrips_only_within_the_provider_turn_scope()
     assert_eq!(chunk.bytes, bytes);
     assert!(chunk.done);
     client
-        .call::<()>(
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::methods::ABORT_MEDIA_READ
-                .try_into()
-                .unwrap(),
+        .call_confidential::<()>(
+            tinychannels_bus::methods::ABORT_MEDIA_READ,
             tinychannels_bus::MediaReadFinish(read.handle),
         )
         .await
