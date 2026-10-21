@@ -1013,7 +1013,7 @@ mod v2 {
             .mount(&server)
             .await;
         let unhealthy = channel(&server);
-        assert!(!uncrate::provider_test_support::is_healthy(&healthy).await);
+        assert!(!crate::provider_test_support::is_healthy(&unhealthy).await);
         assert_eq!(
             tinychannels_runtime::channel::ChannelAdapter::status(&unhealthy)
                 .await
