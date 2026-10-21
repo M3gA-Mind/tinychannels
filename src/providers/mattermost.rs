@@ -845,6 +845,18 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
         capabilities
     }
 
+    async fn health_state(&self) -> &'static str {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::providers::native::NativeProvider::health_state(self),
+        )
+        .await
+        {
+            Ok(state) => state,
+            Err(_) => "unhealthy",
+        }
+    }
+
     fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {
         crate::providers::native::NativeProvider::descriptor_extra(self)
     }
