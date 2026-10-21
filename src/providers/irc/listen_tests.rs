@@ -959,7 +959,9 @@ async fn typed_send_uses_the_scoped_conversation_on_an_active_connection() {
         .expect("stop should join the typed listener")
         .unwrap()
         .unwrap();
-    peer.close().await;
+    // The listener stop already closed its TLS side, so asking the peer to
+    // send a second close_notify can race into ConnectionAborted here.
+    drop(peer);
 }
 
 #[tokio::test]
