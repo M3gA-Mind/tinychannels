@@ -1190,6 +1190,73 @@ async fn send_refreshes_an_expired_token_and_retries_once() {
 }
 
 #[tokio::test]
+async fn empty_unauthorized_response_still_refreshes_before_retry() {
+    let tokens = Arc::new(AtomicUsize::new(0));
+    let sends = Arc::new(AtomicUsize::new(0));
+    let server = HttpsServer::start({
+        let tokens = tokens.clone();
+        let sends = sends.clone();
+        move |request| {
+            if is_token_request(request) {
+                let n = tokens.fetch_add(1, Ordering::SeqCst) + 1;
+                token_ok(&format!("t-{n}"))
+            } else if sends.fetch_add(1, Ordering::SeqCst) == 0 {
+                (401, String::new())
+            } else {
+                (200, r#"{"code":0,"data":{"message_id":"om-after-empty-401"}}"#.into())
+            }
+        }
+    })
+    .await;
+    let channel = channel_with(&server, false);
+
+    crate::provider_test_support::send_v1(&channel, &SendMessage::new("retry", "oc_chat"))
+        .await
+        .expect("the HTTP 401 status alone must trigger the bounded token refresh");
+
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(tokens.load(Ordering::SeqCst), 2);
+    assert_eq!(sends.load(Ordering::SeqCst), 2);
+    assert_eq!(header(&requests[1], "authorization"), Some("Bearer t-1"));
+    assert_eq!(header(&requests[3], "authorization"), Some("Bearer t-2"));
+}
+
+#[tokio::test]
+async fn a_second_token_expired_response_is_known_unsent() {
+    let tokens = Arc::new(AtomicUsize::new(0));
+    let sends = Arc::new(AtomicUsize::new(0));
+    let server = HttpsServer::start({
+        let tokens = tokens.clone();
+        let sends = sends.clone();
+        move |request| {
+            if is_token_request(request) {
+                let n = tokens.fetch_add(1, Ordering::SeqCst) + 1;
+                token_ok(&format!("t-{n}"))
+            } else if sends.fetch_add(1, Ordering::SeqCst) == 0 {
+                (401, r#"{"code":99991663,"msg":"expired"}"#.into())
+            } else {
+                (200, r#"{"code":99991663,"msg":"expired again"}"#.into())
+            }
+        }
+    })
+    .await;
+    let channel = channel_with(&server, false);
+
+    let error = crate::provider_test_support::send_v1(
+        &channel,
+        &SendMessage::new("do not retry again", "oc_chat"),
+    )
+    .await
+    .unwrap_err();
+    let typed = typed_send_error(&error);
+    assert_eq!(typed.kind, tinychannels_bus::channel::SendErrorKind::BadFormat);
+    assert!(!typed.sent_before_error);
+    assert!(!typed.retryable);
+    assert_eq!(tokens.load(Ordering::SeqCst), 2);
+    assert_eq!(sends.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn send_reports_failures_with_and_without_a_token_refresh() {
     let server = HttpsServer::start(|request| {
         if is_token_request(request) {
