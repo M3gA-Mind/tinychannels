@@ -9,6 +9,7 @@ use tinychannels_bus::ChannelCapabilities;
 use tinychannels_bus::channel::{
     ChannelReaction, ChannelSendError, ConversationRef, MessageReceiptPartKind,
 };
+use tinychannels_bus::{ChannelOutboundIntent, ChannelOutboundMessage, OutboundPayload};
 
 #[async_trait]
 impl NativeProvider for YuanbaoChannel {
@@ -143,6 +144,52 @@ impl NativeProvider for YuanbaoChannel {
             }
         };
         Ok(vec![Sent::new(id, kind)])
+    }
+
+    async fn start_draft(
+        &self,
+        intent: ChannelOutboundIntent,
+    ) -> Result<Option<String>, ChannelSendError> {
+        let message = ChannelOutboundMessage::from_intent(&intent);
+        let target = self.normalized_target(&message)?;
+        // Yuanbao has no draft transport operation. The marker selects the
+        // streaming reply pipeline; content is sent once at finalization.
+        Ok(Some(format!("yb-draft:{}", target.conversation.id)))
+    }
+
+    async fn update_draft(
+        &self,
+        _draft_id: &str,
+        _intent: ChannelOutboundIntent,
+    ) -> Result<(), ChannelSendError> {
+        // Preserve the provider's historical no-op update semantics. Yuanbao
+        // only publishes the accumulated response at finalization.
+        Ok(())
+    }
+
+    async fn finalize_draft(
+        &self,
+        _draft_id: &str,
+        intent: ChannelOutboundIntent,
+    ) -> Result<(), ChannelSendError> {
+        let text = match &intent.payload {
+            OutboundPayload::Text { text } => text.as_str(),
+            _ => {
+                return Err(crate::providers::native::unsupported(
+                    "Yuanbao streaming draft requires plain text",
+                ));
+            }
+        };
+        let message = ChannelOutboundMessage::from_intent(&intent);
+        let target = self.normalized_target(&message)?;
+        let recipient = self.resolve_recipient(&target.conversation.id).await;
+        for chunk in &self.split_message(text) {
+            self.outbound
+                .send_text(&recipient, chunk, target.reply_to.as_deref())
+                .await
+                .map_err(final_send_error)?;
+        }
+        Ok(())
     }
 
     async fn set_typing(&self, conversation: &str, on: bool) -> Result<(), ChannelSendError> {
