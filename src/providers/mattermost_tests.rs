@@ -519,7 +519,7 @@ async fn rest_requests_preserve_auth_thread_routing_and_server_errors() {
         .and(body_json(
             json!({"channel_id": "room", "root_id": "root", "message": "reply"}),
         ))
-        .respond_with(ResponseTemplate::new(201))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({"id": "reply-post"})))
         .expect(1)
         .mount(&server)
         .await;
