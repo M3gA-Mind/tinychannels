@@ -516,6 +516,35 @@ impl crate::provider::TestProviderBehavior for CaptureChannel {
     }
 }
 
+struct CaptureTypedChannel {
+    id: &'static str,
+    sent: tokio::sync::mpsc::Sender<tinychannels_bus::ChannelOutboundMessage>,
+}
+
+#[async_trait::async_trait]
+impl crate::provider::TestProviderBehavior for CaptureTypedChannel {
+    fn test_provider_id(&self) -> &'static str {
+        self.id
+    }
+
+    async fn test_send(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        self.sent
+            .send(message.clone())
+            .await
+            .map_err(|error| tinychannels::channel::ChannelSendError {
+                message: error.to_string(),
+                ..Default::default()
+            })?;
+        Ok(Default::default())
+    }
+}
+
 struct RemoteControlCaptureChannel {
     id: &'static str,
     sent: tokio::sync::mpsc::Sender<SendMessage>,
@@ -1574,6 +1603,13 @@ impl crate::provider::TestProviderBehavior for EndedChannel {
 async fn channels_with_store<T: crate::provider::TestProviderBehavior + 'static>(
     channel: Arc<T>,
 ) -> (Channels, DurableHost, tinybus::Connection) {
+    channels_with_store_named("fixture", channel).await
+}
+
+async fn channels_with_store_named<T: crate::provider::TestProviderBehavior + 'static>(
+    name: &'static str,
+    channel: Arc<T>,
+) -> (Channels, DurableHost, tinybus::Connection) {
     let bus = tinybus::transport::memory::MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
     let server = tinybus::Connection::connect(bus.connect().await.unwrap())
@@ -1599,7 +1635,7 @@ async fn channels_with_store<T: crate::provider::TestProviderBehavior + 'static>
     let host = HostChannels::new(client);
     let hooks = Arc::new(Hooks::default());
     let running = HashMap::from([(
-        "fixture".to_owned(),
+        name.to_owned(),
         Running::start_test(channel, hooks, host.clone()),
     )]);
     let relays = Arc::new(Relays::new(host.clone()));
@@ -4238,6 +4274,40 @@ async fn legacy_send_and_interaction_route_to_live_provider_and_reject_unknown_c
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn v1_subjects_are_normalized_only_for_providers_that_consume_them() {
+    for (provider, subject, content, expected) in [
+        ("email", "Weekly report", "All green", "Subject: Weekly report\nAll green"),
+        ("dingtalk", "OpenHuman", "custom", "Subject: OpenHuman\ncustom"),
+        ("telegram", "ignored", "visible body", "visible body"),
+    ] {
+        let (sent, mut received) = tokio::sync::mpsc::channel(1);
+        let (service, _callbacks, _server) = channels_with_store_named(
+            provider,
+            Arc::new(CaptureTypedChannel {
+                id: provider,
+                sent,
+            }),
+        )
+        .await;
+        let mut message = SendMessage::new(content, "recipient");
+        message.subject = Some(subject.into());
+        service
+            .send_message(provider.into(), message)
+            .await
+            .unwrap();
+        let actual = received.recv().await.unwrap();
+        assert_eq!(actual.channel_id, provider);
+        assert_eq!(actual.conversation_id, "recipient");
+        assert_eq!(
+            tinychannels::provider::test_message_text(&actual),
+            expected,
+            "v1 subject projection for {provider}"
+        );
+        service.shutdown().await.unwrap();
+    }
 }
 
 #[tokio::test]
