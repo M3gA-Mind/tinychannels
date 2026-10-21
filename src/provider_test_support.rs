@@ -1,7 +1,7 @@
 //! Test-only helpers for exercising providers through their typed ports.
 
 use crate::channel::{
-    ChannelAdapter, ChannelInboundSink, ChannelSendOutcome, SendMessage,
+    ChannelAdapter, ChannelInboundSink, ChannelSendOutcome, OutboundPayload, SendMessage,
     outbound_intent_from_send_message,
 };
 use async_trait::async_trait;
@@ -59,7 +59,14 @@ pub(crate) async fn send_v1<C: ChannelAdapter>(
     channel: &C,
     message: &SendMessage,
 ) -> anyhow::Result<ChannelSendOutcome> {
-    let intent = outbound_intent_from_send_message(&channel.descriptor().id, message);
+    let mut intent = outbound_intent_from_send_message(&channel.descriptor().id, message);
+    // Mirror the public v1 module shim: ordinary SendMessage content is typed
+    // text, while subject-bearing mail keeps the provider-native payload.
+    if message.subject.is_none() {
+        intent.payload = OutboundPayload::Text {
+            text: message.content.clone(),
+        };
+    }
     let outcome = channel
         .send(intent)
         .await
