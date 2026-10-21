@@ -27,6 +27,35 @@ impl tinychannels::channel::ChannelAdapter for NativeDescribeAdapter {
         Some("configured-native-room".into())
     }
 
+    fn supports_webhook_delivery(&self) -> bool {
+        true
+    }
+
+    async fn deliver_webhook(
+        &self,
+        signature: Option<&str>,
+        body: &[u8],
+    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
+        match signature {
+            Some("rejected") => Err(anyhow::Error::new(tinychannels::WebhookRejected(
+                "bad signature".into(),
+            ))),
+            Some("failed") => anyhow::bail!("temporary provider failure"),
+            _ => Ok(tinychannels_bus::WebhookDeliveryOutcome {
+                messages: u32::from(body == b"payload"),
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn supports_webhook_verification(&self) -> bool {
+        true
+    }
+
+    fn verify_webhook(&self, mode: &str, verify_token: &str, challenge: &str) -> Option<String> {
+        (mode == "subscribe" && verify_token == "token").then(|| challenge.to_owned())
+    }
+
     async fn start(
         &self,
         _: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync),
@@ -193,4 +222,86 @@ async fn native_draft_lifecycle_converts_v1_interactions_to_scoped_typed_intents
             "finalize:draft-id:final"
         ]
     );
+}
+
+#[tokio::test]
+async fn native_webhook_dispatch_preserves_rejection_and_delivery_error_classes() {
+    let adapter = NativeDescribeAdapter;
+    let verify = dispatch_native_webhook(
+        &adapter,
+        ChannelInteraction::VerifyWebhook {
+            mode: "subscribe".into(),
+            verify_token: "token".into(),
+            challenge: "challenge".into(),
+        },
+    )
+    .await
+    .expect("verification is supported")
+    .expect("valid token is accepted");
+    assert!(
+        matches!(verify, ChannelInteractionResult::WebhookChallenge(value) if value == "challenge")
+    );
+
+    let rejected = dispatch_native_webhook(
+        &adapter,
+        ChannelInteraction::VerifyWebhook {
+            mode: "subscribe".into(),
+            verify_token: "wrong".into(),
+            challenge: "challenge".into(),
+        },
+    )
+    .await
+    .expect("verification is supported")
+    .expect_err("invalid verification tokens are refused");
+    assert!(format!("{rejected:?}").contains(WEBHOOK_REJECTED_ERROR));
+
+    let delivered = dispatch_native_webhook(
+        &adapter,
+        ChannelInteraction::DeliverWebhook {
+            signature: Some("valid".into()),
+            body_base64: "cGF5bG9hZA==".into(),
+        },
+    )
+    .await
+    .expect("delivery is supported")
+    .expect("valid payload is accepted");
+    assert!(
+        matches!(delivered, ChannelInteractionResult::WebhookAccepted(outcome) if outcome.messages == 1)
+    );
+
+    let invalid_encoding = dispatch_native_webhook(
+        &adapter,
+        ChannelInteraction::DeliverWebhook {
+            signature: None,
+            body_base64: "%%%".into(),
+        },
+    )
+    .await
+    .expect("delivery is supported")
+    .expect_err("invalid base64 is rejected before provider delivery");
+    assert!(format!("{invalid_encoding:?}").contains(WEBHOOK_REJECTED_ERROR));
+
+    let provider_rejection = dispatch_native_webhook(
+        &adapter,
+        ChannelInteraction::DeliverWebhook {
+            signature: Some("rejected".into()),
+            body_base64: "eA==".into(),
+        },
+    )
+    .await
+    .expect("delivery is supported")
+    .expect_err("provider-auth rejection remains a client error");
+    assert!(format!("{provider_rejection:?}").contains(WEBHOOK_REJECTED_ERROR));
+
+    let provider_failure = dispatch_native_webhook(
+        &adapter,
+        ChannelInteraction::DeliverWebhook {
+            signature: Some("failed".into()),
+            body_base64: "eA==".into(),
+        },
+    )
+    .await
+    .expect("delivery is supported")
+    .expect_err("post-auth provider failures remain retryable");
+    assert!(format!("{provider_failure:?}").contains(WEBHOOK_FAILED_ERROR));
 }
