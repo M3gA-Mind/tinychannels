@@ -51,6 +51,7 @@ pub(crate) fn pre_dispatch(message: &str) -> ChannelSendError {
 /// A typed send failure carried through `anyhow` so legacy `Channel` callers
 /// can recover the structured error by downcast.
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) struct NativeFailure(pub(crate) ChannelSendError);
 
 impl std::fmt::Display for NativeFailure {

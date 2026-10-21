@@ -469,6 +469,7 @@ pub(crate) async fn send_typed<P: NativeProvider + ?Sized>(
 }
 
 /// Carry a typed failure through `anyhow`; callers recover it by downcast.
+#[cfg(test)]
 pub(crate) fn to_anyhow(error: ChannelSendError) -> anyhow::Error {
     anyhow::Error::new(NativeFailure(error))
 }

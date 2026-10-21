@@ -22,6 +22,7 @@ pub(crate) const SLACK_SEEN_WINDOW: usize = 2048;
 /// A typed send failure carried through `anyhow` so `Channel::send_typed_with_receipt`
 /// callers can recover the structured error.
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) struct SlackFailure(pub(crate) ChannelSendError);
 
 impl std::fmt::Display for SlackFailure {

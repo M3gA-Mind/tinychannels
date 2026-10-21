@@ -6,6 +6,7 @@ use super::http::{Payload, pre_dispatch};
 use super::inbound::is_snowflake;
 use super::outbound::target_for;
 use serde_json::{Value, json};
+#[cfg(test)]
 use std::time::{Duration, Instant};
 use tinychannels_bus::channel::{
     ChannelSendError, ChannelSendOutcome, MessageReceipt, SendErrorKind,
@@ -286,12 +287,14 @@ impl DiscordChannel {
     }
 
     /// Legacy draft rate limit: `true` when an edit for `key` should be skipped.
+    #[cfg(test)]
     pub(super) fn draft_edit_throttled(&self, key: &str) -> bool {
         let last = self.last_draft_edit.lock();
         last.get(key)
             .is_some_and(|at| at.elapsed() < Duration::from_millis(self.draft_update_interval_ms))
     }
 
+    #[cfg(test)]
     pub(super) fn mark_draft_edit(&self, key: &str) {
         self.last_draft_edit
             .lock()
@@ -299,6 +302,7 @@ impl DiscordChannel {
     }
 
     /// Post the first draft message for the legacy streaming path.
+    #[cfg(test)]
     pub(super) async fn legacy_send_draft(
         &self,
         recipient: &str,
