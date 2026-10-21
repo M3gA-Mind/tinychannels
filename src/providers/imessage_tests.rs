@@ -740,12 +740,13 @@ async fn send_runs_the_escaped_script_through_the_runner() {
     rig.channel.script_command = fake_runner(&out, 0);
     let recorder = rig.spawn_messages();
 
-    ChannelTypedSend::send_typed(
+    let outcome = ChannelTypedSend::send_typed(
         &rig.channel,
         &typed_text_message("say \"hi\"", "+15555550123"),
     )
     .await
     .unwrap();
+    assert_eq!(outcome.receipt.platform_message_ids, ["SENT1"]);
     recorder.abort();
 
     let script = std::fs::read_to_string(&out).unwrap();
