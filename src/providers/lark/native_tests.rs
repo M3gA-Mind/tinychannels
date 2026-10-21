@@ -221,7 +221,10 @@ async fn lark_audio_preparation_rejects_unsupported_and_invalid_sources() {
     #[async_trait::async_trait]
     impl VoiceCodec for CodecReply {
         async fn transcode(&self, _request: VoiceCodecRequest) -> anyhow::Result<VoiceCodecResult> {
-            let audio_base64 = self.0.as_ref().map_err(|message| anyhow::anyhow!(message))?;
+            let audio_base64 = self
+                .0
+                .as_ref()
+                .map_err(|message| anyhow::anyhow!(message))?;
             Ok(VoiceCodecResult {
                 audio_base64: audio_base64.clone(),
                 duration_ms: None,
@@ -246,22 +249,34 @@ async fn lark_audio_preparation_rejects_unsupported_and_invalid_sources() {
         duration_ms: None,
     };
 
-    let unsupported = channel.opus_audio(&file("audio/flac", b"audio")).await.unwrap_err();
-    assert_eq!(unsupported.kind, tinychannels_bus::channel::SendErrorKind::Unsupported);
+    let unsupported = channel
+        .opus_audio(&file("audio/flac", b"audio"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        unsupported.kind,
+        tinychannels_bus::channel::SendErrorKind::Unsupported
+    );
     assert!(!unsupported.sent_before_error);
 
     let malformed = channel
         .opus_audio(&file("audio/ogg", b"not an Ogg stream"))
         .await
         .unwrap_err();
-    assert_eq!(malformed.kind, tinychannels_bus::channel::SendErrorKind::BadFormat);
+    assert_eq!(
+        malformed.kind,
+        tinychannels_bus::channel::SendErrorKind::BadFormat
+    );
     assert!(!malformed.sent_before_error);
 
     let missing_codec = channel
         .opus_audio(&file("audio/wav", b"wave data"))
         .await
         .unwrap_err();
-    assert_eq!(missing_codec.kind, tinychannels_bus::channel::SendErrorKind::BadFormat);
+    assert_eq!(
+        missing_codec.kind,
+        tinychannels_bus::channel::SendErrorKind::BadFormat
+    );
 
     channel.voice_codec = Some(Arc::new(CodecReply(Err("codec unavailable"))));
     let failed_codec = channel
@@ -275,7 +290,11 @@ async fn lark_audio_preparation_rejects_unsupported_and_invalid_sources() {
         .opus_audio(&file("audio/wav", b"wave data"))
         .await
         .unwrap_err();
-    assert!(invalid_encoding.message.contains("invalid or oversized data"));
+    assert!(
+        invalid_encoding
+            .message
+            .contains("invalid or oversized data")
+    );
 
     channel.voice_codec = Some(Arc::new(CodecReply(Ok(
         base64::engine::general_purpose::STANDARD.encode(b"not Ogg Opus"),
@@ -297,8 +316,14 @@ async fn lark_audio_preparation_rejects_files_over_the_provider_limit_before_con
         vec!["*".into()],
     );
     let target = Target {
-        channel: ChannelRef { id: "lark".into(), account_id: None },
-        conversation: ConversationRef { id: "chat-1".into(), ..Default::default() },
+        channel: ChannelRef {
+            id: "lark".into(),
+            account_id: None,
+        },
+        conversation: ConversationRef {
+            id: "chat-1".into(),
+            ..Default::default()
+        },
         reply_to: None,
         thread: None,
     };
@@ -314,7 +339,10 @@ async fn lark_audio_preparation_rejects_files_over_the_provider_limit_before_con
     let error = NativeProvider::prepare_steps(&channel, &target, &mut steps)
         .await
         .unwrap_err();
-    assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::BadFormat);
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::BadFormat
+    );
     assert!(!error.sent_before_error);
     assert!(error.message.contains("30 MiB limit"));
 }

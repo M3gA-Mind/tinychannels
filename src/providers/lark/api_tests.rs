@@ -1153,6 +1153,8 @@ async fn host_aware_factory_sends_typed_image_through_lark_image_upload() {
 
 #[tokio::test]
 async fn lark_file_upload_validates_size_and_preserves_audio_duration() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     let upload = Arc::new(AtomicUsize::new(0));
     let server = HttpsServer::start({
         let upload = upload.clone();
@@ -1163,7 +1165,10 @@ async fn lark_file_upload_validates_size_and_preserves_audio_duration() {
                 if upload.fetch_add(1, Ordering::SeqCst) == 0 {
                     (503, r#"{"code":99991663}"#.into())
                 } else {
-                    (200, r#"{"code":0,"data":{"file_key":"file-duration"}}"#.into())
+                    (
+                        200,
+                        r#"{"code":0,"data":{"file_key":"file-duration"}}"#.into(),
+                    )
                 }
             } else {
                 panic!("unexpected Lark request: {}", request.target)
