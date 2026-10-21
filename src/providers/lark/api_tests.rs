@@ -1178,15 +1178,12 @@ async fn lark_file_upload_validates_size_and_preserves_audio_duration() {
     .await;
     let channel = channel_with(&server, false);
 
-    for (bytes, message) in [
-        (&[][..], "empty"),
-        (&vec![0; (super::FILE_LIMIT + 1) as usize][..], "oversized"),
-    ] {
+    for bytes in [&[][..], &vec![0; (super::FILE_LIMIT + 1) as usize][..]] {
         let error = channel
             .upload_file(bytes, "audio.opus", "opus", Some(1_200))
             .await
             .unwrap_err();
-        assert!(error.message.contains(message));
+        assert!(error.message.contains("empty or exceeds"));
         assert!(!error.sent_before_error);
     }
     assert!(server.requests.lock().unwrap().is_empty());
