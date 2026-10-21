@@ -20,6 +20,117 @@ fn native_operation_errors_preserve_dispatch_uncertainty() {
     assert_eq!(after_dispatch.message, "telegram operation failed");
 }
 
+struct BareTestProvider;
+
+#[async_trait::async_trait]
+impl TestProviderBehavior for BareTestProvider {
+    fn test_provider_id(&self) -> &'static str {
+        "bare-fixture"
+    }
+}
+
+struct AcceptTestIngress;
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelInboundSink for AcceptTestIngress {
+    async fn push(
+        &self,
+        _: tinychannels_bus::ChannelIngress,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn typed_test_provider_defaults_remain_explicitly_unsupported_and_stoppable() {
+    use tinychannels::channel::{
+        ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
+        ChannelTypedSend, ChannelTyping,
+    };
+    use tinychannels_bus::{ChannelOutboundIntent, ChannelOutboundMessage, OutboundPayload};
+
+    let provider = Arc::new(BareTestProvider);
+    let adapter = Arc::new(TestNative::new(provider.clone()));
+    assert_eq!(adapter.descriptor().id, "bare-fixture");
+    assert!(adapter.media_account_identity().is_none());
+    assert!(!adapter.declared_capabilities().content.text.outbound);
+
+    let start = {
+        let adapter = adapter.clone();
+        tokio::spawn(async move {
+            let sink = AcceptTestIngress;
+            adapter.start(&sink).await
+        })
+    };
+    tokio::task::yield_now().await;
+    adapter.stop().await.unwrap();
+    start.await.unwrap().unwrap();
+
+    let intent = ChannelOutboundIntent {
+        channel_id: "bare-fixture".into(),
+        conversation_id: "room".into(),
+        payload: OutboundPayload::Text {
+            text: "hello".into(),
+        },
+        ..Default::default()
+    };
+    assert!(
+        ChannelAdapter::send(&adapter, intent.clone())
+            .await
+            .is_err()
+    );
+    let message = ChannelOutboundMessage::from_intent(&intent);
+    assert!(
+        ChannelTypedSend::send_typed(&adapter, &message)
+            .await
+            .is_err()
+    );
+    assert!(ChannelTyping::start_typing(&adapter, "room").await.is_err());
+    assert!(ChannelTyping::stop_typing(&adapter, "room").await.is_err());
+    assert!(
+        ChannelStreamingDraft::start_draft(&adapter, intent.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelStreamingDraft::update_draft(&adapter, "draft", intent.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelStreamingDraft::finalize_draft(&adapter, "draft", intent.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelStreamingDraft::upsert_draft(&adapter, None, intent.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelReaction::send_reaction(
+            &adapter,
+            &Default::default(),
+            &Default::default(),
+            "message",
+            &Default::default(),
+            false,
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        ChannelEdit::edit(&adapter, &Default::default(), intent.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelDelete::delete(&adapter, &Default::default())
+            .await
+            .is_err()
+    );
+}
+
 #[derive(Clone, Default)]
 struct RecordingDraftIntents(Arc<std::sync::Mutex<Vec<tinychannels_bus::ChannelOutboundIntent>>>);
 
