@@ -1020,7 +1020,11 @@ impl WhatsAppWebChannel {
     }
 
     async fn start_typing_provider(&self, recipient: &str) -> Result<()> {
-        let client = self.connected_client()?;
+        let client = self.connected_client().map_err(|_| {
+            anyhow::Error::new(crate::providers::whatsapp_shared::error::WaFailure::rejected(
+                "WhatsApp Web client is not connected",
+            ))
+        })?;
 
         if !self.should_allow_outbound(recipient) {
             tracing::warn!(
@@ -1041,7 +1045,11 @@ impl WhatsAppWebChannel {
     }
 
     async fn stop_typing_provider(&self, recipient: &str) -> Result<()> {
-        let client = self.connected_client()?;
+        let client = self.connected_client().map_err(|_| {
+            anyhow::Error::new(crate::providers::whatsapp_shared::error::WaFailure::rejected(
+                "WhatsApp Web client is not connected",
+            ))
+        })?;
 
         if !self.should_allow_outbound(recipient) {
             tracing::warn!(
