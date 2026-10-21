@@ -1763,32 +1763,26 @@ async fn typed_voice_rejects_missing_host_storage_reference_and_origin_turn() {
     let missing_store = ChannelTypedSend::send_typed(&missing_store_channel, &message)
         .await
         .unwrap_err();
-    assert!(
-        missing_store
-            .message
-            .contains("requires host media resolution")
-    );
+    assert_eq!(missing_store.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!missing_store.sent_before_error);
+    assert!(missing_store.message.contains("rejected before provider dispatch"));
 
     let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
     let missing_reference =
         ChannelTypedSend::send_typed(&channel, &outbound_voice_message(None, Some("turn-1")))
             .await
             .unwrap_err();
-    assert!(
-        missing_reference
-            .message
-            .contains("no host-owned opaque reference")
-    );
+    assert_eq!(missing_reference.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!missing_reference.sent_before_error);
+    assert!(missing_reference.message.contains("rejected before provider dispatch"));
 
     let missing_turn =
         ChannelTypedSend::send_typed(&channel, &outbound_voice_message(Some("voice-ref"), None))
             .await
             .unwrap_err();
-    assert!(
-        missing_turn
-            .message
-            .contains("requires originating turn identity")
-    );
+    assert_eq!(missing_turn.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!missing_turn.sent_before_error);
+    assert!(missing_turn.message.contains("rejected before provider dispatch"));
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -1860,10 +1854,14 @@ async fn send_draft_surfaces_api_rejection() {
 
     let err = ChannelStreamingDraft::start_draft(&ch, draft_text_intent("x", "100", None, None))
         .await
-        .unwrap_err()
-        .message;
-    assert!(err.contains("sendMessage (draft) failed"), "{err}");
-    assert!(err.contains("chat not found"), "{err}");
+        .unwrap_err();
+    assert_eq!(err.kind, crate::channel::SendErrorKind::Unknown);
+    assert!(err.sent_before_error);
+    assert!(
+        err.message.contains("draft creation outcome is uncertain"),
+        "{}",
+        err.message
+    );
 }
 
 fn streaming_draft_intent(text: &str) -> tinychannels_bus::ChannelOutboundIntent {
@@ -3639,11 +3637,9 @@ async fn typed_send_rejects_non_numeric_reply_reference_before_provider_io() {
         .await
         .unwrap_err();
 
-    assert!(
-        error
-            .message
-            .contains("reply_to_id must be a numeric message ID")
-    );
+    assert_eq!(error.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!error.sent_before_error);
+    assert!(error.message.contains("rejected before provider dispatch"));
     assert!(json_bodies(&server, "sendMessage").await.is_empty());
 }
 
