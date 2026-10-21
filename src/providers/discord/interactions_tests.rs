@@ -176,8 +176,8 @@ async fn edit_patches_the_message_content_and_returns_the_receipt() {
         .await;
     let original = receipt(&["10"]);
 
-    let edited = channel_for(&server)
-        .edit_message_v2(&original, &intent("new text"))
+    let channel = channel_for(&server);
+    let edited = crate::channel::ChannelEdit::edit(&channel, &original, intent("new text"))
         .await
         .unwrap();
 
@@ -199,8 +199,7 @@ async fn edit_rejects_mismatched_scope_oversize_and_non_text_before_dispatch() {
     let mut other_conversation = intent("x");
     other_conversation.conversation_id = "42".into();
     assert!(
-        channel
-            .edit_message_v2(&original, &other_conversation)
+        crate::channel::ChannelEdit::edit(&channel, &original, other_conversation)
             .await
             .unwrap_err()
             .message
@@ -214,8 +213,7 @@ async fn edit_rejects_mismatched_scope_oversize_and_non_text_before_dispatch() {
         ..Default::default()
     });
     assert!(
-        channel
-            .edit_message_v2(&original, &other_ref)
+        crate::channel::ChannelEdit::edit(&channel, &original, other_ref)
             .await
             .is_err()
     );
@@ -226,22 +224,19 @@ async fn edit_rejects_mismatched_scope_oversize_and_non_text_before_dispatch() {
         account_id: Some("other".into()),
     });
     assert!(
-        channel
-            .edit_message_v2(&original, &other_account)
+        crate::channel::ChannelEdit::edit(&channel, &original, other_account)
             .await
             .is_err()
     );
 
-    let too_long = channel
-        .edit_message_v2(&original, &intent(&"a".repeat(2001)))
+    let too_long = crate::channel::ChannelEdit::edit(&channel, &original, intent(&"a".repeat(2001)))
         .await
         .unwrap_err();
     assert_eq!(too_long.kind, SendErrorKind::TooLong);
 
     let buttons = parts_intent(vec![content(ContentPart::Buttons { rows: vec![] })]);
     assert!(
-        channel
-            .edit_message_v2(&original, &buttons)
+        crate::channel::ChannelEdit::edit(&channel, &original, buttons)
             .await
             .unwrap_err()
             .message
@@ -251,8 +246,7 @@ async fn edit_rejects_mismatched_scope_oversize_and_non_text_before_dispatch() {
     let mut unscoped = receipt(&["10"]);
     unscoped.conversation = None;
     assert!(
-        channel
-            .edit_message_v2(&unscoped, &intent("x"))
+        crate::channel::ChannelEdit::edit(&channel, &unscoped, intent("x"))
             .await
             .is_err()
     );
@@ -275,8 +269,7 @@ async fn delete_removes_every_message_of_the_receipt_and_tolerates_missing_ones(
         .mount(&server)
         .await;
 
-    channel_for(&server)
-        .delete_message_v2(&receipt(&["10", "11"]))
+    crate::channel::ChannelDelete::delete(&channel_for(&server), &receipt(&["10", "11"]))
         .await
         .unwrap();
 
@@ -291,15 +284,14 @@ async fn delete_surfaces_real_failures() {
         .mount(&server)
         .await;
 
-    let error = channel_for(&server)
-        .delete_message_v2(&receipt(&["10"]))
+    let channel = channel_for(&server);
+    let error = crate::channel::ChannelDelete::delete(&channel, &receipt(&["10"]))
         .await
         .unwrap_err();
 
     assert_eq!(error.kind, SendErrorKind::Forbidden);
     assert!(
-        channel_for(&server)
-            .delete_message_v2(&receipt(&[]))
+        crate::channel::ChannelDelete::delete(&channel, &receipt(&[]))
             .await
             .is_err()
     );
