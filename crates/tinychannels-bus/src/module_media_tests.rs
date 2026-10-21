@@ -137,10 +137,12 @@ fn opaque_media_reference_round_trips_without_a_shared_path() {
         panic!("ordered media part changed kind");
     };
     assert_eq!(decoded_media.opaque_id, media.opaque_id);
+    assert!(decoded_media.path.is_none());
+    assert!(decoded_media.url.is_none());
+    assert!(decoded_media.local_cache_path.is_none());
     assert!(
         encoded
             .to_string()
             .contains("tinychannels_media_v1_fixture")
     );
-    assert!(!encoded.to_string().contains("localCachePath"));
 }
