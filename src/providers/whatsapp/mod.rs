@@ -25,9 +25,9 @@ fn ensure_https(url: &str) -> anyhow::Result<()> {
 ///
 /// Native v2 adapter. Outbound goes to the Graph API (text, media, voice,
 /// location, contacts, reactions, read receipts, typing). Inbound is
-/// webhook-driven: the host forwards each raw POST to
-/// [`Channel::deliver_webhook`], which authenticates it with the Meta app
-/// secret before anything is parsed. [`Channel::listen`] only parks.
+/// webhook-driven: the host forwards each raw POST to the typed
+/// [`ChannelAdapter::deliver_webhook`](crate::channel::ChannelAdapter::deliver_webhook), which authenticates it with the Meta app
+/// secret before anything is parsed. [`ChannelAdapter::start`](crate::channel::ChannelAdapter::start) only parks.
 ///
 /// # Runtime Negotiation
 ///
@@ -190,7 +190,7 @@ impl WhatsAppChannel {
     /// Parse an incoming webhook payload into text-only legacy messages.
     ///
     /// This is the v21 text projection and does not authenticate anything.
-    /// Production ingress is [`Channel::deliver_webhook`], which verifies the
+    /// Production ingress is [`ChannelAdapter::deliver_webhook`](crate::channel::ChannelAdapter::deliver_webhook), which verifies the
     /// signature, binds the destination and carries every content kind.
     pub fn parse_webhook_payload(&self, payload: &serde_json::Value) -> Vec<ChannelMessage> {
         let mut messages = Vec::new();
