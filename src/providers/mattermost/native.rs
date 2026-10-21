@@ -468,7 +468,7 @@ fn http_error(status: reqwest::StatusCode, operation: &str, final_post: bool) ->
         message: if final_post && server_error {
             "Mattermost post failed after submission; delivery state is unknown".into()
         } else {
-            format!("Mattermost {operation} failed with HTTP {status}")
+            format!("Mattermost {operation} failed")
         },
         retryable: server_error && !final_post,
         sent_before_error: final_post && server_error,
