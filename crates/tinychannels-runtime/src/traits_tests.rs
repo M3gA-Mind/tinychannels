@@ -27,30 +27,22 @@ fn channel_message_clone_preserves_legacy_wire_fields() {
 
 #[test]
 fn send_message_generates_deterministic_idempotency_key() {
-    let message = SendMessage::new("hello", "alice")
-        .in_thread(Some("thread-1".to_string()))
-        .with_deterministic_idempotency_key("telegram");
-    let again = SendMessage::new("hello", "alice")
-        .in_thread(Some("thread-1".to_string()))
-        .with_deterministic_idempotency_key("telegram");
+    let message = SendMessage::new("hello", "alice").in_thread(Some("thread-1".to_string()));
+    let again = SendMessage::new("hello", "alice").in_thread(Some("thread-1".to_string()));
+    let intent = channel::outbound_intent_from_send_message("telegram", &message);
+    let repeated = channel::outbound_intent_from_send_message("telegram", &again);
 
-    assert_eq!(message.idempotency_key, again.idempotency_key);
-    assert!(
-        message
-            .idempotency_key
-            .as_deref()
-            .unwrap()
-            .starts_with("legacy-send:telegram:")
-    );
+    assert_eq!(intent.idempotency_key, repeated.idempotency_key);
+    assert!(intent.idempotency_key.starts_with("legacy-send:telegram:"));
 }
 
 #[test]
 fn explicit_send_message_idempotency_key_is_preserved() {
     let message = SendMessage::new("hello", "alice")
-        .with_idempotency_key("caller-key")
-        .with_deterministic_idempotency_key("telegram");
+        .with_idempotency_key("caller-key");
 
-    assert_eq!(message.idempotency_key.as_deref(), Some("caller-key"));
+    let intent = channel::outbound_intent_from_send_message("telegram", &message);
+    assert_eq!(intent.idempotency_key, "caller-key");
 }
 
 #[test]
