@@ -19,9 +19,6 @@ use async_imap::extensions::idle::IdleResponse;
 use async_imap::types::Fetch;
 #[cfg(feature = "email")]
 use futures::TryStreamExt;
-use lettre::message::{Attachment, MultiPart, SinglePart, header::ContentType};
-use lettre::transport::smtp::authentication::Credentials;
-use lettre::{Message, SmtpTransport, Transport};
 #[cfg(feature = "email")]
 use mail_parser::{MessageParser, MimeHeaders};
 #[cfg(feature = "email")]
@@ -59,16 +56,17 @@ use tokio::time::{Instant, sleep, timeout, timeout_at};
 use tokio_rustls::TlsConnector;
 #[cfg(feature = "email")]
 use tokio_rustls::client::TlsStream;
-use tracing::info;
 #[cfg(feature = "email")]
 use tracing::{debug, error, warn};
 #[cfg(feature = "email")]
 #[cfg(feature = "email")]
 mod capabilities;
+mod config;
 #[cfg(feature = "email")]
 mod inbound;
 #[cfg(feature = "email")]
 mod native;
+mod outbound;
 
 #[cfg(feature = "email")]
 use crate::channel::{ChannelInboundSink, ChannelSendError};
@@ -160,62 +158,6 @@ impl EmailChannel {
     pub(crate) async fn health_probe(&self) -> bool {
         self.health_check_with(self.connect_imap(), HEALTH_CHECK_TIMEOUT)
             .await
-    }
-
-    pub fn new(config: EmailConfig) -> Self {
-        Self {
-            config,
-            #[cfg(feature = "email")]
-            seen_messages: Arc::new(Mutex::new(HashSet::new())),
-            #[cfg(feature = "email")]
-            reconnect_backoff: Duration::from_secs(1),
-            #[cfg(feature = "email")]
-            max_reconnect_backoff: Duration::from_secs(60),
-            #[cfg(feature = "email")]
-            native: NativeState::default(),
-            #[cfg(feature = "email")]
-            subjects: native::Subjects::default(),
-            #[cfg(feature = "email")]
-            listener_cancel: Arc::new(StdMutex::new(None)),
-            #[cfg(feature = "email")]
-            listener_generation: Arc::new(AtomicU64::new(0)),
-        }
-    }
-
-    /// Scoped media storage; enables typed attachments in both directions.
-    #[cfg(feature = "email")]
-    pub fn with_media_repository(mut self, repository: Arc<dyn MediaRepository>) -> Self {
-        self.native.media_repository = Some(repository);
-        self
-    }
-
-    /// Durable voice storage; enables voice attachments in both directions.
-    #[cfg(feature = "email")]
-    pub fn with_voice_media_store(mut self, store: Arc<dyn VoiceMediaStore>) -> Self {
-        self.native.voice_media_store = Some(store);
-        self
-    }
-
-    /// Host speech-to-text for inbound voice attachments.
-    #[cfg(feature = "email")]
-    pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
-        self.native.transcriber = Some(transcriber);
-        self
-    }
-
-    /// Enable shared final-turn synthesis when the host provides TTS, a codec
-    /// and durable voice storage.
-    #[cfg(feature = "email")]
-    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
-        self.native.voice_synthesis = enabled;
-        self
-    }
-
-    /// Ordered ingress for typed inbound messages.
-    #[cfg(feature = "email")]
-    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
-        self.native.events = Some(events);
-        self
     }
 
     /// Check if a sender email is in the allowlist
@@ -689,99 +631,6 @@ impl EmailChannel {
         Ok(())
     }
 
-    fn create_smtp_transport(&self) -> Result<SmtpTransport> {
-        let creds = Credentials::new(self.config.username.clone(), self.config.password.clone());
-        let transport = if self.config.smtp_tls {
-            SmtpTransport::relay(&self.config.smtp_host)?
-                .port(self.config.smtp_port)
-                .credentials(creds)
-                .build()
-        } else {
-            SmtpTransport::builder_dangerous(&self.config.smtp_host)
-                .port(self.config.smtp_port)
-                .credentials(creds)
-                .build()
-        };
-        Ok(transport)
-    }
-
-    /// This channel's SMTP account as per-call [`SmtpCredentials`], for the
-    /// async [`crate::providers::mail::MailSender`] seam.
-    ///
-    /// `smtp_tls` maps to implicit TLS ([`SmtpSecurity::Ssl`]) and its absence to
-    /// a plaintext connection ([`SmtpSecurity::None`]) — the same two transports
-    /// the blocking [`Self::send_message`] path builds. `from_address` is used
-    /// as given, so a `Name <addr>` form keeps its display name.
-    pub fn smtp_credentials(&self) -> SmtpCredentials {
-        SmtpCredentials {
-            host: self.config.smtp_host.clone(),
-            port: self.config.smtp_port,
-            security: if self.config.smtp_tls {
-                SmtpSecurity::Ssl
-            } else {
-                SmtpSecurity::None
-            },
-            username: self.config.username.clone(),
-            password: MailSecret::new(self.config.password.clone()),
-            from_name: String::new(),
-            from_email: self.config.from_address.clone(),
-        }
-    }
-
-    /// This channel's IMAP login as per-call [`ImapCredentials`], for the
-    /// [`MailReceiver`](crate::providers::mail::MailReceiver) seam.
-    pub fn imap_credentials(&self) -> ImapCredentials {
-        ImapCredentials {
-            host: self.config.imap_host.clone(),
-            port: self.config.imap_port,
-            username: self.config.username.clone(),
-            password: MailSecret::new(self.config.password.clone()),
-        }
-    }
-
-    pub fn send_message(&self, email: Message) -> Result<()> {
-        let transport = self.create_smtp_transport()?;
-        transport.send(&email)?;
-        info!("Email sent");
-        Ok(())
-    }
-
-    pub fn build_plain_message(
-        &self,
-        recipient: &str,
-        subject: &str,
-        body: &str,
-    ) -> Result<Message> {
-        Message::builder()
-            .from(self.config.from_address.parse()?)
-            .to(recipient.parse()?)
-            .subject(subject)
-            .singlepart(SinglePart::plain(body.to_string()))
-            .map_err(Into::into)
-    }
-
-    pub fn build_message_with_attachment(
-        &self,
-        recipient: &str,
-        subject: &str,
-        body: &str,
-        attachment_name: &str,
-        content_type: ContentType,
-        attachment_bytes: Vec<u8>,
-    ) -> Result<Message> {
-        let attachment =
-            Attachment::new(attachment_name.to_string()).body(attachment_bytes, content_type);
-        Message::builder()
-            .from(self.config.from_address.parse()?)
-            .to(recipient.parse()?)
-            .subject(subject)
-            .multipart(
-                MultiPart::mixed()
-                    .singlepart(SinglePart::plain(body.to_string()))
-                    .singlepart(attachment),
-            )
-            .map_err(Into::into)
-    }
 }
 
 /// Internal struct for parsed email data
