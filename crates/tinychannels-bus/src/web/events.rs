@@ -601,57 +601,6 @@ impl WebChannelEvent {
         }
     }
 
-    /// Apply the historical typed-projector normalization before host delivery.
-    /// Directly-authored web events retain their serialized `null` and empty
-    /// values; only events passing through the old typed adapter used this rule.
-    pub fn normalize_projected_wire_fields(&mut self) {
-        use WebChannelEvent as E;
-        let (tool_name, args) = match self {
-            E::ToolArgsDelta { tool_name, .. } => (Some(tool_name), None),
-            E::ToolCall {
-                tool_name, args, ..
-            }
-            | E::SubagentToolCall {
-                tool_name, args, ..
-            }
-            | E::ApprovalRequest {
-                tool_name, args, ..
-            }
-            | E::PlanReviewRequest {
-                tool_name, args, ..
-            } => (Some(tool_name), Some(args)),
-            E::ToolResult {
-                tool_name, args, ..
-            }
-            | E::SubagentToolResult {
-                tool_name, args, ..
-            } => (Some(tool_name), Some(args)),
-            E::SubagentSpawned { tool_name, .. }
-            | E::SubagentCompleted { tool_name, .. }
-            | E::SubagentFailed { tool_name, .. }
-            | E::SubagentAwaitingUser { tool_name, .. }
-            | E::SubagentIterationStart { tool_name, .. }
-            | E::ApprovalDecided { tool_name, .. }
-            | E::PlanReviewDecided { tool_name, .. } => (Some(tool_name), None),
-            E::ArtifactReady { args, .. }
-            | E::ArtifactFailed { args, .. }
-            | E::ArtifactPending { args, .. }
-            | E::MemoryActivity { args, .. }
-            | E::ExternalTransferPending { args, .. } => (None, Some(args)),
-            _ => (None, None),
-        };
-        if let Some(tool_name) = tool_name
-            && tool_name.as_deref() == Some("")
-        {
-            *tool_name = None;
-        }
-        if let Some(args) = args
-            && args.as_ref().is_some_and(serde_json::Value::is_null)
-        {
-            *args = None;
-        }
-    }
-
     /// The shared addressing and ordering context for this event.
     pub fn context(&self) -> &WebEventContext {
         use WebChannelEvent as E;
