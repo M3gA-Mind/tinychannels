@@ -6,7 +6,7 @@ mod inbound;
 mod outbound;
 
 pub use config::IrcChannelConfig;
-use inbound::{IRC_STYLE_PREFIX, IrcMessage, encode_sasl_plain};
+use inbound::{IRC_STYLE_PREFIX, IrcMessage, ListenerRegistration, encode_sasl_plain};
 use outbound::split_message;
 
 use std::sync::Arc;

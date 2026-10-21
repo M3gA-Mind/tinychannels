@@ -1,4 +1,5 @@
-use super::{IrcChannel, SENDER_PREFIX_RESERVE, WriteHalf, split_message};
+use super::outbound::SENDER_PREFIX_RESERVE;
+use super::{IrcChannel, WriteHalf, split_message};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

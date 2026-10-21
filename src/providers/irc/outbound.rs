@@ -1,4 +1,4 @@
-use super::{IrcChannel, WriteHalf};
+use super::{IrcChannel, ListenerRegistration};
 use async_trait::async_trait;
 
 pub(super) const SENDER_PREFIX_RESERVE: usize = 64;
