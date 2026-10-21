@@ -8,7 +8,8 @@
 //! and the app must not depend on the module's implementation, so each keeps
 //! its own small reader over the same documented schema.
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use std::path::Path;
 
 /// Seconds between the Unix epoch and the Apple epoch (2001-01-01).
 const APPLE_EPOCH_OFFSET_SECS: i64 = 978_307_200;
@@ -230,3 +231,67 @@ pub(crate) fn target_guid(associated: &str) -> &str {
 #[cfg(test)]
 #[path = "db_tests.rs"]
 pub(crate) mod tests;
+
+/// The newest-first poll: inbound messages with text, newer than `?1`.
+const NEW_MESSAGES_SQL: &str = "SELECT m.ROWID, h.id, m.text \
+     FROM message m \
+     JOIN handle h ON m.handle_id = h.ROWID \
+     WHERE m.ROWID > ?1 \
+     AND m.is_from_me = 0 \
+     AND m.text IS NOT NULL \
+     ORDER BY m.ROWID ASC \
+     LIMIT 20";
+
+/// Opens the Messages database read-only.
+pub(super) fn open_read_only(path: &Path) -> anyhow::Result<Connection> {
+    Ok(Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?)
+}
+
+/// The newest inbound ROWID, or 0 for an empty table.
+pub(super) fn max_inbound_rowid(conn: &Connection) -> anyhow::Result<i64> {
+    let mut stmt = conn.prepare("SELECT MAX(ROWID) FROM message WHERE is_from_me = 0")?;
+    let rowid: Option<i64> = stmt.query_row([], |row| row.get(0))?;
+    Ok(rowid.unwrap_or(0))
+}
+
+/// Inbound messages newer than `since_rowid`, oldest first, at most 20.
+/// The rowid is bound as a parameter (CWE-89 prevention).
+pub(super) fn query_new_messages(
+    conn: &Connection,
+    since_rowid: i64,
+) -> anyhow::Result<Vec<(i64, String, String)>> {
+    let mut stmt = conn.prepare(NEW_MESSAGES_SQL)?;
+    let rows = stmt.query_map([since_rowid], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+#[allow(dead_code)]
+/// Get the current max ROWID from the messages table.
+/// Uses rusqlite with parameterized queries for security (CWE-89 prevention).
+async pub(super) fn get_max_rowid(db_path: &Path) -> anyhow::Result<i64> {
+    let path = db_path.to_path_buf();
+    tokio::task::spawn_blocking(move || max_inbound_rowid(&open_read_only(&path)?)).await?
+}
+
+/// Fetch messages newer than `since_rowid`.
+/// Uses rusqlite with parameterized queries for security (CWE-89 prevention).
+/// The `since_rowid` parameter is bound safely, preventing SQL injection.
+#[allow(dead_code)]
+async pub(super) fn fetch_new_messages(
+    db_path: &Path,
+    since_rowid: i64,
+) -> anyhow::Result<Vec<(i64, String, String)>> {
+    let path = db_path.to_path_buf();
+    tokio::task::spawn_blocking(move || query_new_messages(&open_read_only(&path)?, since_rowid))
+        .await?
+}
+

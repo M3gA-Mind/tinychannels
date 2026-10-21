@@ -3,6 +3,12 @@
 use super::{IMessageChannel, ListenerCursor, ListenerRegistration};
 use crate::channel::ChannelInboundSink;
 use rusqlite::Connection;
+#[cfg(test)]
+use crate::traits::ChannelMessage;
+#[cfg(test)]
+use anyhow::Context as _;
+#[cfg(test)]
+use tokio::sync::mpsc;
 use std::sync::atomic::Ordering;
 use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
 use tokio::sync::{oneshot, watch};
@@ -82,12 +88,12 @@ impl IMessageChannel {
         }
 
         let path = db_path.clone();
-        let conn = tokio::task::spawn_blocking(move || super::open_read_only(&path))
+        let conn = tokio::task::spawn_blocking(move || super::db::open_read_only(&path))
             .await
             .map_err(|_| listener_error("iMessage database worker failed"))?
             .map_err(|_| listener_error("iMessage database could not be opened"))?;
         let (mut conn, mut cursor) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            let rowid = super::max_inbound_rowid(&conn)?;
+            let rowid = super::super::db::max_inbound_rowid(&conn)?;
             let (read_date, read_rowid) = super::db::max_read_cursor(&conn)?;
             Ok::<(Connection, ListenerCursor), anyhow::Error>((
                 conn,
@@ -174,5 +180,87 @@ fn listener_error(message: &str) -> ChannelSendError {
         message: message.into(),
         retryable: true,
         ..Default::default()
+    }
+
+    /// Run the listener and optionally signal after its startup cursor is fixed.
+    /// The readiness sender is used by tests to synchronize first-message
+    /// delivery with the same cursor boundary as the production listener.
+    #[cfg(test)]
+    pub(super) async fn listen_with_ready(
+        &self,
+        tx: mpsc::Sender<ChannelMessage>,
+        ready: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> anyhow::Result<()> {
+        tracing::info!("iMessage channel listening (AppleScript bridge)...");
+
+        // Query the Messages SQLite database for new messages
+        // The database is at ~/Library/Messages/chat.db
+        let db_path = self
+            .messages_db_path()
+            .context("Cannot find home directory")?;
+
+        if !db_path.exists() {
+            anyhow::bail!(
+                "Messages database not found at {}. Ensure Messages.app is set up and Full Disk Access is granted.",
+                db_path.display()
+            );
+        }
+
+        // Open a persistent read-only connection instead of creating
+        // a new one on every 3-second poll cycle.
+        let path = db_path.to_path_buf();
+        let conn = tokio::task::spawn_blocking(move || open_read_only(&path)).await??;
+
+        // Track the newest inbound ROWID and read time already seen (shuttle
+        // conn in and out).
+        let (mut conn, initial_rowid, initial_read) =
+            tokio::task::spawn_blocking(move || -> anyhow::Result<(Connection, i64, i64)> {
+                let rowid = super::db::max_inbound_rowid(&conn)?;
+                let read = db::max_date_read(&conn).unwrap_or(0);
+                Ok((conn, rowid, read))
+            })
+            .await??;
+        let mut last_rowid = initial_rowid;
+        let mut last_read = initial_read;
+        if let Some(ready) = ready {
+            let _ = ready.send(());
+        }
+
+        loop {
+            tokio::time::sleep(self.poll_interval).await;
+
+            let (since, read_since) = (last_rowid, last_read);
+            let (returned_conn, rows, reads) = tokio::task::spawn_blocking(move || {
+                let rows = db::inbound_since(&conn, since);
+                let reads = db::read_since(&conn, read_since);
+                (conn, rows, reads)
+            })
+            .await
+            .context("iMessage poll worker join error")?;
+            conn = returned_conn;
+
+            match reads {
+                Ok(reads) => {
+                    for read in reads {
+                        last_read = last_read.max(read.date_read);
+                        self.dispatch_read(read).await;
+                    }
+                }
+                Err(e) => tracing::debug!("iMessage read-state poll error: {e}"),
+            }
+            match rows {
+                Ok(rows) => {
+                    for row in rows {
+                        last_rowid = last_rowid.max(row.rowid);
+                        if !self.dispatch_row(row, &tx).await {
+                            return Ok(());
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("iMessage poll error: {e}");
+                }
+            }
+        }
     }
 }
