@@ -849,7 +849,7 @@ fn sensitive_cloud_requests_require_https() {
 }
 
 #[tokio::test]
-async fn injected_cloud_client_reports_connection_failure_and_listener_stays_idle() {
+async fn injected_cloud_client_reports_connection_failure_and_webhook_start_is_immediate() {
     // An invalid proxy fails locally, before contacting Meta.
     let client = reqwest::Client::builder()
         .proxy(reqwest::Proxy::all("http://127.0.0.1:0").unwrap())
@@ -870,16 +870,15 @@ async fn injected_cloud_client_reports_connection_failure_and_listener_stays_idl
             .is_err()
     );
     assert!(!crate::provider_test_support::is_healthy(&channel).await);
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_millis(10),
-            crate::provider_test_support::listen_v1(&channel, tx)
-        )
-        .await
-        .is_err()
-    );
-    assert!(rx.try_recv().is_err());
+    let sink = crate::provider_test_support::RecordingInboundSink::default();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        crate::channel::ChannelAdapter::start(&channel, &sink),
+    )
+    .await
+    .expect("webhook adapters do not own a polling listener")
+    .unwrap();
+    assert!(sink.events().is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -1395,37 +1394,19 @@ mod v2 {
     }
 
     #[tokio::test]
-    async fn the_listener_holds_the_legacy_sink_only_while_it_runs() {
-        let channel = Arc::new(WhatsAppChannel::new(
+    async fn webhook_adapter_start_does_not_claim_a_stream_listener() {
+        let channel = WhatsAppChannel::new(
             "t".into(),
             "1".into(),
             "v".into(),
             vec![],
-        ));
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        #[allow(deprecated, reason = "the legacy listener seam is under test")]
-        let listener = {
-            let channel = Arc::clone(&channel);
-            tokio::spawn(async move {
-                crate::provider_test_support::listen_v1(channel.as_ref(), tx).await
-            })
-        };
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while channel.listener.lock().is_none() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the listener stored its sink");
-        assert!(
-            !listener.is_finished(),
-            "the listener parks until cancelled"
         );
-        listener.abort();
-        assert!(listener.await.unwrap_err().is_cancelled());
-        // Once the listener is gone nothing keeps the module's inbound
-        // forwarder alive: its receiver sees the channel close.
-        assert!(channel.listener.lock().is_none());
-        assert!(rx.recv().await.is_none());
+        let sink = crate::provider_test_support::RecordingInboundSink::default();
+        tokio::time::timeout(std::time::Duration::from_secs(1), channel.start(&sink))
+        .await
+        .expect("webhook adapter start is nonblocking")
+        .unwrap();
+        channel.stop().await.unwrap();
+        assert!(sink.events().is_empty());
     }
 }
