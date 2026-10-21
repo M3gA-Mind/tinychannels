@@ -328,9 +328,9 @@ async fn alias_map_clears_when_cap_is_hit() {
 #[test]
 fn supports_draft_updates_is_true() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
-    assert!(ch.supports_draft_updates());
-    assert!(Channel::supports_remote_control(&ch));
-    assert!(Channel::supports_chat_approvals(&ch));
+    assert!(crate::provider_test_support::supports_draft_updates(&ch));
+    assert!(crate::provider_test_support::supports_remote_control(&ch));
+    assert!(crate::provider_test_support::supports_chat_approvals(&ch));
     assert!(
         crate::providers::native::NativeProvider::declared_capabilities(&ch)
             .actions
@@ -360,7 +360,7 @@ fn supports_draft_updates_is_true() {
 #[test]
 fn supports_reactions_is_false() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
-    assert!(!ch.supports_reactions());
+    assert!(!crate::provider_test_support::supports_reactions(&ch));
 }
 
 #[tokio::test]

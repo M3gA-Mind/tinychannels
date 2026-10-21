@@ -1105,8 +1105,10 @@ mod v2 {
         assert!(facts.reactions && facts.addressing.reply_to_id && !facts.addressing.thread_id);
         assert!(facts.actions.supported.iter().any(|a| a == "edit"));
         assert!(!facts.content.image.outbound && !facts.voice_out.supported);
-        assert!(bare.supports_reactions() && bare.supports_edit() && bare.supports_reply_to_id());
-        assert!(bare.history_key_ignores_thread());
+        assert!(crate::provider_test_support::supports_reactions(&bare));
+        assert!(crate::provider_test_support::supports_edit(&bare));
+        assert!(crate::provider_test_support::supports_reply_to_id(&bare));
+        assert!(crate::provider_test_support::history_key_ignores_thread(&bare));
         let wired = WhatsAppWebChannel::new("/tmp/t.db".into(), None, None, vec![])
             .with_media_repository(Arc::new(MemoryMedia::default()))
             .with_voice_media_store(Arc::new(MemoryVoices::default()))

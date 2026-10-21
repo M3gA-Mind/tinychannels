@@ -931,10 +931,13 @@ mod v2 {
         let facts = bare.declared_capabilities();
         assert!(facts.reactions && facts.addressing.reply_to_id && !facts.addressing.thread_id);
         assert!(!facts.content.image.outbound && !facts.voice_out.supported);
-        assert!(bare.supports_reactions() && bare.supports_reply_to_id());
-        assert!(bare.supports_remote_control() && bare.supports_chat_approvals());
-        assert!(bare.history_key_ignores_thread());
-        assert!(!bare.supports_edit() && !bare.supports_draft_updates());
+        assert!(crate::provider_test_support::supports_reactions(&bare));
+        assert!(crate::provider_test_support::supports_reply_to_id(&bare));
+        assert!(crate::provider_test_support::supports_remote_control(&bare));
+        assert!(crate::provider_test_support::supports_chat_approvals(&bare));
+        assert!(crate::provider_test_support::history_key_ignores_thread(&bare));
+        assert!(!crate::provider_test_support::supports_edit(&bare));
+        assert!(!crate::provider_test_support::supports_draft_updates(&bare));
 
         let wired = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![])
             .with_media_repository(Arc::new(MemoryMedia::default()))
