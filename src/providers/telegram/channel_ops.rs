@@ -28,6 +28,17 @@ impl std::fmt::Display for TelegramPreDispatchError {
 impl std::error::Error for TelegramPreDispatchError {}
 
 #[derive(Debug)]
+struct TelegramBadFormatError;
+
+impl std::fmt::Display for TelegramBadFormatError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Telegram request contains an invalid address")
+    }
+}
+
+impl std::error::Error for TelegramBadFormatError {}
+
+#[derive(Debug)]
 pub(super) struct TelegramAttemptedError;
 
 impl std::fmt::Display for TelegramAttemptedError {
@@ -247,6 +258,15 @@ fn typed_send_error(error: anyhow::Error) -> crate::channel::ChannelSendError {
         return crate::channel::ChannelSendError {
             kind: crate::channel::SendErrorKind::Forbidden,
             message: "Telegram typed send was rejected before provider dispatch".into(),
+            retryable: false,
+            sent_before_error: false,
+            ..Default::default()
+        };
+    }
+    if error.downcast_ref::<TelegramBadFormatError>().is_some() {
+        return crate::channel::ChannelSendError {
+            kind: crate::channel::SendErrorKind::BadFormat,
+            message: "Telegram request contains an invalid address".into(),
             retryable: false,
             sent_before_error: false,
             ..Default::default()
