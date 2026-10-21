@@ -1432,7 +1432,7 @@ async fn telegram_resolves_and_uploads_voice_larger_than_inline_intent_limit() {
     assert!(inline.len() < tinychannels_bus::module_relay::RELAY_FRAME_BYTES);
     assert!(!String::from_utf8_lossy(&inline).contains("audio_base64"));
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message).await.unwrap();
     assert_eq!(
         outcome.receipt.primary_platform_message_id.as_deref(),
         Some("53")
@@ -1484,7 +1484,7 @@ async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt
         }],
     };
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message).await.unwrap();
 
     assert_eq!(
         outcome.receipt.primary_platform_message_id.as_deref(),
@@ -1576,7 +1576,7 @@ async fn typed_voice_sends_long_transcript_as_receipted_followup_text() {
             },
         ],
     };
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message).await.unwrap();
     assert_eq!(outcome.error, None);
     assert_eq!(outcome.receipt.platform_message_ids, ["54", "55"]);
     assert_eq!(
@@ -1662,7 +1662,7 @@ async fn long_voice_transcript_failure_retains_partial_receipts_without_retry() 
             },
         ],
     };
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message).await.unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["56", "57"]);
     let error = outcome
         .error
@@ -1728,7 +1728,7 @@ async fn typed_voice_keeps_transcript_as_caption_and_sends_one_native_receipt() 
         },
     );
 
-    let result = channel.send_typed_with_receipt(&message).await;
+    let result = ChannelTypedSend::send_typed(&channel, &message).await;
     assert!(
         result.is_ok(),
         "mixed transcript+voice must be supported: {result:?}"
@@ -1762,8 +1762,7 @@ async fn typed_voice_rejects_missing_host_storage_reference_and_origin_turn() {
     );
 
     let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
-    let missing_reference = channel
-        .send_typed_with_receipt(&outbound_voice_message(None, Some("turn-1")))
+    let missing_reference = ChannelTypedSend::send_typed(&channel, &outbound_voice_message(None, Some("turn-1")))
         .await
         .unwrap_err();
     assert!(
@@ -1772,8 +1771,7 @@ async fn typed_voice_rejects_missing_host_storage_reference_and_origin_turn() {
             .contains("no host-owned opaque reference")
     );
 
-    let missing_turn = channel
-        .send_typed_with_receipt(&outbound_voice_message(Some("voice-ref"), None))
+    let missing_turn = ChannelTypedSend::send_typed(&channel, &outbound_voice_message(Some("voice-ref"), None))
         .await
         .unwrap_err();
     assert!(
@@ -2391,7 +2389,7 @@ async fn bridge_approval_presentation_renders_scoped_inline_choice_actions() {
         }],
     );
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message).await.unwrap();
 
     assert!(outcome.error.is_none());
     assert_eq!(outcome.receipt.platform_message_ids, ["991"]);
@@ -2483,7 +2481,7 @@ async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
         },
     ];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message).await.unwrap();
 
     assert_eq!(outcome.receipt.platform_message_ids, ["11", "22", "11"]);
     assert_eq!(outcome.receipt.parts.len(), 3);
@@ -2553,7 +2551,7 @@ async fn typed_image_rejects_non_numeric_platform_thread_before_upload() {
         },
     }];
 
-    assert!(channel.send_typed_with_receipt(&message).await.is_err());
+    assert!(ChannelTypedSend::send_typed(&channel, &message).await.is_err());
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -2588,7 +2586,7 @@ async fn typed_media_preserves_legacy_address_and_requires_host_opaque_id() {
         },
     }];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message).await.unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["701"]);
     assert_eq!(outcome.receipt.thread_id.as_deref(), Some("77"));
 
@@ -2599,8 +2597,7 @@ async fn typed_media_preserves_legacy_address_and_requires_host_opaque_id() {
     {
         media.opaque_id = None;
     }
-    let error = channel
-        .send_typed_with_receipt(&missing_reference)
+    let error = ChannelTypedSend::send_typed(&channel, &missing_reference)
         .await
         .unwrap_err();
     assert!(error.to_string().contains("before provider dispatch"));
@@ -2635,7 +2632,7 @@ async fn typed_text_partial_failure_keeps_real_ids_and_stops_before_media() {
         image,
     ];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message).await.unwrap();
 
     assert_eq!(outcome.receipt.platform_message_ids, ["702"]);
     assert_eq!(outcome.receipt.parts.len(), 1);
@@ -2684,8 +2681,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
 
     let mut no_conversation = scoped_typed_media_message("stored-photo-1");
     no_conversation.conversation_ref.as_mut().unwrap().id = "  ".into();
-    let error = channel
-        .send_typed_with_receipt(&no_conversation)
+    let error = ChannelTypedSend::send_typed(&channel, &no_conversation)
         .await
         .unwrap_err();
     assert!(error.to_string().contains("before provider dispatch"));
@@ -2694,8 +2690,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
     let mut no_account = scoped_typed_media_message("stored-photo-1");
     no_account.channel_ref.as_mut().unwrap().account_id = None;
     assert!(
-        channel
-            .send_typed_with_receipt(&no_account)
+        ChannelTypedSend::send_typed(&channel, &no_account)
             .await
             .unwrap_err()
             .to_string()
@@ -2705,8 +2700,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
     let mut no_turn = scoped_typed_media_message("stored-photo-1");
     no_turn.turn_id = None;
     assert!(
-        channel
-            .send_typed_with_receipt(&no_turn)
+        ChannelTypedSend::send_typed(&channel, &no_turn)
             .await
             .unwrap_err()
             .to_string()
@@ -2717,8 +2711,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
     let mut no_reply = scoped_typed_media_message("stored-photo-1");
     no_reply.reply_to_id = Some("not-a-platform-id".into());
     assert!(
-        channel
-            .send_typed_with_receipt(&no_reply)
+        ChannelTypedSend::send_typed(&channel, &no_reply)
             .await
             .unwrap_err()
             .to_string()
@@ -2744,8 +2737,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
             });
     }
     assert!(
-        channel
-            .send_typed_with_receipt(&unsupported)
+        ChannelTypedSend::send_typed(&channel, &unsupported)
             .await
             .unwrap_err()
             .to_string()
@@ -2754,8 +2746,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
 
     let zero_dimensions = scoped_typed_media_message("zero-dimension-photo");
     assert!(
-        channel
-            .send_typed_with_receipt(&zero_dimensions)
+        ChannelTypedSend::send_typed(&channel, &zero_dimensions)
             .await
             .unwrap_err()
             .to_string()
@@ -2777,8 +2768,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
         },
     }];
     assert!(
-        channel
-            .send_typed_with_receipt(&sticker)
+        ChannelTypedSend::send_typed(&channel, &sticker)
             .await
             .unwrap_err()
             .to_string()
@@ -2814,7 +2804,7 @@ async fn native_webp_sticker_uses_send_sticker_and_returns_its_message_id() {
         },
     }];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message).await.unwrap();
 
     assert!(outcome.error.is_none());
     assert_eq!(outcome.receipt.platform_message_ids, ["811"]);
@@ -2857,7 +2847,7 @@ async fn typed_media_caption_failure_after_text_keeps_receipt_and_forbids_retry(
         },
     ];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message).await.unwrap();
 
     assert_eq!(outcome.receipt.platform_message_ids, ["700"]);
     assert_eq!(outcome.receipt.parts.len(), 1);
@@ -2912,7 +2902,7 @@ async fn typed_media_failure_after_text_keeps_real_partial_ids_and_forbids_retry
             },
         });
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message).await.unwrap();
 
     assert_eq!(outcome.receipt.platform_message_ids, ["11"]);
     let error = outcome.error.expect("partial delivery must be explicit");
@@ -3028,7 +3018,7 @@ async fn typed_audio_upload_preserves_caption_title_and_duration() {
         },
     }];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message).await.unwrap();
 
     assert_eq!(outcome.receipt.platform_message_ids, ["44"]);
     let requests = server.received_requests().await.unwrap();
@@ -3098,7 +3088,7 @@ async fn typed_video_and_file_upload_use_native_multipart_with_real_receipts() {
         },
     ];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message).await.unwrap();
 
     assert_eq!(outcome.receipt.platform_message_ids, ["51", "52"]);
     assert_eq!(outcome.receipt.parts.len(), 2);
@@ -3197,7 +3187,7 @@ async fn unsupported_native_video_and_image_formats_fall_back_to_documents() {
         },
     ];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message).await.unwrap();
 
     assert_eq!(outcome.receipt.platform_message_ids, ["61", "62"]);
     let requests = server.received_requests().await.unwrap();
@@ -3260,7 +3250,7 @@ async fn telegram_rejects_wav_audio_before_native_upload() {
         },
     }];
 
-    let error = channel.send_typed_with_receipt(&message).await.unwrap_err();
+    let error = ChannelTypedSend::send_typed(&channel, &message).await.unwrap_err();
 
     assert!(
         error
@@ -3301,7 +3291,7 @@ async fn telegram_photo_over_ten_megabytes_is_rejected_before_http() {
         },
     }];
 
-    let error = channel.send_typed_with_receipt(&message).await.unwrap_err();
+    let error = ChannelTypedSend::send_typed(&channel, &message).await.unwrap_err();
 
     assert!(error.to_string().contains("before provider dispatch"));
     assert!(server.received_requests().await.unwrap().is_empty());
@@ -3372,8 +3362,7 @@ async fn typed_send_receipt_uses_actual_telegram_ids_and_full_address() {
     )
     .await;
     let ch = channel_for(&server, &["*"]);
-    let outcome = ch
-        .send_typed_with_receipt(&typed_text("idem", "hello".into()))
+    let outcome = ChannelTypedSend::send_typed(&ch, &typed_text("idem", "hello".into()))
         .await
         .unwrap();
     assert_eq!(outcome.error, None);
@@ -3553,7 +3542,7 @@ async fn typed_send_receipt_keeps_ordered_multiple_text_parts() {
             },
         });
 
-    let outcome = ch.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&ch, &message).await.unwrap();
 
     assert_eq!(
         json_bodies(&server, "sendMessage").await[0]["text"],
@@ -3586,7 +3575,7 @@ async fn typed_send_receipt_applies_tool_call_tag_sanitization() {
         "before<tool_call>hidden</tool_call>[REACTION:👍|321] [IMAGE:https://example.test/image.png]".into(),
     );
 
-    let outcome = ch.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&ch, &message).await.unwrap();
 
     assert_eq!(outcome.error, None);
     let bodies = json_bodies(&server, "sendMessage").await;
@@ -3612,7 +3601,7 @@ async fn typed_send_rejects_non_numeric_reply_reference_before_provider_io() {
     let mut message = typed_text("bad-reply-id", "hello".into());
     message.reply_to_id = Some("reply:legacy".into());
 
-    let error = ch.send_typed_with_receipt(&message).await.unwrap_err();
+    let error = ChannelTypedSend::send_typed(&ch, &message).await.unwrap_err();
 
     assert!(
         error
@@ -3771,7 +3760,7 @@ async fn typed_send_keeps_delivered_chunk_ids_when_later_chunk_fails() {
                 markdown_dialect: None,
             },
         });
-    let outcome = ch.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&ch, &message).await.unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["321"]);
     assert_eq!(outcome.receipt.parts.len(), 1);
     assert!(outcome.error.as_ref().is_some_and(|error| !error.retryable));
@@ -3792,8 +3781,7 @@ async fn typed_send_without_provider_message_id_is_ambiguous_and_not_retried() {
     let server = mock_api().await;
     mount_post(&server, "sendMessage", ok_with(serde_json::json!({}))).await;
     let ch = channel_for(&server, &["*"]);
-    let outcome = ch
-        .send_typed_with_receipt(&typed_text("missing-id", "hello".into()))
+    let outcome = ChannelTypedSend::send_typed(&ch, &typed_text("missing-id", "hello".into()))
         .await
         .unwrap();
     let error = outcome.error.expect("missing ID cannot report success");
@@ -3814,8 +3802,7 @@ async fn typed_send_connection_refusal_is_definitely_not_sent_and_sanitized() {
     drop(listener);
     let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
     ch.api_base = format!("http://{address}");
-    let outcome = ch
-        .send_typed_with_receipt(&typed_text("transport-error", "hello".into()))
+    let outcome = ChannelTypedSend::send_typed(&ch, &typed_text("transport-error", "hello".into()))
         .await
         .unwrap();
     let error = outcome
@@ -3868,8 +3855,7 @@ async fn accepted_request_disconnect_remains_ambiguous() {
     let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
     ch.api_base = format!("http://{address}");
 
-    let outcome = ch
-        .send_typed_with_receipt(&typed_text("disconnected", "hello".into()))
+    let outcome = ChannelTypedSend::send_typed(&ch, &typed_text("disconnected", "hello".into()))
         .await
         .unwrap();
     let request = accepted.await.unwrap();
@@ -3948,8 +3934,7 @@ async fn fallback_connection_refusal_after_markdown_rejection_is_not_sent() {
     let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
     ch.api_base = format!("http://{address}");
 
-    let outcome = ch
-        .send_typed_with_receipt(&typed_text("fallback-refused", "hello".into()))
+    let outcome = ChannelTypedSend::send_typed(&ch, &typed_text("fallback-refused", "hello".into()))
         .await
         .unwrap();
     let request = first_request.await.unwrap();
