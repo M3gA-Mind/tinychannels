@@ -1,16 +1,17 @@
 //! Native typed media delivery for Lark and Feishu.
 
+use super::FILE_LIMIT;
 use super::LarkChannel;
-use super::media::file_type_for_mime;
+#[cfg(test)]
+use super::media::{file_type_for_mime, is_ogg_opus};
+#[cfg(test)]
 use super::outbound::{known_unsent, uncertain_send};
 use crate::host::{MediaRepository, VoiceMediaStore};
-use crate::providers::native::{FileStep, Limits, NativeProvider, Sent, Step, Target};
+use crate::providers::native::{Limits, NativeProvider, Sent, Step, Target};
 use async_trait::async_trait;
 use std::sync::Arc;
+use tinychannels_bus::ChannelCapabilities;
 use tinychannels_bus::channel::ChannelSendError;
-use tinychannels_bus::{
-    ChannelCapabilities, ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef,
-};
 
 #[async_trait]
 impl NativeProvider for LarkChannel {
