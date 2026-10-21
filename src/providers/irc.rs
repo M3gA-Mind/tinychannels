@@ -1,9 +1,8 @@
-use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 
 // Use tokio_rustls's re-export of rustls types
 use tokio_rustls::rustls;
@@ -44,32 +43,6 @@ struct ListenerRegistration<'a>(&'a IrcChannel);
 impl Drop for ListenerRegistration<'_> {
     fn drop(&mut self) {
         self.0.end_listener();
-    }
-}
-
-enum IrcIngress<'a> {
-    Legacy(mpsc::Sender<ChannelMessage>),
-    Typed(&'a (dyn crate::channel::ChannelInboundSink + Send + Sync)),
-}
-
-impl IrcIngress<'_> {
-    async fn publish(
-        &self,
-        envelope: tinychannels_bus::channel::ChannelInboundEnvelope,
-    ) -> anyhow::Result<bool> {
-        match self {
-            Self::Legacy(tx) => {
-                let timestamp = envelope.timestamp_unix_ms.unwrap_or_default() / 1000;
-                let message = crate::legacy_message_from_inbound_envelope(&envelope, timestamp)?;
-                Ok(tx.send(message).await.is_ok())
-            }
-            Self::Typed(sink) => {
-                sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
-                    .await
-                    .map_err(|error| anyhow::anyhow!(error.message))?;
-                Ok(true)
-            }
-        }
     }
 }
 
