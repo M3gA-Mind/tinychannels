@@ -2,6 +2,7 @@
 //! server, scripting the registration, SASL and message exchange line by line.
 
 use super::*;
+use tokio::sync::mpsc;
 use std::time::Duration;
 use tinychannels_conformance::{
     AdapterFixture, ConformanceFeature, ExpectedScope, WireObservation, check_all_features,
@@ -118,11 +119,15 @@ impl Peer {
     }
 }
 
-async fn recv(rx: &mut mpsc::Receiver<ChannelMessage>) -> ChannelMessage {
+async fn recv(
+    rx: &mut mpsc::UnboundedReceiver<tinychannels_bus::ChannelIngress>,
+) -> tinychannels_bus::channel::ChannelInboundEnvelope {
     tokio::time::timeout(GUARD, rx.recv())
         .await
         .unwrap()
         .expect("listener dropped its sender")
+        .into_inbound()
+        .expect("IRC listener emits inbound envelopes")
 }
 
 #[derive(Clone)]
@@ -657,12 +662,6 @@ async fn public_adapter_rejects_a_second_concurrent_listener() {
         async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
     });
     let _peer = Peer::accept(&listener, &acceptor).await;
-    let (legacy_tx, _legacy_rx) = mpsc::channel(1);
-    let legacy = channel
-        .listen(legacy_tx)
-        .await
-        .expect_err("legacy and native starts must share one listener owner");
-    assert!(legacy.to_string().contains("already running"));
     let second = crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await;
     let error = second.expect_err("the provider must have one listener owner");
     assert!(
@@ -692,10 +691,12 @@ async fn listen_registers_authenticates_and_forwards_allowed_privmsgs() {
         sasl_password: Some("sasl-pw".into()),
         ..config(port)
     }));
-    let (tx, mut rx) = mpsc::channel(8);
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
     let listen = tokio::spawn({
         let channel = channel.clone();
-        async move { channel.listen(tx).await }
+        let sink = sink.clone();
+        async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
     });
 
     let mut peer = Peer::accept(&listener, &acceptor).await;
@@ -743,24 +744,34 @@ async fn listen_registers_authenticates_and_forwards_allowed_privmsgs() {
     peer.say(":alice!a@host PRIVMSG bot_ :hello dm").await;
 
     let channel_msg = recv(&mut rx).await;
-    assert_eq!(channel_msg.sender, "Alice");
-    assert_eq!(channel_msg.reply_target, "#ops");
+    assert_eq!(channel_msg.sender.id, "Alice");
+    assert_eq!(channel_msg.conversation.id, "#ops");
     assert_eq!(
-        channel_msg.content,
+        channel_msg.text,
         format!("{IRC_STYLE_PREFIX}<Alice> hello channel")
     );
-    assert_eq!(channel_msg.channel, "irc");
-    assert!(channel_msg.id.starts_with("irc_"));
+    assert_eq!(channel_msg.channel.id, "irc");
+    assert!(channel_msg.message_id.starts_with("irc_"));
 
     let dm = recv(&mut rx).await;
-    assert_eq!(dm.sender, "alice");
-    assert_eq!(dm.reply_target, "alice");
-    assert_eq!(dm.content, format!("{IRC_STYLE_PREFIX}hello dm"));
-    assert_ne!(dm.id, channel_msg.id);
+    assert_eq!(dm.sender.id, "alice");
+    assert_eq!(dm.conversation.id, "alice");
+    assert_eq!(dm.text, format!("{IRC_STYLE_PREFIX}hello dm"));
+    assert_ne!(dm.message_id, channel_msg.message_id);
 
-    // send() writes through the connection listen() registered.
-    channel
-        .send(&SendMessage::new("line one\n\nline two", "#ops"))
+    // Typed send writes through the connection the adapter listener registered.
+    crate::channel::ChannelAdapter::send(
+        channel.as_ref(),
+        tinychannels_bus::ChannelOutboundIntent {
+            channel_id: "irc".into(),
+            conversation_id: "#ops".into(),
+            idempotency_key: "irc-socket-send".into(),
+            payload: tinychannels_bus::OutboundPayload::Text {
+                text: "line one\n\nline two".into(),
+            },
+            ..Default::default()
+        },
+    )
         .await
         .unwrap();
     peer.expect("PRIVMSG #ops :line one").await;
@@ -785,8 +796,11 @@ async fn listen_continues_without_sasl_when_the_server_refuses_it() {
         sasl_password: Some("sasl-pw".into()),
         ..config(port)
     });
-    let (tx, _rx) = mpsc::channel(1);
-    let listen = tokio::spawn(async move { channel.listen(tx).await });
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
+    let listen = tokio::spawn(async move {
+        crate::channel::ChannelAdapter::start(&channel, &sink).await
+    });
 
     let mut peer = Peer::accept(&listener, &acceptor).await;
     peer.expect("CAP REQ :sasl").await;
@@ -819,8 +833,11 @@ async fn listen_ends_sasl_on_failure_and_stops_when_the_receiver_is_gone() {
         sasl_password: Some("sasl-pw".into()),
         ..config(port)
     });
-    let (tx, rx) = mpsc::channel(1);
-    let listen = tokio::spawn(async move { channel.listen(tx).await });
+    let (tx, rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
+    let listen = tokio::spawn(async move {
+        crate::channel::ChannelAdapter::start(&channel, &sink).await
+    });
 
     let mut peer = Peer::accept(&listener, &acceptor).await;
     peer.expect("CAP REQ :sasl").await;
@@ -848,11 +865,22 @@ async fn listen_ends_sasl_on_failure_and_stops_when_the_receiver_is_gone() {
 #[tokio::test]
 async fn send_fails_before_listen_has_connected() {
     let channel = IrcChannel::new(config(1));
-    let error = channel
-        .send(&SendMessage::new("hello", "#ops"))
+    let error = crate::channel::ChannelAdapter::send(
+        &channel,
+        tinychannels_bus::ChannelOutboundIntent {
+            channel_id: "irc".into(),
+            conversation_id: "#ops".into(),
+            idempotency_key: "irc-offline-send".into(),
+            payload: tinychannels_bus::OutboundPayload::Text {
+                text: "hello".into(),
+            },
+            ..Default::default()
+        },
+    )
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("not connected"), "{error}");
+    assert_eq!(error.message, "IRC is not connected");
+    assert!(!error.sent_before_error);
 }
 
 #[tokio::test]
@@ -886,8 +914,11 @@ async fn verified_tls_rejects_an_untrusted_certificate() {
         ..config(port)
     });
     assert!(!channel.health_check().await);
-    let (tx, _rx) = mpsc::channel(1);
-    assert!(channel.listen(tx).await.is_err());
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
+    assert!(crate::channel::ChannelAdapter::start(&channel, &sink)
+        .await
+        .is_err());
     tokio::time::timeout(GUARD, server).await.unwrap().unwrap();
 }
 
