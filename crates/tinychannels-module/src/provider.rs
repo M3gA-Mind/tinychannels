@@ -215,6 +215,31 @@ async fn dispatch_interaction(
                 .await
             }
         }
+        Op::MarkRead {
+            channel: channel_ref,
+            conversation,
+            provider_message_id,
+        } => {
+            let native = native
+                .as_ref()
+                .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?;
+            if channel_ref.id != configured_instance
+                || conversation.id.trim().is_empty()
+                || provider_message_id.trim().is_empty()
+            {
+                return Err(Error::failed(
+                    "provider read receipt scope is incomplete or does not match configured account",
+                ));
+            }
+            native
+                .read_receipts
+                .as_ref()
+                .ok_or_else(|| Error::failed("provider read receipt port is unavailable"))?
+                .mark_read(&conversation, &provider_message_id)
+                .await
+                .map_err(|_| Error::failed("provider read receipt failed"))?;
+            Ok(tinychannels_bus::ChannelInteractionResult::Completed)
+        }
         Op::SendReaction {
             channel: channel_ref,
             conversation,
@@ -1318,6 +1343,7 @@ pub(crate) struct NativePorts {
     edits: Arc<dyn tinychannels::channel::ChannelEdit>,
     deletes: Arc<dyn tinychannels::channel::ChannelDelete>,
     drafts: Arc<dyn tinychannels::channel::ChannelStreamingDraft>,
+    read_receipts: Option<Arc<dyn tinychannels::LongTailNative>>,
     listener_mode: LongTailListenerMode,
 }
 
@@ -1345,6 +1371,7 @@ impl NativePorts {
             edits: channel.clone(),
             deletes: channel.clone(),
             drafts: channel,
+            read_receipts: None,
             listener_mode: LongTailListenerMode::Legacy,
         }
     }
@@ -1356,6 +1383,7 @@ impl NativePorts {
         provider: &'static str,
         listener_mode: LongTailListenerMode,
     ) -> Self {
+        let read_receipts = (provider == "WhatsApp").then(|| channel.clone());
         Self {
             provider,
             adapter: channel.clone(),
@@ -1365,6 +1393,7 @@ impl NativePorts {
             edits: channel.clone(),
             deletes: channel.clone(),
             drafts: channel,
+            read_receipts,
             listener_mode,
         }
     }
