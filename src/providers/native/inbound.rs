@@ -331,13 +331,6 @@ pub(crate) async fn publish_event(
     }
 }
 
-fn mime_for(media: &MediaReference) -> String {
-    media
-        .content_type
-        .clone()
-        .unwrap_or_else(|| "audio/mp4".into())
-}
-
 #[cfg(test)]
 #[path = "inbound_tests.rs"]
 mod tests;
