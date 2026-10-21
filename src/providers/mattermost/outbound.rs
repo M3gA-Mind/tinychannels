@@ -293,7 +293,10 @@ pub(super) fn mattermost_emoji_name(value: &str) -> Option<String> {
     .then(|| name.to_owned())
 }
 
-pub(super) fn mattermost_request_error(operation: &str, may_have_been_applied: bool) -> ChannelSendError {
+pub(super) fn mattermost_request_error(
+    operation: &str,
+    may_have_been_applied: bool,
+) -> ChannelSendError {
     ChannelSendError {
         kind: if may_have_been_applied {
             SendErrorKind::Unknown
@@ -348,7 +351,7 @@ pub(super) fn mattermost_status_error(
     }
 }
 
-pub(super) pub(super) fn http_error(
+pub(super) fn http_error(
     status: reqwest::StatusCode,
     operation: &str,
     final_post: bool,
