@@ -33,6 +33,36 @@ async fn test_remote_channel_fixture_registers_and_cleans_up_without_network() {
     );
 }
 
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn test_remote_channel_fixture_rejects_duplicates_and_ignores_missing_cleanup() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let channels = Channels::new(HostChannels::new(connection), None);
+
+    channels
+        .test_register_remote_channel("telegram".into())
+        .await
+        .unwrap();
+    let duplicate = channels
+        .test_register_remote_channel("telegram".into())
+        .await
+        .unwrap_err();
+    assert!(duplicate.to_string().contains("already registered"));
+
+    channels
+        .test_unregister_remote_channel("missing".into())
+        .await
+        .unwrap();
+    channels
+        .test_unregister_remote_channel("telegram".into())
+        .await
+        .unwrap();
+}
+
 /// Mirrors the predicate in `start_channel`.
 ///
 /// Extracted rather than duplicated in the test so the two cannot disagree:
