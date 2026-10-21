@@ -2,6 +2,7 @@ use super::*;
 use crate::channel::ChannelAdapter;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
+use tinychannels_bus::{ChannelInboundEnvelope, ChannelIngress};
 
 fn discord_units(text: &str) -> usize {
     text.encode_utf16().count()
@@ -645,6 +646,13 @@ async fn send_text(
     ChannelAdapter::send(channel, outbound(content, recipient)).await
 }
 
+fn next_inbound(rx: &mut mpsc::Receiver<ChannelIngress>) -> ChannelInboundEnvelope {
+    match rx.try_recv().expect("one typed inbound event") {
+        ChannelIngress::Inbound(envelope) => envelope,
+        ChannelIngress::Event(event) => panic!("unexpected lifecycle event: {event:?}"),
+    }
+}
+
 /// Mock that records `(channel_id, authorization, content)` per POSTed message.
 async fn message_sink(
     status: StatusCode,
@@ -900,7 +908,7 @@ async fn listen_filters_gateway_events_and_forwards_allowed_messages() {
     )
     .with_api_base(base);
     let (tx, mut rx) = mpsc::channel(16);
-    tokio::time::timeout(HANG_GUARD, ch.listen(tx))
+    tokio::time::timeout(HANG_GUARD, ch.run_gateway_typed(tx))
         .await
         .expect("listen returns on op 7")
         .unwrap();
@@ -909,12 +917,12 @@ async fn listen_filters_gateway_events_and_forwards_allowed_messages() {
         .unwrap()
         .unwrap();
 
-    let msg = rx.try_recv().expect("one forwarded message");
-    assert_eq!(msg.id, "discord_m-ok");
-    assert_eq!(msg.sender, "u1");
-    assert_eq!(msg.reply_target, "c1");
-    assert_eq!(msg.content, "hello");
-    assert_eq!(msg.channel, "discord");
+    let msg = next_inbound(&mut rx);
+    assert_eq!(msg.message_id, "discord_m-ok");
+    assert_eq!(msg.sender.id, "u1");
+    assert_eq!(msg.conversation.id, "c1");
+    assert_eq!(msg.text, "hello");
+    assert_eq!(msg.channel.id, "discord");
     assert!(rx.try_recv().is_err(), "everything else was filtered");
 }
 
@@ -941,7 +949,7 @@ async fn listen_handles_dm_mentions_and_bots_then_stops_on_invalid_session() {
     let ch = DiscordChannel::new(BOT_TOKEN.into(), None, None, vec!["*".into()], true, true)
         .with_api_base(base);
     let (tx, mut rx) = mpsc::channel(16);
-    tokio::time::timeout(HANG_GUARD, ch.listen(tx))
+    tokio::time::timeout(HANG_GUARD, ch.run_gateway_typed(tx))
         .await
         .expect("listen returns on op 9")
         .unwrap();
@@ -950,18 +958,19 @@ async fn listen_handles_dm_mentions_and_bots_then_stops_on_invalid_session() {
         .unwrap()
         .unwrap();
 
-    let msg = rx.try_recv().unwrap();
+    let msg = next_inbound(&mut rx);
     assert!(
-        msg.id.starts_with("discord_") && msg.id.len() > "discord_".len() + 30,
+        msg.message_id.starts_with("discord_")
+            && msg.message_id.len() > "discord_".len() + 30,
         "{}",
-        msg.id
+        msg.message_id
     );
-    assert_eq!(msg.sender, "u7");
+    assert_eq!(msg.sender.id, "u7");
     assert_eq!(
-        msg.reply_target, "u7",
+        msg.conversation.id, "u7",
         "DM without channel id replies to author"
     );
-    assert_eq!(msg.content, "ping");
+    assert_eq!(msg.text, "ping");
     assert!(rx.try_recv().is_err());
 }
 
@@ -973,7 +982,7 @@ async fn listen_returns_when_gateway_closes() {
     .await;
     let ch = channel_at(&base, None);
     let (tx, _rx) = mpsc::channel(1);
-    tokio::time::timeout(HANG_GUARD, ch.listen(tx))
+    tokio::time::timeout(HANG_GUARD, ch.run_gateway_typed(tx))
         .await
         .expect("listen returns on close")
         .unwrap();
@@ -1000,7 +1009,7 @@ async fn listen_stops_when_receiver_is_gone() {
     let ch = channel_at(&base, None);
     let (tx, rx) = mpsc::channel(1);
     drop(rx);
-    tokio::time::timeout(HANG_GUARD, ch.listen(tx))
+    tokio::time::timeout(HANG_GUARD, ch.run_gateway_typed(tx))
         .await
         .expect("listen returns once delivery fails")
         .unwrap();
@@ -1015,7 +1024,7 @@ async fn listen_fails_when_gateway_lookup_is_not_json() {
     let app = Router::new().route("/gateway/bot", get(|| async { "<html>nope</html>" }));
     let base = spawn_http(app).await;
     let (tx, _rx) = mpsc::channel(1);
-    assert!(channel_at(&base, None).listen(tx).await.is_err());
+    assert!(channel_at(&base, None).run_gateway_typed(tx).await.is_err());
 }
 
 #[test]
