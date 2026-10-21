@@ -211,6 +211,38 @@ struct NativeControllerFixture {
     observations: std::sync::Mutex<Vec<tinychannels_conformance::NativeControllerObservation>>,
 }
 
+fn assert_native_controller_observation(
+    fixture: &NativeControllerFixture,
+    feature: tinychannels_conformance::NativeControllerFeature,
+    method: &str,
+    path_fragment: &str,
+    authorization: Option<&str>,
+    returned_id: Option<&str>,
+) {
+    let observations = fixture.observations();
+    assert_eq!(
+        observations.len(),
+        1,
+        "one operation must produce one observation"
+    );
+    let observation = &observations[0];
+    assert_eq!(observation.feature, feature);
+    assert_eq!(observation.provider, fixture.provider);
+    assert_eq!(observation.request["method"], method);
+    assert!(
+        observation.request["path"]
+            .as_str()
+            .is_some_and(|path| path.contains(path_fragment)),
+        "unexpected {} request path: {}",
+        fixture.provider,
+        observation.request["path"]
+    );
+    assert_eq!(observation.request["authorization"].as_str(), authorization);
+    if let Some(id) = returned_id {
+        assert_eq!(observation.returned_ids, [id]);
+    }
+}
+
 impl NativeControllerFixture {
     fn configured_capabilities(
         provider: &str,
@@ -255,26 +287,6 @@ impl NativeControllerFixture {
         );
     }
 
-    async fn captured_request(&self) -> anyhow::Result<serde_json::Value> {
-        let request = self
-            .server
-            .received_requests()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("failed to read provider mock requests"))?
-            .into_iter()
-            .last()
-            .ok_or_else(|| anyhow::anyhow!("provider made no HTTP request"))?;
-        let body =
-            serde_json::from_slice::<serde_json::Value>(&request.body).unwrap_or_else(|_| {
-                serde_json::Value::String(String::from_utf8_lossy(&request.body).into())
-            });
-        Ok(serde_json::json!({
-            "method": request.method.as_str(),
-            "path": request.url.path(),
-            "body": body,
-        }))
-    }
-
     async fn captured_request_since(&self, before: usize) -> anyhow::Result<serde_json::Value> {
         let requests = self
             .server
@@ -285,8 +297,10 @@ impl NativeControllerFixture {
             .get(before..)
             .and_then(|fresh| fresh.last())
             .ok_or_else(|| anyhow::anyhow!("operation made no fresh provider HTTP request"))?;
-        let body = serde_json::from_slice::<serde_json::Value>(&request.body)
-            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&request.body).into()));
+        let body =
+            serde_json::from_slice::<serde_json::Value>(&request.body).unwrap_or_else(|_| {
+                serde_json::Value::String(String::from_utf8_lossy(&request.body).into())
+            });
         let authorization = request
             .headers
             .get("authorization")
@@ -347,7 +361,7 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
                     Ok(value) => value,
                     Err(error) => {
                         if self.wire_count().await > $before {
-                            if let Ok(request) = self.captured_request().await {
+                            if let Ok(request) = self.captured_request_since($before).await {
                                 self.record(
                                     $feature,
                                     $operation,
@@ -2518,6 +2532,14 @@ async fn native_controller_conformance_uses_mattermost_wire_and_rejects_unsuppor
     check_native_controller_feature(&fixture, Feature::Reaction)
         .await
         .unwrap();
+    assert_native_controller_observation(
+        &fixture,
+        Feature::Reaction,
+        "POST",
+        "/api/v4/reactions",
+        Some("Bearer mm-token"),
+        None,
+    );
     check_native_controller_feature(&fixture, Feature::ThreadCreate)
         .await
         .unwrap();
@@ -2527,6 +2549,7 @@ async fn native_controller_conformance_uses_mattermost_wire_and_rejects_unsuppor
     check_native_controller_feature(&fixture, Feature::ThreadList)
         .await
         .unwrap();
+    assert!(fixture.observations().is_empty());
     host.shutdown().await.unwrap();
 }
 
@@ -2590,6 +2613,33 @@ async fn native_controller_conformance_covers_telegram_discord_and_slack() {
         check_native_controller_feature(&telegram, feature)
             .await
             .unwrap_or_else(|error| panic!("Telegram {feature:?}: {error}"));
+        match feature {
+            Feature::Reaction => assert_native_controller_observation(
+                &telegram,
+                feature,
+                "POST",
+                "/bottok/setMessageReaction",
+                None,
+                None,
+            ),
+            Feature::ThreadCreate => assert_native_controller_observation(
+                &telegram,
+                feature,
+                "POST",
+                "/bottok/createForumTopic",
+                None,
+                Some("77"),
+            ),
+            Feature::ThreadUpdate => assert_native_controller_observation(
+                &telegram,
+                feature,
+                "POST",
+                "/bottok/closeForumTopic",
+                None,
+                Some("77"),
+            ),
+            Feature::ThreadList => assert!(telegram.observations().is_empty()),
+        }
     }
 
     let discord_server = Arc::new(MockServer::start().await);
@@ -2643,6 +2693,40 @@ async fn native_controller_conformance_covers_telegram_discord_and_slack() {
         check_native_controller_feature(&discord, feature)
             .await
             .unwrap_or_else(|error| panic!("Discord {feature:?}: {error}"));
+        match feature {
+            Feature::Reaction => assert_native_controller_observation(
+                &discord,
+                feature,
+                "PUT",
+                "/channels/55/messages/66/reactions/",
+                Some("Bot dtok"),
+                None,
+            ),
+            Feature::ThreadCreate => assert_native_controller_observation(
+                &discord,
+                feature,
+                "POST",
+                "/channels/55/threads",
+                Some("Bot dtok"),
+                Some("77"),
+            ),
+            Feature::ThreadUpdate => assert_native_controller_observation(
+                &discord,
+                feature,
+                "PATCH",
+                "/channels/77",
+                Some("Bot dtok"),
+                Some("77"),
+            ),
+            Feature::ThreadList => assert_native_controller_observation(
+                &discord,
+                feature,
+                "GET",
+                "/guilds/900/threads/active",
+                Some("Bot dtok"),
+                Some("77"),
+            ),
+        }
     }
 
     let slack_server = Arc::new(MockServer::start().await);
@@ -2685,6 +2769,19 @@ async fn native_controller_conformance_covers_telegram_discord_and_slack() {
         check_native_controller_feature(&slack, feature)
             .await
             .unwrap_or_else(|error| panic!("Slack {feature:?}: {error}"));
+        match feature {
+            Feature::Reaction => assert_native_controller_observation(
+                &slack,
+                feature,
+                "POST",
+                "/reactions.add",
+                Some("Bearer slack-token"),
+                None,
+            ),
+            Feature::ThreadCreate | Feature::ThreadUpdate | Feature::ThreadList => {
+                assert!(slack.observations().is_empty())
+            }
+        }
     }
 
     host.shutdown().await.unwrap();
