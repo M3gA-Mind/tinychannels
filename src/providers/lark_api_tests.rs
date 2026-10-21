@@ -838,7 +838,7 @@ async fn send_fetches_a_token_once_and_posts_a_text_message() {
     assert_eq!(header(send, "authorization"), Some("Bearer t-1"));
     assert_eq!(
         header(send, "content-type"),
-        Some("application/json; charset=utf-8")
+        Some("application/json")
     );
     assert_eq!(send.body["receive_id"], "oc_chat");
     assert_eq!(send.body["msg_type"], "text");
@@ -1400,9 +1400,11 @@ fn webhook_event(open_id: &str, text: &str) -> serde_json::Value {
         "event": {
             "sender": { "sender_id": { "open_id": open_id } },
             "message": {
+                "message_id": "webhook-message-1",
                 "message_type": "text",
                 "content": serde_json::json!({"text": text}).to_string(),
-                "chat_id": "oc_chat"
+                "chat_id": "oc_chat",
+                "chat_type": "p2p"
             }
         }
     })
