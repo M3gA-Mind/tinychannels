@@ -98,7 +98,7 @@ impl LarkFixture {
                     {
                         (
                             200,
-                            include_bytes!("telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
+                            include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
                         )
                     } else if request.target == "/open-apis/im/v1/images" {
                         (
@@ -568,7 +568,7 @@ impl AdapterFixture for LarkFixture {
                 self.set_media(
                     MediaKind::Audio,
                     "audio/ogg",
-                    include_bytes!("telegram/fixtures/sine-ogg-opus.ogg"),
+                    include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg"),
                 );
                 self.send_and_record(
                     feature,
@@ -834,6 +834,6 @@ async fn configured_lark_voice_in_is_observed_through_its_typed_webhook_listener
         base64::engine::general_purpose::STANDARD
             .decode(&stored[0].audio_base64)
             .unwrap(),
-        include_bytes!("telegram/fixtures/sine-ogg-opus.ogg")
+        include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg")
     );
 }

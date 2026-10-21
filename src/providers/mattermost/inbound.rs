@@ -1,146 +1,21 @@
-use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
-use crate::traits::ChannelMessage;
-use anyhow::Result;
-use async_trait::async_trait;
-use parking_lot::Mutex;
-use std::sync::Arc;
+//! Mattermost REST polling, post parsing, and media intake.
 
-pub(super) const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
-pub(super) const MAX_VOICE_BYTES: u64 = 8 * 1024 * 1024;
-
-/// Mattermost channel — polls channel posts via REST API v4.
-/// Mattermost is API-compatible with many Slack patterns but uses a dedicated v4 structure.
-pub struct MattermostChannel {
-    base_url: String, // e.g., https://mm.example.com
-    bot_token: String,
-    channel_id: Option<String>,
-    allowed_users: Vec<String>,
-    /// When true (default), replies thread on the original post's root_id.
-    /// When false, replies go to the channel root.
-    thread_replies: bool,
-    /// When true, only respond to messages that @-mention the bot.
-    mention_only: bool,
-    /// Handle for the background typing-indicator loop (aborted on stop_typing).
-    typing_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    http_client: reqwest::Client,
-    media_repository: Option<Arc<dyn MediaRepository>>,
-    voice_media_store: Option<Arc<dyn VoiceMediaStore>>,
-    transcriber: Option<Arc<dyn Transcriber>>,
-    events: Option<Arc<dyn EventSink>>,
-    listener_cancel: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
-}
-
-struct AdmittedPost {
-    id: String,
-    user_id: String,
-    create_at: i64,
-    root_id: String,
-    content: String,
-}
-
-struct ListenerRegistration<'a> {
-    channel: &'a MattermostChannel,
-    cancel: tokio::sync::watch::Sender<bool>,
-}
-
-impl Drop for ListenerRegistration<'_> {
-    fn drop(&mut self) {
-        self.cancel.send_replace(true);
-        let mut active = self.channel.listener_cancel.lock();
-        if active
-            .as_ref()
-            .is_some_and(|cancel| cancel.same_channel(&self.cancel))
-        {
-            *active = None;
-        }
-    }
-}
+use super::*;
 
 impl MattermostChannel {
-    pub fn new(
-        base_url: String,
-        bot_token: String,
-        channel_id: Option<String>,
-        allowed_users: Vec<String>,
-        thread_replies: bool,
-        mention_only: bool,
-    ) -> Self {
-        Self::with_http_client(
-            base_url,
-            bot_token,
-            channel_id,
-            allowed_users,
-            thread_replies,
-            mention_only,
-            reqwest::Client::new(),
-        )
-    }
-
-    pub fn with_http_client(
-        base_url: String,
-        bot_token: String,
-        channel_id: Option<String>,
-        allowed_users: Vec<String>,
-        thread_replies: bool,
-        mention_only: bool,
-        http_client: reqwest::Client,
-    ) -> Self {
-        // Ensure base_url doesn't have a trailing slash for consistent path joining
-        let base_url = base_url.trim_end_matches('/').to_string();
-        Self {
-            base_url,
-            bot_token,
-            channel_id,
-            allowed_users,
-            thread_replies,
-            mention_only,
-            typing_handle: Mutex::new(None),
-            http_client,
-            media_repository: None,
-            voice_media_store: None,
-            transcriber: None,
-            events: None,
-            listener_cancel: Mutex::new(None),
-        }
-    }
-
-    /// Attach the host's scoped media repository for native file uploads.
-    pub fn with_media_repository(mut self, repository: Arc<dyn MediaRepository>) -> Self {
-        self.media_repository = Some(repository);
-        self
-    }
-
-    /// Attach the host's scoped voice store for audio file attachments.
-    pub fn with_voice_media_store(mut self, store: Arc<dyn VoiceMediaStore>) -> Self {
-        self.voice_media_store = Some(store);
-        self
-    }
-
-    /// Attach the host's speech-to-text port for platform-marked voice clips.
-    pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
-        self.transcriber = Some(transcriber);
-        self
-    }
-
-    /// Attach the host's ordered typed-ingress path.
-    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
-        self.events = Some(events);
-        self
-    }
-
-    fn http_client(&self) -> reqwest::Client {
+    pub(super) fn http_client(&self) -> reqwest::Client {
         self.http_client.clone()
     }
 
     /// Check if a user ID is in the allowlist.
     /// Empty list means deny everyone. "*" means allow everyone.
-    fn is_user_allowed(&self, user_id: &str) -> bool {
+    pub(super) fn is_user_allowed(&self, user_id: &str) -> bool {
         self.allowed_users.iter().any(|u| u == "*" || u == user_id)
     }
 
     /// Get the bot's own user ID and username so we can ignore our own messages
     /// and detect @-mentions by username.
-    async fn get_bot_identity(&self) -> (String, String) {
+    pub(super) async fn get_bot_identity(&self) -> (String, String) {
         let resp: Option<serde_json::Value> = async {
             self.http_client()
                 .get(format!("{}/api/v4/users/me", self.base_url))
@@ -172,7 +47,7 @@ impl MattermostChannel {
 
 impl MattermostChannel {
     #[cfg(test)]
-    async fn inbound_envelope(
+    pub(super) async fn inbound_envelope(
         &self,
         post: &serde_json::Value,
         channel_id: &str,
@@ -182,7 +57,7 @@ impl MattermostChannel {
             .await
     }
 
-    async fn inbound_envelope_from_text(
+    pub(super) async fn inbound_envelope_from_text(
         &self,
         post: &serde_json::Value,
         channel_id: &str,
@@ -285,7 +160,7 @@ impl MattermostChannel {
         })
     }
 
-    async fn file_info(
+    pub(super) async fn file_info(
         &self,
         post: &serde_json::Value,
         file_id: &str,
@@ -334,7 +209,7 @@ impl MattermostChannel {
         ))
     }
 
-    async fn download_file(&self, file_id: &str, limit: u64) -> Option<Vec<u8>> {
+    pub(super) async fn download_file(&self, file_id: &str, limit: u64) -> Option<Vec<u8>> {
         if !valid_file_id(file_id) {
             return None;
         }
@@ -360,7 +235,7 @@ impl MattermostChannel {
         (!bytes.is_empty()).then_some(bytes)
     }
 
-    async fn listen_typed(
+    pub(super) async fn listen_typed(
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
         cancellation: &mut tokio::sync::watch::Receiver<bool>,
@@ -474,52 +349,7 @@ fn valid_file_id(file_id: &str) -> bool {
 }
 
 impl MattermostChannel {
-    async fn start_typing_loop(&self, recipient: &str) -> Result<()> {
-        self.stop_typing_loop()?;
-        let client = self.http_client();
-        let token = self.bot_token.clone();
-        let base_url = self.base_url.clone();
-        let (channel_id, parent_id) = match recipient.split_once(':') {
-            Some((channel, parent)) => (channel.to_string(), Some(parent.to_string())),
-            None => (recipient.to_string(), None),
-        };
-        let handle = tokio::spawn(async move {
-            let url = format!("{base_url}/api/v4/users/me/typing");
-            loop {
-                let mut body = serde_json::json!({ "channel_id": channel_id });
-                if let Some(ref pid) = parent_id {
-                    body.as_object_mut()
-                        .unwrap()
-                        .insert("parent_id".to_string(), serde_json::json!(pid));
-                }
-                if let Ok(response) = client
-                    .post(&url)
-                    .bearer_auth(&token)
-                    .json(&body)
-                    .send()
-                    .await
-                    && !response.status().is_success()
-                {
-                    tracing::debug!(status = %response.status(), "Mattermost typing indicator failed");
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-            }
-        });
-        *self.typing_handle.lock() = Some(handle);
-        Ok(())
-    }
-
-    fn stop_typing_loop(&self) -> Result<()> {
-        let mut guard = self.typing_handle.lock();
-        if let Some(handle) = guard.take() {
-            handle.abort();
-        }
-        Ok(())
-    }
-}
-
-impl MattermostChannel {
-    fn parse_mattermost_post(
+    pub(super) fn parse_mattermost_post(
         &self,
         post: &serde_json::Value,
         bot_user_id: &str,
@@ -556,7 +386,7 @@ impl MattermostChannel {
         })
     }
 
-    fn admitted_post(
+    pub(super) fn admitted_post(
         &self,
         post: &serde_json::Value,
         bot_user_id: &str,
@@ -618,7 +448,7 @@ impl MattermostChannel {
 /// Checks two sources:
 /// 1. Text-based: looks for `@bot_username` in the message body (case-insensitive).
 /// 2. Metadata-based: checks the post's `metadata.mentions` array for the bot user ID.
-fn contains_bot_mention_mm(
+pub(super) fn contains_bot_mention_mm(
     text: &str,
     bot_user_id: &str,
     bot_username: &str,
@@ -694,7 +524,7 @@ fn find_bot_mention_spans(text: &str, bot_username: &str) -> Vec<(usize, usize)>
 ///
 /// Returns `None` if the message doesn't mention the bot.
 /// Returns `Some(cleaned)` with the @-mention stripped and text trimmed.
-fn normalize_mattermost_content(
+pub(super) fn normalize_mattermost_content(
     text: &str,
     bot_user_id: &str,
     bot_username: &str,
@@ -732,198 +562,3 @@ fn normalize_mattermost_content(
 
     Some(cleaned)
 }
-
-#[async_trait]
-impl crate::providers::long_tail::LongTail for MattermostChannel {
-    const ID: &'static str = "mattermost";
-    const DISPLAY: &'static str = "Mattermost";
-
-    fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
-        use crate::providers::long_tail::{TextSpec, text_capabilities};
-        let mut capabilities = text_capabilities(TextSpec {
-            typing: true,
-            thread: true,
-            ..Default::default()
-        });
-        capabilities.reactions = true;
-        capabilities
-            .actions
-            .supported
-            .extend(["edit", "delete"].map(String::from));
-        if self.media_repository.is_some() {
-            capabilities
-                .content
-                .parts
-                .extend(["image", "video", "audio", "file"].map(String::from));
-            let outbound = |types: &[&str]| tinychannels_bus::ContentCapability {
-                outbound: true,
-                accepted_types: types.iter().map(|mime| (*mime).into()).collect(),
-                emitted_types: types.iter().map(|mime| (*mime).into()).collect(),
-                max_size_bytes: Some(MAX_FILE_BYTES),
-                ..Default::default()
-            };
-            capabilities.content.image =
-                outbound(&["image/jpeg", "image/png", "image/gif", "image/webp"]);
-            capabilities.content.video = outbound(&["video/mp4", "video/quicktime", "video/webm"]);
-            capabilities.content.audio = outbound(&[
-                "audio/ogg",
-                "audio/mpeg",
-                "audio/mp4",
-                "audio/wav",
-                "audio/webm",
-            ]);
-            capabilities.content.file = outbound(&[
-                "application/pdf",
-                "text/plain",
-                "text/csv",
-                "application/json",
-                "application/zip",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ]);
-            let inbound = self.events.is_some();
-            capabilities.content.image.inbound = inbound;
-            capabilities.content.video.inbound = inbound;
-            capabilities.content.audio.inbound = inbound;
-            capabilities.content.file.inbound = inbound;
-        }
-        if self.voice_media_store.is_some() {
-            capabilities.content.parts.push("voice_note".into());
-            capabilities.voice_out = crate::providers::native::capabilities::voice_capabilities(
-                true,
-                false,
-                MAX_VOICE_BYTES,
-                &["m4a_aac", "mp3", "ogg_opus"],
-            );
-        }
-        capabilities
-    }
-
-    async fn health_state(&self) -> &'static str {
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            crate::providers::native::NativeProvider::health_state(self),
-        )
-        .await
-        {
-            Ok(state) => state,
-            Err(_) => "unhealthy",
-        }
-    }
-
-    fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {
-        crate::providers::native::NativeProvider::descriptor_extra(self)
-    }
-
-    fn typing_supported(&self) -> bool {
-        true
-    }
-
-    async fn set_typing(
-        &self,
-        conversation_id: &str,
-        start: bool,
-    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-        let result = if start {
-            self.start_typing_loop(conversation_id).await
-        } else {
-            self.stop_typing_loop()
-        };
-        result.map_err(|_| tinychannels_bus::channel::ChannelSendError {
-            kind: tinychannels_bus::channel::SendErrorKind::Transient,
-            message: "Mattermost typing indicator failed".into(),
-            retryable: true,
-            ..Default::default()
-        })
-    }
-
-    async fn react(
-        &self,
-        channel: &tinychannels_bus::ChannelRef,
-        conversation: &tinychannels_bus::ConversationRef,
-        provider_message_id: &str,
-        reaction: &tinychannels_bus::channel::ChannelReaction,
-        remove: bool,
-    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-        use crate::providers::native::NativeProvider;
-
-        crate::providers::native::edit::check_channel(self, channel)?;
-        NativeProvider::react(self, conversation, provider_message_id, reaction, remove).await
-    }
-
-    async fn edit(
-        &self,
-        receipt: &tinychannels_bus::channel::MessageReceipt,
-        intent: tinychannels_bus::ChannelOutboundIntent,
-    ) -> Result<
-        tinychannels_bus::channel::MessageReceipt,
-        tinychannels_bus::channel::ChannelSendError,
-    > {
-        crate::providers::native::edit(self, receipt, &intent).await
-    }
-
-    async fn delete(
-        &self,
-        receipt: &tinychannels_bus::channel::MessageReceipt,
-    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-        crate::providers::native::delete(self, receipt).await
-    }
-
-    async fn start_listener(
-        &self,
-        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
-    ) -> std::result::Result<(), tinychannels_bus::channel::ChannelSendError> {
-        use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
-
-        let (cancel, mut cancellation) = tokio::sync::watch::channel(false);
-        {
-            let mut active = self.listener_cancel.lock();
-            if active.is_some() {
-                return Err(ChannelSendError {
-                    kind: SendErrorKind::Transient,
-                    message: "Mattermost listener is already running".into(),
-                    retryable: true,
-                    ..Default::default()
-                });
-            }
-            *active = Some(cancel.clone());
-        }
-        let _registration = ListenerRegistration {
-            channel: self,
-            cancel,
-        };
-        self.listen_typed(sink, &mut cancellation).await
-    }
-
-    async fn stop_listener(
-        &self,
-    ) -> std::result::Result<(), tinychannels_bus::channel::ChannelSendError> {
-        if let Some(cancel) = self.listener_cancel.lock().as_ref() {
-            cancel.send_replace(true);
-        }
-        Ok(())
-    }
-
-    async fn send_typed_message(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> Result<
-        tinychannels_bus::channel::ChannelSendOutcome,
-        tinychannels_bus::channel::ChannelSendError,
-    > {
-        crate::providers::native::outbound::send_typed(self, message).await
-    }
-}
-
-#[path = "mattermost/native.rs"]
-mod native;
-
-crate::providers::long_tail::impl_long_tail_adapter!(MattermostChannel);
-
-#[cfg(test)]
-#[path = "mattermost_tests.rs"]
-mod tests;
-
-#[cfg(any(test, debug_assertions))]
-#[path = "mattermost_test_support_tests.rs"]
-pub mod test_support;
