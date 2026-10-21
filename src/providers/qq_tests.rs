@@ -353,13 +353,22 @@ async fn gateway_listener_identifies_heartbeats_filters_and_routes_private_and_g
             assert!(first.timestamp > 0);
             drop(rx);
             release_tx.send(()).unwrap();
-            let error = listening.await.unwrap().unwrap_err();
+            let error = tokio::time::timeout(std::time::Duration::from_secs(2), listening)
+                .await
+                .unwrap_or_else(|_| panic!("QQ listener did not finish for close case {finish}"))
+                .unwrap()
+                .unwrap_err();
             let error = error
                 .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
                 .expect("typed listener failures retain their structured classification");
             assert_eq!(error.0.kind, crate::channel::SendErrorKind::Transient);
             assert!(error.0.retryable);
-            websocket.await.unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(2), websocket)
+                .await
+                .unwrap_or_else(|_| {
+                    panic!("QQ mock websocket did not finish for close case {finish}")
+                })
+                .unwrap();
         })
         .await
         .unwrap();
