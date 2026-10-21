@@ -125,14 +125,6 @@ pub(crate) fn supports_action<C: ChannelAdapter + ?Sized>(channel: &C, action: &
         .any(|supported| supported == action)
 }
 
-pub(crate) fn supports_reply<C: ChannelAdapter + ?Sized>(channel: &C) -> bool {
-    channel.declared_capabilities().addressing.reply_to_id
-}
-
-pub(crate) fn supports_threads<C: ChannelAdapter + ?Sized>(channel: &C) -> bool {
-    channel.declared_capabilities().addressing.thread_id
-}
-
 pub(crate) fn supports_reactions<C: ChannelAdapter + ?Sized>(channel: &C) -> bool {
     channel.declared_capabilities().reactions
 }
@@ -145,16 +137,8 @@ pub(crate) fn supports_draft_updates<C: ChannelAdapter + ?Sized>(channel: &C) ->
     channel.declared_capabilities().streaming_reply_pipeline
 }
 
-pub(crate) fn supports_progressive_edits<C: ChannelAdapter + ?Sized>(channel: &C) -> bool {
-    channel.declared_capabilities().progressive_edits
-}
-
 pub(crate) fn supports_reply_to_id<C: ChannelAdapter + ?Sized>(channel: &C) -> bool {
     channel.declared_capabilities().addressing.reply_to_id
-}
-
-pub(crate) fn supports_thread_id<C: ChannelAdapter + ?Sized>(channel: &C) -> bool {
-    channel.declared_capabilities().addressing.thread_id
 }
 
 pub(crate) fn supports_remote_control<C: ChannelAdapter + ?Sized>(channel: &C) -> bool {
