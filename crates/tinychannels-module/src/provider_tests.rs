@@ -1637,8 +1637,12 @@ async fn canceled_send_waiter_does_not_cancel_owned_send_or_shutdown_join() {
     stop.await.unwrap().unwrap();
 }
 
-#[derive(Default)]
-struct InteractionChannel(StdMutex<Vec<String>>);
+struct InteractionChannel(StdMutex<Vec<String>>, bool);
+impl Default for InteractionChannel {
+    fn default() -> Self {
+        Self(StdMutex::new(Vec::new()), false)
+    }
+}
 #[async_trait::async_trait]
 impl crate::provider::TestProviderBehavior for InteractionChannel {
     fn test_provider_id(&self) -> &'static str {
@@ -1647,7 +1651,7 @@ impl crate::provider::TestProviderBehavior for InteractionChannel {
     fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
         capabilities.content.text.outbound = true;
-        capabilities.streaming_reply_pipeline = true;
+        capabilities.streaming_reply_pipeline = self.1;
         capabilities
     }
     async fn test_send(
@@ -1700,7 +1704,7 @@ async fn provider_actor_orders_interactions_with_sends_and_rejects_after_stop() 
     let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    let channel = Arc::new(InteractionChannel::default());
+    let channel = Arc::new(InteractionChannel(StdMutex::new(Vec::new()), true));
     let running = Running::start_test(
         channel.clone(),
         Arc::new(Hooks::default()),
