@@ -23,6 +23,7 @@ pub(crate) fn resolve_api_base(raw: Option<String>) -> String {
 
 impl TelegramChannel {
     pub fn new(bot_token: String, allowed_users: Vec<String>, mention_only: bool) -> Self {
+        let (listener_cancel, _) = tokio::sync::watch::channel(false);
         let api_base = resolve_api_base(
             std::env::var("OPENHUMAN_TELEGRAM_BOT_API_BASE")
                 .ok()
@@ -70,6 +71,8 @@ impl TelegramChannel {
             recent_approval_prompts: parking_lot::Mutex::new(std::collections::HashMap::new()),
             poll_error_backoff: TELEGRAM_POLL_ERROR_BACKOFF,
             poll_conflict_backoff: TELEGRAM_POLL_CONFLICT_BACKOFF,
+            listener_cancel,
+            listener_running: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
