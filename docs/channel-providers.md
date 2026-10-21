@@ -80,13 +80,13 @@ accepted MIME types, limits, and exact events.
 | IRC | In/out | Not declared | Not declared | Text send only |
 | Lark | In/out | Provider and media-service dependent | Conditional | Provider-specific reply/thread behavior |
 | Linq | In/out | Conditional image, video, audio, and file | Conditional | Send and typing actions |
-| Mattermost | In/out | Conditional image, video, audio, and file | Conditional | Long-tail text adapter; see its descriptor for optional actions |
+| Mattermost | In/out | Conditional outbound image, video, audio, and file | Not declared | Reply/thread, typing, reactions, edit/delete |
 | QQ | In/out | Conditional image, video, and file; inbound support depends on ingress services | Voice output conditional | Provider-specific events and reply behavior |
 | Signal | In/out | Conditional image, video, audio, and file | Conditional | Reply addressing, reactions, read receipts |
 | Slack | In/out | Conditional image, video, audio, and file | Conditional | Reply/thread, edit/delete, reactions, streaming drafts |
 | Telegram | In/out | Conditional image, video, audio, file, and sticker | Conditional | Reply/thread, reactions, edit, streaming drafts; location/contact/buttons/polls are also declared |
-| WhatsApp Cloud | In/out | Conditional image, video, audio, file, and sticker | Conditional | Reply, reactions, read/delivery receipts; edit/delete are option-dependent |
-| WhatsApp Web | In/out | Conditional image, video, audio, file, and sticker | Conditional | Reply, reactions, read/delivery receipts; edit/delete are option-dependent |
+| WhatsApp Cloud | In/out | Conditional image, video, audio, file, and sticker | Conditional | Reply, reactions, read/delivery receipts; edit/delete are not declared |
+| WhatsApp Web | In/out | Conditional image, video, audio, file, and sticker | Conditional | Reply, reactions, read/delivery receipts; edit/delete are declared by this protocol adapter |
 | Yuanbao | In/out | Image and file when media storage is wired | Voice input conditional | Provider-specific text actions |
 
 The shared long-tail text descriptor starts with bidirectional text and send.
