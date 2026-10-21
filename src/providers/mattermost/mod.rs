@@ -915,7 +915,7 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
     }
 }
 
-#[path = "mattermost/native.rs"]
+#[path = "native.rs"]
 mod native;
 
 crate::providers::long_tail::impl_long_tail_adapter!(MattermostChannel);
@@ -925,5 +925,5 @@ crate::providers::long_tail::impl_long_tail_adapter!(MattermostChannel);
 mod tests;
 
 #[cfg(any(test, debug_assertions))]
-#[path = "mattermost_test_support_tests.rs"]
+#[path = "test_support_tests.rs"]
 pub mod test_support;

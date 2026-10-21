@@ -1098,11 +1098,11 @@ fn should_respond_in_group(mentions: &[serde_json::Value]) -> bool {
 mod tests;
 
 #[cfg(test)]
-#[path = "lark_api_tests.rs"]
+#[path = "api_tests.rs"]
 mod api_tests;
 
 #[cfg(test)]
-#[path = "lark_conformance_tests.rs"]
+#[path = "legacy_conformance_tests.rs"]
 mod conformance_tests;
 
 #[async_trait]
@@ -1259,15 +1259,15 @@ impl LarkChannel {
     }
 }
 
-#[path = "lark/native.rs"]
+#[path = "native.rs"]
 mod native;
 
 crate::providers::long_tail::impl_long_tail_adapter!(LarkChannel);
 
 #[cfg(test)]
-#[path = "lark_ws_tests.rs"]
+#[path = "ws_tests.rs"]
 mod ws_tests;
 
 #[cfg(any(test, debug_assertions))]
-#[path = "lark_test_support_tests.rs"]
+#[path = "test_support_tests.rs"]
 pub mod test_support;

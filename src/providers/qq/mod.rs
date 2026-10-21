@@ -557,7 +557,7 @@ impl QQChannel {
     }
 }
 
-#[path = "qq/native.rs"]
+#[path = "native.rs"]
 mod native;
 
 crate::providers::native::native_v2_adapter!(QQChannel);
@@ -567,5 +567,5 @@ crate::providers::native::native_v2_adapter!(QQChannel);
 mod tests;
 
 #[cfg(test)]
-#[path = "qq/native_tests.rs"]
+#[path = "native_tests.rs"]
 mod native_tests;

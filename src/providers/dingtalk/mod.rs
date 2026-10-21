@@ -447,7 +447,7 @@ fn no_redirect_client() -> reqwest::Client {
         .expect("building the DingTalk attachment HTTP client should succeed")
 }
 
-#[path = "dingtalk/native.rs"]
+#[path = "native.rs"]
 mod native;
 
 crate::providers::native::native_v2_adapter!(DingTalkChannel);

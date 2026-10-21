@@ -868,11 +868,11 @@ impl EmailChannel {
 crate::providers::native::native_v2_adapter!(EmailChannel);
 
 #[cfg(all(test, feature = "email"))]
-#[path = "email_channel/fixtures_tests.rs"]
+#[path = "fixtures_tests.rs"]
 mod fixtures;
 
 #[cfg(all(test, feature = "email"))]
-#[path = "email_channel/conformance_tests.rs"]
+#[path = "conformance_tests.rs"]
 mod conformance;
 
 #[cfg(all(test, feature = "email"))]
@@ -880,7 +880,7 @@ mod conformance;
 mod tests;
 
 #[cfg(all(feature = "email", any(test, debug_assertions)))]
-#[path = "email_channel_test_support_tests.rs"]
+#[path = "test_support_tests.rs"]
 pub mod test_support;
 
 /// The send-only surface, exercised in a build that has no IMAP stack.
