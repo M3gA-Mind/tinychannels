@@ -1,6 +1,6 @@
 use super::*;
 use crate::channel::ChannelAdapter;
-use crate::SendMessage;
+use crate::traits::SendMessage;
 
 #[test]
 fn test_name() {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::channel::ChannelAdapter;
 use tokio::sync::Notify;
 
 #[test]

@@ -1,4 +1,5 @@
 use super::*;
+use crate::channel::ChannelAdapter;
 
 fn make_channel() -> WhatsAppChannel {
     WhatsAppChannel::new(

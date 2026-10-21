@@ -1,4 +1,5 @@
 use super::*;
+use crate::channel::ChannelAdapter;
 
 #[test]
 fn test_name() {

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
 
 use super::*;
+use crate::channel::ChannelAdapter;
 
 fn good_cfg() -> YuanbaoConfig {
     let mut c = YuanbaoConfig::default();
