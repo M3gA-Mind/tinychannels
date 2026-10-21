@@ -581,69 +581,6 @@ impl LarkChannel {
                     self.mark_ws_message_seen(&lark_msg.message_id).await;
                     continue;
 
-                    self.mark_ws_message_seen(&lark_msg.message_id).await;
-
-                    if let Some(envelope) = self.inbound_envelope(&event_payload).await
-                        && crate::providers::native::inbound::publish(
-                            "lark",
-                            self.native.events.as_ref(),
-                            envelope,
-                        )
-                        .await
-                    {
-                        continue;
-                    }
-
-                    // Decode content by type (mirrors clawdbot-feishu parsing)
-                    let text = match lark_msg.message_type.as_str() {
-                        "text" => {
-                            let v: serde_json::Value = match serde_json::from_str(&lark_msg.content) {
-                                Ok(v) => v,
-                                Err(_) => continue,
-                            };
-                            match v.get("text").and_then(|t| t.as_str()).filter(|s| !s.is_empty()) {
-                                Some(t) => t.to_string(),
-                                None => continue,
-                            }
-                        }
-                        "post" => match parse_post_content(&lark_msg.content) {
-                            Some(t) => t,
-                            None => continue,
-                        },
-                        _ => { tracing::debug!("Lark WS: skipping unsupported type '{}'", lark_msg.message_type); continue; }
-                    };
-
-                    // Strip @_user_N placeholders
-                    let text = strip_at_placeholders(&text);
-                    let text = text.trim().to_string();
-                    if text.is_empty() { continue; }
-
-                    // Group-chat: only respond when explicitly @-mentioned
-                    if lark_msg.chat_type == "group" && !should_respond_in_group(&lark_msg.mentions) {
-                        continue;
-                    }
-
-                    let channel_msg = ChannelMessage {
-                        id: Uuid::new_v4().to_string(),
-                        sender: lark_msg.chat_id.clone(),
-                        reply_target: lark_msg.chat_id.clone(),
-                        content: text,
-                        channel: "lark".to_string(),
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                        topic_id: None,
-                        reply_to_id: None,
-                        thread_ts: None,
-                        sender_name: None,
-                    };
-
-                    tracing::debug!("Lark WS: message in {}", lark_msg.chat_id);
-                    let LarkIngress::Legacy(tx) = &ingress else {
-                        unreachable!("typed Lark ingress returned above")
-                    };
-                    if tx.send(channel_msg).await.is_err() { break; }
                 }
             }
         }
