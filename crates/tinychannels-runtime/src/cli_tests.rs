@@ -1,4 +1,11 @@
 use super::*;
+use std::io;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use tokio::io::ReadBuf;
+use tokio::sync::Notify;
 
 struct MpscSink(tokio::sync::mpsc::Sender<tinychannels_bus::ChannelIngress>);
 
@@ -74,7 +81,7 @@ async fn cli_adapter_sends_text_and_rejects_non_text_typed_content() {
 async fn collect(input: &str) -> Vec<ChannelInboundEnvelope> {
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
     let sink = MpscSink(tx);
-    forward_lines(input.as_bytes(), &sink).await;
+    forward_lines(input.as_bytes(), &sink, &CancellationToken::new()).await;
     drop(sink);
     let mut out = Vec::new();
     while let Some(ingress) = rx.recv().await {
@@ -118,5 +125,62 @@ async fn forward_lines_stops_at_quit_or_exit() {
 async fn forward_lines_stops_when_receiver_closes() {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     drop(rx);
-    forward_lines("a\nb\n".as_bytes(), &MpscSink(tx)).await;
+    forward_lines(
+        "a\nb\n".as_bytes(),
+        &MpscSink(tx),
+        &CancellationToken::new(),
+    )
+    .await;
+}
+
+struct PendingReader {
+    started: Arc<Notify>,
+    signalled: Arc<AtomicBool>,
+}
+
+impl tokio::io::AsyncRead for PendingReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if !self.signalled.swap(true, Ordering::SeqCst) {
+            self.started.notify_one();
+        }
+        Poll::Pending
+    }
+}
+
+#[tokio::test]
+async fn stop_cancels_blocked_reader_and_adapter_can_restart() {
+    let cli = CliChannel::new();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let sink = Arc::new(MpscSink(tx));
+    let started = Arc::new(Notify::new());
+    let signalled = Arc::new(AtomicBool::new(false));
+    let reader = BufReader::new(PendingReader {
+        started: started.clone(),
+        signalled,
+    });
+    let running_cli = cli.clone();
+    let running_sink = sink.clone();
+    let task = tokio::spawn(async move {
+        running_cli.start_with_reader(reader, running_sink.as_ref()).await;
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
+        .await
+        .expect("reader should begin polling");
+    cli.stop().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), task)
+        .await
+        .expect("stop should release a blocked stdin read")
+        .unwrap();
+
+    cli.start_with_reader("again\n".as_bytes(), sink.as_ref()).await;
+    let ingress = rx.recv().await.expect("restarted adapter forwards input");
+    let ChannelIngress::Inbound(envelope) = ingress else {
+        panic!("CLI emits only inbound messages");
+    };
+    assert_eq!(envelope.text, "again");
 }
