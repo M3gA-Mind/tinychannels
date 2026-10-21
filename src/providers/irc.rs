@@ -1,9 +1,8 @@
-use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 
 // Use tokio_rustls's re-export of rustls types
 use tokio_rustls::rustls;
@@ -44,32 +43,6 @@ struct ListenerRegistration<'a>(&'a IrcChannel);
 impl Drop for ListenerRegistration<'_> {
     fn drop(&mut self) {
         self.0.end_listener();
-    }
-}
-
-enum IrcIngress<'a> {
-    Legacy(mpsc::Sender<ChannelMessage>),
-    Typed(&'a (dyn crate::channel::ChannelInboundSink + Send + Sync)),
-}
-
-impl IrcIngress<'_> {
-    async fn publish(
-        &self,
-        envelope: tinychannels_bus::channel::ChannelInboundEnvelope,
-    ) -> anyhow::Result<bool> {
-        match self {
-            Self::Legacy(tx) => {
-                let timestamp = envelope.timestamp_unix_ms.unwrap_or_default() / 1000;
-                let message = crate::legacy_message_from_inbound_envelope(&envelope, timestamp)?;
-                Ok(tx.send(message).await.is_ok())
-            }
-            Self::Typed(sink) => {
-                sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
-                    .await
-                    .map_err(|error| anyhow::anyhow!(error.message))?;
-                Ok(true)
-            }
-        }
     }
 }
 
@@ -334,15 +307,6 @@ impl IrcChannel {
         Ok(())
     }
 
-    async fn send_text(&self, recipient: &str, text: &str) -> anyhow::Result<()> {
-        let mut guard = self.writer.lock().await;
-        let writer = guard
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("IRC not connected"))?;
-
-        Self::send_text_connected(writer, recipient, text).await
-    }
-
     async fn send_text_connected(
         writer: &mut WriteHalf,
         recipient: &str,
@@ -372,17 +336,17 @@ impl IrcChannel {
 
     async fn listen_owned(
         &self,
-        ingress: IrcIngress<'_>,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
         mut cancellation: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> anyhow::Result<()> {
         let result = if let Some(cancel) = &mut cancellation {
             tokio::select! {
                 biased;
                 _ = cancel.wait_for(|value| *value) => Ok(()),
-                result = self.listen_loop(ingress) => result,
+                result = self.listen_loop(sink) => result,
             }
         } else {
-            self.listen_loop(ingress).await
+            self.listen_loop(sink).await
         };
         self.clear_writer().await;
         result
@@ -430,7 +394,23 @@ impl IrcChannel {
         }
     }
 
-    async fn listen_loop(&self, ingress: IrcIngress<'_>) -> anyhow::Result<()> {
+    #[cfg(test)]
+    async fn health_check(&self) -> bool {
+        // Lightweight connectivity check: TLS connect + QUIT.
+        match self.connect().await {
+            Ok(tls) => {
+                let (_, mut writer) = tokio::io::split(tls);
+                let _ = Self::send_raw(&mut writer, "QUIT :health check").await;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    async fn listen_loop(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> anyhow::Result<()> {
         let mut current_nick = self.nickname.clone();
         tracing::info!(
             "IRC channel connecting to {}:{} as {}...",
@@ -661,9 +641,9 @@ impl IrcChannel {
                         ..Default::default()
                     };
 
-                    if !ingress.publish(envelope).await? {
-                        return Ok(());
-                    }
+                    sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                        .await
+                        .map_err(|error| anyhow::anyhow!(error.message))?;
                 }
 
                 // ERR_PASSWDMISMATCH (464) or other fatal errors
@@ -715,48 +695,6 @@ impl rustls::client::danger::ServerCertVerifier for NoVerify {
         rustls::crypto::ring::default_provider()
             .signature_verification_algorithms
             .supported_schemes()
-    }
-}
-
-#[async_trait]
-#[allow(clippy::too_many_lines)]
-impl Channel for IrcChannel {
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        crate::providers::long_tail::LongTail::declared(self)
-    }
-
-    fn name(&self) -> &str {
-        "irc"
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        self.send_text(&message.recipient, &message.content).await
-    }
-
-    async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        let cancellation = self.begin_listener()?;
-        let _registration = ListenerRegistration(self);
-        self.listen_owned(IrcIngress::Legacy(tx), Some(cancellation))
-            .await
-    }
-
-    async fn health_check(&self) -> bool {
-        // Lightweight connectivity check: TLS connect + QUIT
-        match self.connect().await {
-            Ok(tls) => {
-                let (_, mut writer) = tokio::io::split(tls);
-                let _ = Self::send_raw(&mut writer, "QUIT :health check").await;
-                true
-            }
-            Err(_) => false,
-        }
     }
 }
 
@@ -842,9 +780,7 @@ impl crate::providers::long_tail::LongTail for IrcChannel {
                     ..Default::default()
                 })?;
         let _registration = ListenerRegistration(self);
-        let result = self
-            .listen_owned(IrcIngress::Typed(sink), Some(cancellation))
-            .await;
+        let result = self.listen_owned(sink, Some(cancellation)).await;
         result.map_err(|error| {
             tracing::debug!(%error, "IRC typed listener stopped");
             tinychannels_bus::channel::ChannelSendError {

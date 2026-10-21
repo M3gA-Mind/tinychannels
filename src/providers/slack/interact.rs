@@ -67,6 +67,7 @@ fn receipt_address(receipt: &MessageReceipt) -> Result<(String, String), Channel
 }
 
 /// Edit by raw ids, for the legacy draft entry points.
+#[cfg(test)]
 pub(crate) async fn edit_text_for_legacy(
     channel: &SlackChannel,
     recipient: &str,

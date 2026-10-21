@@ -1,7 +1,7 @@
 use super::*;
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelStreamingDraft, ChannelTypedSend,
-    ChannelTyping,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
+    ChannelTypedSend, ChannelTyping,
 };
 use crate::providers::slack::fixtures::*;
 use serde_json::{Value, json};
@@ -574,18 +574,27 @@ fn the_descriptor_status_and_capabilities_identify_the_native_adapter() {
         ChannelAdapter::declared_capabilities(&channel),
         channel.declared()
     );
-    assert_eq!(Channel::capabilities(&channel), channel.declared());
     assert_eq!(
         ChannelAdapter::proactive_target(&channel).as_deref(),
         Some("C1")
     );
-    assert_eq!(Channel::proactive_target(&channel).as_deref(), Some("C1"));
-    assert_eq!(Channel::name(&channel), "slack");
-    assert!(channel.supports_remote_control() && channel.supports_chat_approvals());
+    assert_eq!(descriptor.id, "slack");
+    let capabilities = ChannelAdapter::declared_capabilities(&channel);
+    assert!(capabilities.remote_control && capabilities.chat_approvals);
     assert!(
-        channel.supports_reactions() && channel.supports_edit() && channel.supports_draft_updates()
+        capabilities.reactions
+            && capabilities
+                .actions
+                .supported
+                .iter()
+                .any(|action| action == "edit")
+            && capabilities
+                .actions
+                .supported
+                .iter()
+                .any(|action| action == "draft-update")
     );
-    assert!(channel.supports_reply_to_id() && channel.supports_thread_id());
+    assert!(capabilities.addressing.reply_to_id && capabilities.addressing.thread_id);
 }
 
 #[tokio::test]
@@ -619,22 +628,23 @@ async fn lifecycle_hooks_are_owned_by_the_module_runtime() {
         .expect("listener stop cancels polling")
         .expect("listener task joins")
         .unwrap();
-    let status = channel.status().await.unwrap();
+    let status = ChannelAdapter::status(channel.as_ref()).await.unwrap();
     assert_eq!(status.channel_id, "slack");
     assert_eq!(status.states.len(), 2);
 }
 
 #[tokio::test]
-async fn legacy_sends_post_text_and_keep_typed_errors_recoverable() {
+async fn typed_sends_post_text_and_keep_provider_errors_recoverable() {
     let server = mock_api().await;
     mount(&server, "chat.postMessage", ok(json!({"ts": "1.1"}))).await;
     let channel = channel_for(&server, &[]);
-    Channel::send(&channel, &SendMessage::new("hi", "C1"))
+    ChannelAdapter::send(&channel, text_intent("hi"))
         .await
         .unwrap();
-    let mut threaded = SendMessage::new("again", "C1");
-    threaded.thread_ts = Some("1.0".into());
-    Channel::send(&channel, &threaded).await.unwrap();
+    let mut threaded = text_intent("again");
+    threaded.thread_id = Some("1.0".into());
+    threaded.conversation_ref = Some(conversation(Some("1.0")));
+    ChannelAdapter::send(&channel, threaded).await.unwrap();
     let posts = bodies(&server, "chat.postMessage").await;
     assert_eq!(
         (posts[0]["channel"].as_str(), posts[0]["text"].as_str()),
@@ -649,18 +659,17 @@ async fn legacy_sends_post_text_and_keep_typed_errors_recoverable() {
         json!({"ok": false, "error": "channel_not_found"}),
     )
     .await;
-    let error = Channel::send(&channel_for(&denied, &[]), &SendMessage::new("x", "C1"))
+    let error = ChannelAdapter::send(&channel_for(&denied, &[]), text_intent("x"))
         .await
         .unwrap_err();
-    let failure = error
-        .downcast_ref::<crate::providers::slack::types::SlackFailure>()
-        .unwrap();
-    assert_eq!(failure.0.kind, SendErrorKind::NotFound);
+    assert_eq!(error.kind, SendErrorKind::NotFound);
 
-    let outcome = channel
-        .send_typed_with_receipt(&ChannelOutboundMessage::from_intent(&text_intent("typed")))
-        .await
-        .unwrap();
+    let outcome = crate::channel::ChannelTypedSend::send_typed(
+        &channel,
+        &ChannelOutboundMessage::from_intent(&text_intent("typed")),
+    )
+    .await
+    .unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["1.1"]);
     let outcome = ChannelTypedSend::send_typed(
         &channel,
@@ -673,24 +682,27 @@ async fn legacy_sends_post_text_and_keep_typed_errors_recoverable() {
         question: "q".into(),
         options: vec![],
     }));
-    assert!(channel.send_typed_with_receipt(&bad).await.is_err());
+    assert!(
+        crate::channel::ChannelTypedSend::send_typed(&channel, &bad)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
-async fn legacy_drafts_post_then_edit_in_place() {
+async fn typed_drafts_post_then_edit_in_place() {
     let server = mock_api().await;
     mount(&server, "chat.postMessage", ok(json!({"ts": "3.3"}))).await;
     mount(&server, "chat.update", ok(json!({}))).await;
     let channel = channel_for(&server, &[]);
-    let id = channel
-        .send_draft(&SendMessage::new("draft", "C1"))
+    let id = ChannelStreamingDraft::start_draft(&channel, text_intent("draft"))
         .await
         .unwrap();
     assert_eq!(id.as_deref(), Some("3.3"));
-    Channel::update_draft(&channel, "C1", "3.3", "draft more")
+    ChannelStreamingDraft::update_draft(&channel, "3.3", text_intent("draft more"))
         .await
         .unwrap();
-    Channel::finalize_draft(&channel, "C1", "3.3", "final", Some("1.0"))
+    ChannelStreamingDraft::finalize_draft(&channel, "3.3", text_intent("final"))
         .await
         .unwrap();
     let updates = bodies(&server, "chat.update").await;
@@ -699,13 +711,12 @@ async fn legacy_drafts_post_then_edit_in_place() {
         (Some("draft more"), Some("final"))
     );
     assert!(
-        channel
-            .send_draft(&SendMessage::new(" ", "C1"))
+        ChannelStreamingDraft::start_draft(&channel, text_intent(" "))
             .await
             .is_err()
     );
     assert!(
-        Channel::update_draft(&channel, "C1", "3.3", " ")
+        ChannelStreamingDraft::update_draft(&channel, "3.3", text_intent(" "))
             .await
             .is_err()
     );
@@ -739,7 +750,7 @@ async fn typed_draft_lifecycle_preserves_slack_create_update_and_finalize() {
 }
 
 #[tokio::test]
-async fn legacy_interactions_delegate_to_the_typed_operations() {
+async fn typed_interaction_operations_preserve_provider_validation() {
     let server = mock_api().await;
     for method in [
         "reactions.add",
@@ -754,35 +765,43 @@ async fn legacy_interactions_delegate_to_the_typed_operations() {
         value: "👍".into(),
         custom_emoji_id: None,
     };
-    Channel::send_reaction(&channel, &conversation(None), "1.1", &reaction, false)
+    ChannelReaction::send_reaction(
+        &channel,
+        &channel_ref(),
+        &conversation(None),
+        "1.1",
+        &reaction,
+        false,
+    )
+    .await
+    .unwrap();
+    ChannelEdit::edit(&channel, &receipt("1.1"), text_intent("new"))
         .await
         .unwrap();
-    Channel::edit_message(&channel, &receipt("1.1"), &text_intent("new"))
+    ChannelDelete::delete(&channel, &receipt("1.1"))
         .await
         .unwrap();
-    Channel::delete_message(&channel, &receipt("1.1"))
-        .await
-        .unwrap();
-    Channel::start_typing(&channel, "C1:1.0").await.unwrap();
-    Channel::stop_typing(&channel, "C1:1.0").await.unwrap();
     ChannelTyping::start_typing(&channel, "C1:1.0")
         .await
         .unwrap();
     ChannelTyping::stop_typing(&channel, "C1:1.0")
         .await
         .unwrap();
+    assert_eq!(bodies(&server, "reactions.add").await.len(), 1);
+    assert_eq!(bodies(&server, "chat.update").await.len(), 1);
+    assert_eq!(bodies(&server, "chat.delete").await.len(), 1);
     let statuses = bodies(&server, "assistant.threads.setStatus").await;
-    assert_eq!(statuses.len(), 4);
+    assert_eq!(statuses.len(), 2);
     assert_eq!(statuses[1]["status"], "");
-    assert!(Channel::start_typing(&channel, "C1").await.is_err());
-    assert!(Channel::stop_typing(&channel, "C1").await.is_err());
+    assert!(ChannelTyping::start_typing(&channel, "C1").await.is_err());
+    assert!(ChannelTyping::stop_typing(&channel, "C1").await.is_err());
     assert!(
-        Channel::edit_message(&channel, &receipt("1.1"), &text_intent(" "))
+        ChannelEdit::edit(&channel, &receipt("1.1"), text_intent(" "))
             .await
             .is_err()
     );
     assert!(
-        Channel::delete_message(&channel, &MessageReceipt::default())
+        ChannelDelete::delete(&channel, &MessageReceipt::default())
             .await
             .is_err()
     );
@@ -791,9 +810,16 @@ async fn legacy_interactions_delegate_to_the_typed_operations() {
         custom_emoji_id: None,
     };
     assert!(
-        Channel::send_reaction(&channel, &conversation(None), "1.1", &unknown, false)
-            .await
-            .is_err()
+        ChannelReaction::send_reaction(
+            &channel,
+            &channel_ref(),
+            &conversation(None),
+            "1.1",
+            &unknown,
+            false,
+        )
+        .await
+        .is_err()
     );
 }
 
@@ -810,7 +836,7 @@ async fn reactions_for_another_channel_are_forbidden() {
         id: "telegram".into(),
         account_id: None,
     };
-    let error = crate::channel::ChannelReaction::send_reaction(
+    let error = ChannelReaction::send_reaction(
         &channel,
         &other,
         &conversation(None),
@@ -829,7 +855,6 @@ async fn health_checks_follow_the_auth_test_status() {
     let server = mock_api().await;
     mount_auth(&server, "UBOT").await;
     let channel = channel_for(&server, &[]);
-    assert!(Channel::health_check(&channel).await);
     assert_eq!(
         ChannelAdapter::status(&channel)
             .await
@@ -840,7 +865,6 @@ async fn health_checks_follow_the_auth_test_status() {
         "adapter status must report the actual auth.test result"
     );
     let dead = SlackChannel::new("t".into(), None, vec![]).with_api_base("http://127.0.0.1:1/api");
-    assert!(!Channel::health_check(&dead).await);
     assert_eq!(
         ChannelAdapter::status(&dead)
             .await
@@ -850,19 +874,31 @@ async fn health_checks_follow_the_auth_test_status() {
         Some("unhealthy")
     );
     let empty = mock_api().await;
-    assert!(!Channel::health_check(&channel_for(&empty, &[])).await);
+    assert_eq!(
+        ChannelAdapter::status(&channel_for(&empty, &[]))
+            .await
+            .unwrap()
+            .health_state
+            .as_deref(),
+        Some("unhealthy")
+    );
 }
 
 #[tokio::test]
 async fn listening_needs_a_channel_or_an_app_token_and_picks_the_transport() {
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    struct NoSink;
+    #[async_trait::async_trait]
+    impl crate::channel::ChannelInboundSink for NoSink {
+        async fn push(&self, _: tinychannels_bus::ChannelIngress) -> Result<(), ChannelSendError> {
+            Ok(())
+        }
+    }
     let bare = SlackChannel::new("t".into(), None, vec![]);
+    let error = ChannelAdapter::start(&bare, &NoSink).await.unwrap_err();
     assert!(
-        Channel::listen(&bare, tx.clone())
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("channel_id required")
+        error
+            .message
+            .contains("needs a channel_id or Socket Mode app token")
     );
     let dead = |channel: Option<&str>, app: Option<&str>| {
         SlackChannel::new("t".into(), channel.map(str::to_owned), vec!["*".into()])
@@ -880,7 +916,7 @@ async fn listening_needs_a_channel_or_an_app_token_and_picks_the_transport() {
     ] {
         let waited = tokio::time::timeout(
             std::time::Duration::from_millis(80),
-            Channel::listen(&channel, tx.clone()),
+            ChannelAdapter::start(&channel, &NoSink),
         )
         .await;
         assert!(waited.is_err(), "the transport loops until cancelled");

@@ -35,60 +35,92 @@ async fn dispatch_routes_each_gateway_event_to_its_handler() {
 
     assert!(
         channel
-            .handle_dispatch("MESSAGE_CREATE", &message, BOT_ID, &tx)
+            .handle_dispatch_to(
+                "MESSAGE_CREATE",
+                &message,
+                BOT_ID,
+                &GatewaySink::Typed(tx.clone())
+            )
             .await
     );
     let mut edit = message.clone();
     edit["edited_timestamp"] = json!("2026-01-02T03:04:05+00:00");
     assert!(
         channel
-            .handle_dispatch("MESSAGE_UPDATE", &edit, BOT_ID, &tx)
+            .handle_dispatch_to(
+                "MESSAGE_UPDATE",
+                &edit,
+                BOT_ID,
+                &GatewaySink::Typed(tx.clone())
+            )
             .await
     );
     assert!(
         channel
-            .handle_dispatch(
+            .handle_dispatch_to(
                 "MESSAGE_DELETE",
                 &json!({"id": "11", "channel_id": CHANNEL, "guild_id": GUILD}),
                 BOT_ID,
-                &tx
+                &GatewaySink::Typed(tx.clone())
             )
             .await
     );
     let reaction = json!({"user_id": "42", "message_id": "11", "channel_id": CHANNEL, "guild_id": GUILD, "emoji": {"name": "x"}});
     assert!(
         channel
-            .handle_dispatch("MESSAGE_REACTION_ADD", &reaction, BOT_ID, &tx)
+            .handle_dispatch_to(
+                "MESSAGE_REACTION_ADD",
+                &reaction,
+                BOT_ID,
+                &GatewaySink::Typed(tx.clone())
+            )
             .await
     );
     assert!(
         channel
-            .handle_dispatch("MESSAGE_REACTION_REMOVE", &reaction, BOT_ID, &tx)
+            .handle_dispatch_to(
+                "MESSAGE_REACTION_REMOVE",
+                &reaction,
+                BOT_ID,
+                &GatewaySink::Typed(tx.clone())
+            )
             .await
     );
     assert!(
         channel
-            .handle_dispatch("TYPING_START", &json!({}), BOT_ID, &tx)
+            .handle_dispatch_to(
+                "TYPING_START",
+                &json!({}),
+                BOT_ID,
+                &GatewaySink::Typed(tx.clone())
+            )
             .await
     );
 
-    assert_eq!(events.inbound().len(), 1);
-    let kinds: Vec<_> = events
-        .events()
+    let mut ingress = Vec::new();
+    while let Ok(item) = rx.try_recv() {
+        ingress.push(item);
+    }
+    assert_eq!(ingress.len(), 5);
+    assert!(matches!(
+        ingress[0],
+        tinychannels_bus::ChannelIngress::Inbound(_)
+    ));
+    let kinds: Vec<_> = ingress
         .into_iter()
-        .map(|e| match e.event {
-            tinychannels_bus::ChannelEventKind::MessageUpdated { .. } => "updated",
-            tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "deleted",
-            tinychannels_bus::ChannelEventKind::ReactionAdded { .. } => "added",
-            tinychannels_bus::ChannelEventKind::ReactionRemoved { .. } => "removed",
-            _ => "other",
+        .filter_map(|item| match item {
+            tinychannels_bus::ChannelIngress::Event(e) => Some(match e.event {
+                tinychannels_bus::ChannelEventKind::MessageUpdated { .. } => "updated",
+                tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "deleted",
+                tinychannels_bus::ChannelEventKind::ReactionAdded { .. } => "added",
+                tinychannels_bus::ChannelEventKind::ReactionRemoved { .. } => "removed",
+                _ => "other",
+            }),
+            _ => None,
         })
         .collect();
     assert_eq!(kinds, vec!["updated", "deleted", "added", "removed"]);
-    assert!(
-        rx.try_recv().is_err(),
-        "module ingress consumed the message"
-    );
+    assert!(events.inbound().is_empty());
 }
 
 #[tokio::test]
@@ -105,12 +137,17 @@ async fn dispatch_reports_a_gone_receiver_only_for_messages() {
 
     assert!(
         !channel
-            .handle_dispatch("MESSAGE_CREATE", &message, BOT_ID, &tx)
+            .handle_dispatch_to(
+                "MESSAGE_CREATE",
+                &message,
+                BOT_ID,
+                &GatewaySink::Typed(tx.clone())
+            )
             .await
     );
     assert!(
         channel
-            .handle_dispatch("READY", &json!({}), BOT_ID, &tx)
+            .handle_dispatch_to("READY", &json!({}), BOT_ID, &GatewaySink::Typed(tx.clone()))
             .await
     );
 }
@@ -122,31 +159,36 @@ async fn thread_events_prime_the_cache_so_no_lookup_is_needed() {
     let (tx, _rx) = mpsc::channel(1);
 
     channel
-        .handle_dispatch(
+        .handle_dispatch_to(
             "THREAD_CREATE",
             &json!({"id": THREAD, "type": 11, "parent_id": CHANNEL}),
             BOT_ID,
-            &tx,
+            &GatewaySink::Typed(tx.clone()),
         )
         .await;
     channel
-        .handle_dispatch(
+        .handle_dispatch_to(
             "THREAD_UPDATE",
             &json!({"id": "5", "type": 12, "parent_id": CHANNEL}),
             BOT_ID,
-            &tx,
+            &GatewaySink::Typed(tx.clone()),
         )
         .await;
     channel
-        .handle_dispatch(
+        .handle_dispatch_to(
             "GUILD_CREATE",
             &json!({"id": GUILD, "threads": [{"id": "6", "type": 10, "parent_id": CHANNEL}]}),
             BOT_ID,
-            &tx,
+            &GatewaySink::Typed(tx.clone()),
         )
         .await;
     channel
-        .handle_dispatch("GUILD_CREATE", &json!({"id": GUILD}), BOT_ID, &tx)
+        .handle_dispatch_to(
+            "GUILD_CREATE",
+            &json!({"id": GUILD}),
+            BOT_ID,
+            &GatewaySink::Typed(tx.clone()),
+        )
         .await;
 
     for id in [THREAD, "5", "6"] {
@@ -170,15 +212,25 @@ async fn button_interactions_dispatch_to_the_interaction_handler() {
         .respond_with(ResponseTemplate::new(204))
         .mount(&server)
         .await;
-    let (tx, _rx) = mpsc::channel(1);
+    let (tx, mut rx) = mpsc::channel(1);
     let press = json!({
         "id": "77", "token": "tok", "type": 3, "channel_id": CHANNEL, "guild_id": GUILD,
         "data": {"custom_id": "go"}, "member": {"user": {"id": "42"}}
     });
 
     channel
-        .handle_dispatch("INTERACTION_CREATE", &press, BOT_ID, &tx)
+        .handle_dispatch_to(
+            "INTERACTION_CREATE",
+            &press,
+            BOT_ID,
+            &GatewaySink::Typed(tx.clone()),
+        )
         .await;
 
-    assert_eq!(events.events().len(), 1);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(tinychannels_bus::ChannelIngress::Event(_))
+    ));
+    assert!(rx.try_recv().is_err());
+    assert!(events.events().is_empty());
 }

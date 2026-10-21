@@ -680,7 +680,8 @@ async fn ws_listener_acks_reassembles_filters_and_forwards_messages() {
     let gw = gateway(vec!["ou_alice".into()]).await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
     let channel = gw.channel;
-    let listen = tokio::spawn(async move { channel.listen(tx).await });
+    let listen =
+        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
     let mut ws = accept(&gw.listener).await;
 
     let initial = next_frame(&mut ws).await;
@@ -851,7 +852,7 @@ async fn ws_listener_acks_reassembles_filters_and_forwards_messages() {
     let mut delivered = Vec::new();
     while let Ok(message) = rx.try_recv() {
         assert_eq!(message.channel, "lark");
-        assert_eq!(message.sender, "oc_chat");
+        assert_eq!(message.sender, "ou_alice");
         assert_eq!(message.reply_target, "oc_chat");
         delivered.push(message.content);
     }
@@ -871,7 +872,8 @@ async fn ws_listener_stops_when_the_receiver_is_dropped() {
     let gw = gateway(vec!["*".into()]).await;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let channel = gw.channel;
-    let listen = tokio::spawn(async move { channel.listen(tx).await });
+    let listen =
+        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
     let mut ws = accept(&gw.listener).await;
     next_frame(&mut ws).await;
 
@@ -894,7 +896,8 @@ async fn ws_listener_returns_after_an_abrupt_disconnect() {
     let gw = gateway(vec!["*".into()]).await;
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     let channel = gw.channel;
-    let listen = tokio::spawn(async move { channel.listen(tx).await });
+    let listen =
+        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
     let mut ws = accept(&gw.listener).await;
     next_frame(&mut ws).await;
 

@@ -1,4 +1,8 @@
+#![allow(deprecated)]
+
 use super::*;
+use crate::channel::ChannelAdapter;
+use tinychannels_bus::SendMessage;
 
 fn make_channel() -> WhatsAppChannel {
     WhatsAppChannel::new(
@@ -12,7 +16,7 @@ fn make_channel() -> WhatsAppChannel {
 #[test]
 fn whatsapp_channel_name() {
     let ch = make_channel();
-    assert_eq!(ch.name(), "whatsapp");
+    assert_eq!(ch.descriptor().id, "whatsapp");
 }
 
 #[test]
@@ -848,7 +852,7 @@ fn sensitive_cloud_requests_require_https() {
 }
 
 #[tokio::test]
-async fn injected_cloud_client_reports_connection_failure_and_listener_stays_idle() {
+async fn injected_cloud_client_reports_connection_failure_and_webhook_start_is_immediate() {
     // An invalid proxy fails locally, before contacting Meta.
     let client = reqwest::Client::builder()
         .proxy(reqwest::Proxy::all("http://127.0.0.1:0").unwrap())
@@ -864,19 +868,20 @@ async fn injected_cloud_client_reports_connection_failure_and_listener_stays_idl
     );
     assert_eq!(channel.verify_token(), "verify");
     assert!(
-        channel
-            .send(&SendMessage::new("hello", "+15551234567"))
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "+15551234567"))
             .await
             .is_err()
     );
-    assert!(!channel.health_check().await);
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(10), channel.listen(tx))
-            .await
-            .is_err()
-    );
-    assert!(rx.try_recv().is_err());
+    assert!(!crate::provider_test_support::is_healthy(&channel).await);
+    let sink = crate::provider_test_support::RecordingInboundSink::default();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        crate::channel::ChannelAdapter::start(&channel, &sink),
+    )
+    .await
+    .expect("webhook adapters do not own a polling listener")
+    .unwrap();
+    assert!(sink.events().is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -885,9 +890,7 @@ async fn injected_cloud_client_reports_connection_failure_and_listener_stays_idl
 
 mod v2 {
     use super::*;
-    use crate::channel::{
-        ChannelAdapter as _, ChannelDelete as _, ChannelEdit as _, ChannelStreamingDraft as _,
-    };
+    use crate::channel::{ChannelDelete as _, ChannelEdit as _, ChannelStreamingDraft as _};
     use crate::providers::whatsapp::api::GRAPH_VERSION;
     use crate::providers::whatsapp_shared::fakes::{CollectingSink, MemoryMedia, MemoryVoices};
     use hmac::{Hmac, KeyInit, Mac};
@@ -928,19 +931,24 @@ mod v2 {
     #[test]
     fn capabilities_follow_the_wired_ports() {
         let bare = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![]);
-        let facts = bare.capabilities();
+        let facts = bare.declared_capabilities();
         assert!(facts.reactions && facts.addressing.reply_to_id && !facts.addressing.thread_id);
         assert!(!facts.content.image.outbound && !facts.voice_out.supported);
-        assert!(bare.supports_reactions() && bare.supports_reply_to_id());
-        assert!(bare.supports_remote_control() && bare.supports_chat_approvals());
-        assert!(bare.history_key_ignores_thread());
-        assert!(!bare.supports_edit() && !bare.supports_draft_updates());
+        assert!(crate::provider_test_support::supports_reactions(&bare));
+        assert!(crate::provider_test_support::supports_reply_to_id(&bare));
+        assert!(crate::provider_test_support::supports_remote_control(&bare));
+        assert!(crate::provider_test_support::supports_chat_approvals(&bare));
+        assert!(crate::provider_test_support::history_key_ignores_thread(
+            &bare
+        ));
+        assert!(!crate::provider_test_support::supports_edit(&bare));
+        assert!(!crate::provider_test_support::supports_draft_updates(&bare));
 
         let wired = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![])
             .with_media_repository(Arc::new(MemoryMedia::default()))
             .with_voice_media_store(Arc::new(MemoryVoices::default()))
             .with_voice_synthesis(true);
-        let facts = wired.capabilities();
+        let facts = wired.declared_capabilities();
         assert!(facts.content.image.outbound && facts.content.sticker.outbound);
         assert!(facts.voice_in.supported && facts.voice_out.synthesis);
         assert!(
@@ -950,8 +958,8 @@ mod v2 {
         // Synthesis needs the voice store; without it the flag alone is not enough.
         let synth_only = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![])
             .with_voice_synthesis(true);
-        assert!(!synth_only.capabilities().voice_out.synthesis);
-        assert_eq!(wired.declared_capabilities(), wired.capabilities());
+        assert!(!synth_only.declared_capabilities().voice_out.synthesis);
+        assert_eq!(wired.declared_capabilities(), wired.declared_capabilities());
     }
 
     #[test]
@@ -982,10 +990,12 @@ mod v2 {
             .expect(1)
             .mount(&server)
             .await;
-        #[allow(deprecated, reason = "the v21 text send is under test")]
-        Channel::send(&channel(&server), &SendMessage::new("hi", "+15551234567"))
-            .await
-            .unwrap();
+        crate::provider_test_support::send_v1(
+            &channel(&server),
+            &SendMessage::new("hi", "+15551234567"),
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -997,7 +1007,7 @@ mod v2 {
             .mount(&server)
             .await;
         let healthy = channel(&server);
-        assert!(healthy.health_check().await);
+        assert!(crate::provider_test_support::is_healthy(&healthy).await);
         assert_eq!(
             tinychannels_runtime::channel::ChannelAdapter::status(&healthy)
                 .await
@@ -1013,7 +1023,7 @@ mod v2 {
             .mount(&server)
             .await;
         let unhealthy = channel(&server);
-        assert!(!unhealthy.health_check().await);
+        assert!(!crate::provider_test_support::is_healthy(&unhealthy).await);
         assert_eq!(
             tinychannels_runtime::channel::ChannelAdapter::status(&unhealthy)
                 .await
@@ -1024,7 +1034,7 @@ mod v2 {
         );
         let insecure = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![])
             .with_api_base_for_test("http://graph.example.invalid");
-        assert!(!insecure.health_check().await);
+        assert!(!crate::provider_test_support::is_healthy(&insecure).await);
     }
 
     #[tokio::test]
@@ -1042,10 +1052,10 @@ mod v2 {
             .await;
         let channel = channel(&server);
         // No inbound message yet: nothing to anchor the indicator to.
-        let error = Channel::start_typing(&channel, "+15550001111")
+        let error = crate::channel::ChannelTyping::start_typing(&channel, "+15550001111")
             .await
             .unwrap_err();
-        assert!(error.downcast_ref::<WaFailure>().is_some());
+        assert_eq!(error.kind, crate::channel::SendErrorKind::Forbidden);
         assert!(matches!(
             crate::channel::ChannelTyping::start_typing(&channel, "+15550001111").await,
             Err(error) if !error.unsupported && !error.sent_before_error
@@ -1054,13 +1064,17 @@ mod v2 {
             .anchors
             .lock()
             .insert("+15550001111", "wamid.anchor");
-        Channel::start_typing(&channel, "+15550001111")
+        crate::channel::ChannelTyping::start_typing(&channel, "+15550001111")
             .await
             .unwrap();
-        Channel::stop_typing(&channel, "+15550001111")
+        crate::channel::ChannelTyping::stop_typing(&channel, "+15550001111")
             .await
             .unwrap();
-        assert!(Channel::start_typing(&channel, "no digits").await.is_err());
+        assert!(
+            crate::channel::ChannelTyping::start_typing(&channel, "no digits")
+                .await
+                .is_err()
+        );
         crate::channel::ChannelTyping::stop_typing(&channel, "+15550001111")
             .await
             .unwrap();
@@ -1075,12 +1089,32 @@ mod v2 {
             value: "👍".into(),
             custom_emoji_id: None,
         };
-        Channel::send_reaction(&channel, &conversation(), "wamid.t", &thumbs, false)
-            .await
-            .unwrap();
-        Channel::send_reaction(&channel, &conversation(), "wamid.t", &thumbs, true)
-            .await
-            .unwrap();
+        crate::channel::ChannelReaction::send_reaction(
+            &channel,
+            &ChannelRef {
+                id: "whatsapp".into(),
+                account_id: None,
+            },
+            &conversation(),
+            "wamid.t",
+            &thumbs,
+            false,
+        )
+        .await
+        .unwrap();
+        crate::channel::ChannelReaction::send_reaction(
+            &channel,
+            &ChannelRef {
+                id: "whatsapp".into(),
+                account_id: None,
+            },
+            &conversation(),
+            "wamid.t",
+            &thumbs,
+            true,
+        )
+        .await
+        .unwrap();
         let bodies: Vec<serde_json::Value> = server
             .received_requests()
             .await
@@ -1098,16 +1132,28 @@ mod v2 {
         };
         let blank = tinychannels_bus::ChannelReaction::default();
         for (reaction, unsupported) in [(&custom, true), (&blank, false)] {
-            let error =
-                Channel::send_reaction(&channel, &conversation(), "wamid.t", reaction, false)
-                    .await
-                    .unwrap_err();
-            let failure = error.downcast_ref::<WaFailure>().unwrap();
-            assert_eq!(matches!(failure, WaFailure::Unsupported(_)), unsupported);
+            let error = crate::channel::ChannelReaction::send_reaction(
+                &channel,
+                &ChannelRef {
+                    id: "whatsapp".into(),
+                    account_id: None,
+                },
+                &conversation(),
+                "wamid.t",
+                reaction,
+                false,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.unsupported, unsupported);
         }
         assert!(
-            Channel::send_reaction(
+            crate::channel::ChannelReaction::send_reaction(
                 &channel,
+                &ChannelRef {
+                    id: "whatsapp".into(),
+                    account_id: None
+                },
                 &ConversationRef {
                     id: "name".into(),
                     ..Default::default()
@@ -1168,7 +1214,7 @@ mod v2 {
         let server = MockServer::start().await;
         accept_messages(&server).await;
         let channel = channel(&server);
-        Channel::mark_read(&channel, &conversation(), "wamid.in")
+        crate::channel::ChannelAdapter::mark_read(&channel, &conversation(), "wamid.in")
             .await
             .unwrap();
         let body: serde_json::Value =
@@ -1176,7 +1222,7 @@ mod v2 {
         assert_eq!(body["status"], "read");
         assert!(body.get("typing_indicator").is_none());
         assert!(
-            Channel::mark_read(&channel, &conversation(), " ")
+            crate::channel::ChannelAdapter::mark_read(&channel, &conversation(), " ")
                 .await
                 .is_err()
         );
@@ -1241,8 +1287,10 @@ mod v2 {
             .await
             .unwrap();
         assert_eq!(typed.receipt.platform_message_ids, ["wamid.ok"]);
-        Channel::send_typed(&channel, &message).await.unwrap();
-        let receipt = Channel::send_typed_with_receipt(&channel, &message)
+        crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+            .await
+            .unwrap();
+        let receipt = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
             .await
             .unwrap();
         assert!(!receipt.receipt.platform_message_ids.is_empty());
@@ -1261,7 +1309,7 @@ mod v2 {
         .unwrap_err();
         assert!(typed_error.unsupported);
         assert!(
-            Channel::send_typed(
+            crate::channel::ChannelTypedSend::send_typed(
                 &channel,
                 &tinychannels_bus::ChannelOutboundMessage::from_intent(&threaded)
             )
@@ -1292,13 +1340,15 @@ mod v2 {
         let mut mac = Hmac::<Sha256>::new_from_slice(b"secret").unwrap();
         mac.update(&body);
         let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
-        let outcome = Channel::deliver_webhook(&channel, Some(&signature), &body)
-            .await
-            .unwrap();
+        let outcome =
+            crate::channel::ChannelAdapter::deliver_webhook(&channel, Some(&signature), &body)
+                .await
+                .unwrap();
         assert_eq!(outcome.messages, 1);
-        let refused = Channel::deliver_webhook(&channel, Some("sha256=00"), &body)
-            .await
-            .unwrap_err();
+        let refused =
+            crate::channel::ChannelAdapter::deliver_webhook(&channel, Some("sha256=00"), &body)
+                .await
+                .unwrap_err();
         assert!(
             refused
                 .downcast_ref::<tinychannels_runtime::WebhookRejected>()
@@ -1311,20 +1361,27 @@ mod v2 {
                 fail: true,
                 ..CollectingSink::new()
             }));
-        let error = Channel::deliver_webhook(&failing, Some(&signature), &body)
-            .await
-            .unwrap_err();
+        let error =
+            crate::channel::ChannelAdapter::deliver_webhook(&failing, Some(&signature), &body)
+                .await
+                .unwrap_err();
         assert!(
             error
                 .downcast_ref::<tinychannels_runtime::WebhookRejected>()
                 .is_none()
         );
         assert_eq!(
-            Channel::verify_webhook(&channel, "subscribe", "verify-me", "c1").as_deref(),
+            crate::channel::ChannelAdapter::verify_webhook(
+                &channel,
+                "subscribe",
+                "verify-me",
+                "c1"
+            )
+            .as_deref(),
             Some("c1")
         );
         assert_eq!(
-            Channel::verify_webhook(&channel, "subscribe", "nope", "c1"),
+            crate::channel::ChannelAdapter::verify_webhook(&channel, "subscribe", "nope", "c1"),
             None
         );
     }
@@ -1338,35 +1395,14 @@ mod v2 {
     }
 
     #[tokio::test]
-    async fn the_listener_holds_the_legacy_sink_only_while_it_runs() {
-        let channel = Arc::new(WhatsAppChannel::new(
-            "t".into(),
-            "1".into(),
-            "v".into(),
-            vec![],
-        ));
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        #[allow(deprecated, reason = "the legacy listener seam is under test")]
-        let listener = {
-            let channel = Arc::clone(&channel);
-            tokio::spawn(async move { Channel::listen(channel.as_ref(), tx).await })
-        };
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while channel.listener.lock().is_none() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the listener stored its sink");
-        assert!(
-            !listener.is_finished(),
-            "the listener parks until cancelled"
-        );
-        listener.abort();
-        assert!(listener.await.unwrap_err().is_cancelled());
-        // Once the listener is gone nothing keeps the module's inbound
-        // forwarder alive: its receiver sees the channel close.
-        assert!(channel.listener.lock().is_none());
-        assert!(rx.recv().await.is_none());
+    async fn webhook_adapter_start_does_not_claim_a_stream_listener() {
+        let channel = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![]);
+        let sink = crate::provider_test_support::RecordingInboundSink::default();
+        tokio::time::timeout(std::time::Duration::from_secs(1), channel.start(&sink))
+            .await
+            .expect("webhook adapter start is nonblocking")
+            .unwrap();
+        channel.stop().await.unwrap();
+        assert!(sink.events().is_empty());
     }
 }

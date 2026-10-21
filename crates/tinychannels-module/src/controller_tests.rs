@@ -503,26 +503,12 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
 
 struct ManagedConformanceChannel(tinychannels_bus::ChannelCapabilities);
 
-#[async_trait::async_trait]
-#[allow(deprecated, reason = "managed fixture exposes module capability facts")]
-impl tinychannels::Channel for ManagedConformanceChannel {
-    fn name(&self) -> &str {
+impl crate::provider::TestProviderBehavior for ManagedConformanceChannel {
+    fn test_provider_id(&self) -> &'static str {
         "mattermost"
     }
-
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+    fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         self.0.clone()
-    }
-
-    async fn send(&self, _message: &tinychannels::SendMessage) -> anyhow::Result<()> {
-        anyhow::bail!("managed output must use the host callback")
-    }
-
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        std::future::pending().await
     }
 }
 
@@ -546,7 +532,7 @@ impl ManagedConformanceFixture {
             .actions
             .supported
             .extend(["edit", "thread-create", "thread-update", "thread-list"].map(str::to_owned));
-        let running = Running::start_outbound(
+        let running = Running::start_test_outbound(
             Arc::new(ManagedConformanceChannel(capabilities)),
             Arc::new(crate::provider::Hooks::default()),
             host.clone(),
@@ -2431,7 +2417,11 @@ async fn configured_mattermost_reactions_use_native_v4_without_managed_fallback(
         )
         .await
         .expect_err("native API rejection must be returned to the caller");
-    assert!(api_error.to_string().contains("HTTP 403"));
+    assert!(
+        api_error
+            .to_string()
+            .contains("Mattermost reaction was rejected")
+    );
 
     let before_invalid = server.received_requests().await.unwrap().len();
     assert!(

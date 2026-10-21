@@ -1,5 +1,3 @@
-use crate::traits::{Channel, ChannelMessage, SendMessage};
-use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -42,11 +40,6 @@ impl Drop for ListenerRegistration<'_> {
             *listener = None;
         }
     }
-}
-
-enum DingTalkIngress<'a> {
-    Legacy(tokio::sync::mpsc::Sender<ChannelMessage>),
-    Typed(&'a (dyn crate::channel::ChannelInboundSink + Send + Sync)),
 }
 
 /// Response from DingTalk gateway connection registration.
@@ -124,7 +117,6 @@ impl DingTalkChannel {
         self
     }
 
-    #[cfg(test)]
     pub(crate) fn with_attachment_http_client(mut self, client: reqwest::Client) -> Self {
         self.attachment_http_client = client;
         self
@@ -215,13 +207,9 @@ impl DingTalkChannel {
 impl DingTalkChannel {
     async fn listen_owned(
         &self,
-        ingress: DingTalkIngress<'_>,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
         mut cancellation: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> anyhow::Result<()> {
-        let legacy_tx = match &ingress {
-            DingTalkIngress::Legacy(tx) => Some(tx),
-            DingTalkIngress::Typed(_) => None,
-        };
         tracing::info!("DingTalk: registering gateway connection...");
 
         let Some(gw) =
@@ -317,14 +305,6 @@ impl DingTalkChannel {
                         }
                     };
 
-                    // Extract message content
-                    let content = data
-                        .get("text")
-                        .and_then(|t| t.get("content"))
-                        .and_then(|c| c.as_str())
-                        .unwrap_or("")
-                        .trim();
-
                     let sender_id = data
                         .get("senderStaffId")
                         .and_then(|s| s.as_str())
@@ -362,94 +342,41 @@ impl DingTalkChannel {
                         webhooks.insert(sender_id.to_string(), webhook);
                     }
 
-                    if let DingTalkIngress::Typed(sink) = &ingress {
-                        let envelope = tokio::select! {
-                            biased;
-                            () = listener_cancelled(&mut cancellation) => {
-                                let _ = tokio::time::timeout(
-                                    std::time::Duration::from_secs(1),
-                                    write.send(Message::Close(None)),
-                                ).await;
-                                stopped = true;
-                                break 'stream;
-                            }
-                            envelope = self.inbound_envelope_for_listener(&data) => envelope,
-                        };
-                        let Some(envelope) = envelope else {
-                            continue;
-                        };
-                        let provider_message_id = envelope.message_id.clone();
-                        let published = tokio::select! {
-                            biased;
-                            () = listener_cancelled(&mut cancellation) => {
-                                let _ = tokio::time::timeout(
-                                    std::time::Duration::from_secs(1),
-                                    write.send(Message::Close(None)),
-                                ).await;
-                                stopped = true;
-                                break 'stream;
-                            }
-                            result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
-                        };
-                        published.map_err(|error| {
-                            anyhow::anyhow!("DingTalk typed ingress rejected: {}", error.message)
-                        })?;
-                        self.native
-                            .mark_seen(format!("dingtalk:{provider_message_id}"));
-                        if !send_callback_ack(&mut write, &frame).await {
+                    let envelope = tokio::select! {
+                        biased;
+                        () = listener_cancelled(&mut cancellation) => {
+                            let _ = tokio::time::timeout(
+                                std::time::Duration::from_secs(1),
+                                write.send(Message::Close(None)),
+                            ).await;
+                            stopped = true;
                             break 'stream;
                         }
+                        envelope = self.inbound_envelope_for_listener(&data) => envelope,
+                    };
+                    let Some(envelope) = envelope else {
                         continue;
-                    }
-
-                    if let Some(envelope) = self.inbound_envelope(&data).await {
-                        let provider_message_id = envelope.message_id.clone();
-                        if crate::providers::native::inbound::publish(
-                            "dingtalk",
-                            self.native.events.as_ref(),
-                            envelope,
-                        )
-                        .await
-                        {
-                            self.native
-                                .mark_seen(format!("dingtalk:{provider_message_id}"));
-                            if !send_callback_ack(&mut write, &frame).await {
-                                break 'stream;
-                            }
-                            continue;
+                    };
+                    let provider_message_id = envelope.message_id.clone();
+                    let published = tokio::select! {
+                        biased;
+                        () = listener_cancelled(&mut cancellation) => {
+                            let _ = tokio::time::timeout(
+                                std::time::Duration::from_secs(1),
+                                write.send(Message::Close(None)),
+                            ).await;
+                            stopped = true;
+                            break 'stream;
                         }
-                    }
-
-                    if content.is_empty() {
-                        continue;
-                    }
-
-                    // Acknowledge the event
+                        result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
+                    };
+                    published.map_err(|error| {
+                        anyhow::anyhow!("DingTalk typed ingress rejected: {}", error.message)
+                    })?;
+                    self.native
+                        .mark_seen(format!("dingtalk:{provider_message_id}"));
                     if !send_callback_ack(&mut write, &frame).await {
                         break 'stream;
-                    }
-
-                    let channel_msg = ChannelMessage {
-                        id: Uuid::new_v4().to_string(),
-                        sender: sender_id.to_string(),
-                        reply_target: chat_id,
-                        content: content.to_string(),
-                        channel: "dingtalk".to_string(),
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                        topic_id: None,
-                        reply_to_id: None,
-                        thread_ts: None,
-                        sender_name: None,
-                    };
-
-                    if let Some(tx) = legacy_tx
-                        && tx.send(channel_msg).await.is_err()
-                    {
-                        tracing::warn!("DingTalk: message channel closed");
-                        break;
                     }
                 }
                 _ => {}
@@ -518,71 +445,6 @@ fn no_redirect_client() -> reqwest::Client {
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .expect("building the DingTalk attachment HTTP client should succeed")
-}
-
-#[async_trait]
-impl Channel for DingTalkChannel {
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        crate::providers::native::NativeProvider::declared_capabilities(self)
-    }
-
-    fn name(&self) -> &str {
-        "dingtalk"
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        let webhooks = self.session_webhooks.read().await;
-        let webhook_url = webhooks.get(&message.recipient).ok_or_else(|| {
-            anyhow::anyhow!(
-                "No session webhook found for chat {}. \
-                 The user must send a message first to establish a session.",
-                message.recipient
-            )
-        })?;
-
-        let title = message.subject.as_deref().unwrap_or("OpenHuman");
-        let body = serde_json::json!({
-            "msgtype": "markdown",
-            "markdown": {
-                "title": title,
-                "text": message.content,
-            }
-        });
-
-        let resp = self
-            .http_client()
-            .post(webhook_url)
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let err = resp.text().await.unwrap_or_default();
-            anyhow::bail!("DingTalk webhook reply failed ({status}): {err}");
-        }
-
-        Ok(())
-    }
-
-    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        let (id, cancellation) = self.begin_listener()?;
-        let _registration = ListenerRegistration { channel: self, id };
-        self.listen_owned(DingTalkIngress::Legacy(tx), Some(cancellation))
-            .await
-    }
-
-    async fn health_check(&self) -> bool {
-        self.register_connection().await.is_ok()
-    }
 }
 
 #[path = "dingtalk/native.rs"]

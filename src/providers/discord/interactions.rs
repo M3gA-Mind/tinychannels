@@ -5,8 +5,7 @@ use super::channel::{DiscordChannel, split_message_for_discord};
 use super::http::{Payload, pre_dispatch};
 use super::inbound::is_snowflake;
 use super::outbound::target_for;
-use serde_json::{Value, json};
-use std::time::{Duration, Instant};
+use serde_json::json;
 use tinychannels_bus::channel::{
     ChannelSendError, ChannelSendOutcome, MessageReceipt, SendErrorKind,
 };
@@ -283,52 +282,6 @@ impl DiscordChannel {
                 }
             }
         }
-    }
-
-    /// Legacy draft rate limit: `true` when an edit for `key` should be skipped.
-    pub(super) fn draft_edit_throttled(&self, key: &str) -> bool {
-        let last = self.last_draft_edit.lock();
-        last.get(key)
-            .is_some_and(|at| at.elapsed() < Duration::from_millis(self.draft_update_interval_ms))
-    }
-
-    pub(super) fn mark_draft_edit(&self, key: &str) {
-        self.last_draft_edit
-            .lock()
-            .insert(key.to_owned(), Instant::now());
-    }
-
-    /// Post the first draft message for the legacy streaming path.
-    pub(super) async fn legacy_send_draft(
-        &self,
-        recipient: &str,
-        content: &str,
-    ) -> Result<String, ChannelSendError> {
-        if !is_snowflake(recipient) {
-            return Err(pre_dispatch("Discord draft target must be numeric"));
-        }
-        let first = split_message_for_discord(content)
-            .into_iter()
-            .next()
-            .filter(|chunk| !chunk.trim().is_empty())
-            .unwrap_or_else(|| "...".into());
-        let url = self.endpoint_url(&["channels", recipient, "messages"])?;
-        let response: Value = self
-            .call(
-                reqwest::Method::POST,
-                url,
-                Payload::Json(json!({"content": first, "allowed_mentions": {"parse": ["users"]}})),
-                "send draft",
-                false,
-            )
-            .await?;
-        self.mark_draft_edit(recipient);
-        response
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|id| is_snowflake(id))
-            .map(str::to_owned)
-            .ok_or_else(|| pre_dispatch("Discord draft response omitted the message id"))
     }
 }
 

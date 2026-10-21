@@ -1,9 +1,9 @@
 //! Telegram channel — `Channel` trait implementation: send, listen, draft streaming, typing.
 
-use super::channel_types::{TelegramChannel, TelegramTypingTask};
+use super::channel_types::TelegramChannel;
 use super::text::{TELEGRAM_MAX_MESSAGE_LENGTH, markdown_v2_text, strip_tool_call_tags};
 use crate::config::StreamMode;
-use crate::traits::{Channel, ChannelMessage, SendMessage};
+use crate::traits::{ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::time::Duration;
@@ -26,6 +26,17 @@ impl std::fmt::Display for TelegramPreDispatchError {
 }
 
 impl std::error::Error for TelegramPreDispatchError {}
+
+#[derive(Debug)]
+struct TelegramBadFormatError;
+
+impl std::fmt::Display for TelegramBadFormatError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Telegram request contains an invalid address")
+    }
+}
+
+impl std::error::Error for TelegramBadFormatError {}
 
 #[derive(Debug)]
 pub(super) struct TelegramAttemptedError;
@@ -197,6 +208,26 @@ pub(super) fn response_status_ok(value: &serde_json::Value) -> bool {
 }
 
 impl TelegramChannel {
+    fn supports_edit(&self) -> bool {
+        true
+    }
+
+    fn supports_reply_to_id(&self) -> bool {
+        true
+    }
+
+    fn supports_thread_id(&self) -> bool {
+        true
+    }
+
+    fn supports_draft_updates(&self) -> bool {
+        self.stream_mode != StreamMode::Off
+    }
+
+    fn supports_progressive_edits(&self) -> bool {
+        self.supports_draft_updates()
+    }
+
     pub(crate) async fn health_status(&self) -> bool {
         let timeout_duration = Duration::from_secs(5);
 
@@ -227,6 +258,15 @@ fn typed_send_error(error: anyhow::Error) -> crate::channel::ChannelSendError {
         return crate::channel::ChannelSendError {
             kind: crate::channel::SendErrorKind::Forbidden,
             message: "Telegram typed send was rejected before provider dispatch".into(),
+            retryable: false,
+            sent_before_error: false,
+            ..Default::default()
+        };
+    }
+    if error.downcast_ref::<TelegramBadFormatError>().is_some() {
+        return crate::channel::ChannelSendError {
+            kind: crate::channel::SendErrorKind::BadFormat,
+            message: "Telegram request contains an invalid address".into(),
             retryable: false,
             sent_before_error: false,
             ..Default::default()
@@ -563,6 +603,7 @@ impl TelegramChannel {
     /// One iteration of the background typing refresher: post the chat action
     /// and log (never fail) on rejection or transport error. Returns whether
     /// Telegram accepted the refresh.
+    #[cfg(test)]
     pub(crate) async fn refresh_typing_once(
         client: &reqwest::Client,
         url: &str,
@@ -1008,9 +1049,10 @@ impl TelegramChannel {
             // and deliver the full transcript as a follow-up text message instead
             // of dropping the entire voice reply.
             let transcript_fallback = caption.chars().count() > 1024;
-            let store = self.voice_media_store.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("Telegram voice upload requires host media resolution")
-            })?;
+            let store = self
+                .voice_media_store
+                .as_ref()
+                .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?;
             let conversation = message.conversation_ref.clone().unwrap_or_else(|| {
                 tinychannels_bus::ConversationRef {
                     id: message.conversation_id.clone(),
@@ -1022,7 +1064,7 @@ impl TelegramChannel {
                 .opaque_id
                 .as_deref()
                 .filter(|id| !id.trim().is_empty())
-                .ok_or_else(|| anyhow::anyhow!("voice media has no host-owned opaque reference"))?;
+                .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?;
             let channel =
                 message
                     .channel_ref
@@ -1035,9 +1077,7 @@ impl TelegramChannel {
                 .turn_id
                 .clone()
                 .filter(|turn_id| !turn_id.trim().is_empty())
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Telegram voice upload requires originating turn identity")
-                })?;
+                .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?;
             let scope = tinychannels_bus::HostVoiceScope {
                 configured_instance: channel
                     .account_id
@@ -1280,9 +1320,10 @@ impl TelegramChannel {
             .or(message.thread_id.as_deref())
             .map(str::to_owned);
         let reply_to_id = match message.reply_to_id.as_deref() {
-            Some(id) => Some(id.parse::<i64>().map_err(|_| {
-                anyhow::anyhow!("Telegram reply_to_id must be a numeric message ID")
-            })?),
+            Some(id) => Some(
+                id.parse::<i64>()
+                    .map_err(|_| anyhow::Error::new(TelegramBadFormatError))?,
+            ),
             None => None,
         };
         let (ids, error, _sent_before_error) = match self
@@ -2185,392 +2226,6 @@ Ensure only one `openhuman` process is using this bot token."
     }
 }
 
-#[async_trait]
-impl Channel for TelegramChannel {
-    fn name(&self) -> &str {
-        "telegram"
-    }
-
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        let progressive_edits = self.supports_progressive_edits();
-        let streaming_reply_pipeline = self.supports_draft_updates();
-        let reply_to_id = self.supports_reply_to_id();
-        let thread_id = self.supports_thread_id();
-        let media_enabled = self.media_repository.is_some();
-        let mut actions = vec!["send".into(), "typing".into(), "delete".into()];
-        if progressive_edits {
-            actions.push("draft-update".into());
-        }
-        if self.supports_edit() {
-            actions.push("edit".into());
-        }
-        if reply_to_id || thread_id {
-            actions.push("reply".into());
-        }
-        if thread_id {
-            actions.push("thread-reply".into());
-        }
-        // The module controller also exposes Bot API forum-topic lifecycle
-        // operations for configured chats. Telegram cannot list topics.
-        actions.extend(["thread-create".into(), "thread-update".into()]);
-        actions.extend(["react".into(), "reactions".into()]);
-        let mut parts = vec!["text".into()];
-        parts.extend([
-            "location".into(),
-            "contact".into(),
-            "buttons".into(),
-            "poll".into(),
-            "presentation".into(),
-        ]);
-        let media_capability = |accepted: &[&str], emitted: &[&str], max_size_bytes: u64| {
-            if media_enabled {
-                tinychannels_bus::ContentCapability {
-                    inbound: true,
-                    outbound: true,
-                    accepted_types: accepted.iter().map(|kind| (*kind).to_owned()).collect(),
-                    emitted_types: emitted.iter().map(|kind| (*kind).to_owned()).collect(),
-                    max_size_bytes: Some(max_size_bytes),
-                    ..Default::default()
-                }
-            } else {
-                tinychannels_bus::ContentCapability::default()
-            }
-        };
-        if media_enabled {
-            parts.extend([
-                "image".into(),
-                "video".into(),
-                "audio".into(),
-                "file".into(),
-                "sticker".into(),
-            ]);
-        }
-        let (voice_in, voice_out) = if self.voice_media_store.is_some() {
-            parts.push("voice_note".into());
-            (
-                tinychannels_bus::VoiceCapabilities {
-                    supported: true,
-                    max_size_bytes: Some(8 * 1024 * 1024),
-                    transcript_sources: vec![
-                        tinychannels_bus::VoiceTranscriptSource::Provider,
-                        tinychannels_bus::VoiceTranscriptSource::HostStt,
-                    ],
-                    ..Default::default()
-                },
-                tinychannels_bus::VoiceCapabilities {
-                    supported: true,
-                    accepted_codecs: vec!["ogg_opus".into(), "m4a_aac".into(), "mp3".into()],
-                    max_size_bytes: Some(8 * 1024 * 1024),
-                    synthesis: self.voice_synthesis,
-                    ..Default::default()
-                },
-            )
-        } else {
-            (
-                tinychannels_bus::VoiceCapabilities::default(),
-                tinychannels_bus::VoiceCapabilities::default(),
-            )
-        };
-        tinychannels_bus::ChannelCapabilities {
-            remote_control: true,
-            chat_approvals: true,
-            history_key_ignores_thread: true,
-            reactions: true,
-            progressive_edits,
-            streaming_reply_pipeline,
-            addressing: tinychannels_bus::AddressingCapabilities {
-                reply_to_id,
-                thread_id,
-                ..Default::default()
-            },
-            content: tinychannels_bus::ContentCapabilities {
-                parts,
-                text: tinychannels_bus::ContentCapability {
-                    inbound: true,
-                    outbound: true,
-                    ..Default::default()
-                },
-                image: media_capability(
-                    &["image/jpeg", "image/png", "image/gif", "image/webp"],
-                    &["image/jpeg", "image/png"],
-                    10 * 1024 * 1024,
-                ),
-                video: media_capability(
-                    &["video/mp4", "video/quicktime", "video/webm"],
-                    &["video/mp4"],
-                    20 * 1024 * 1024,
-                ),
-                audio: media_capability(
-                    &[
-                        "audio/ogg",
-                        "audio/mpeg",
-                        "audio/mp4",
-                        "audio/wav",
-                        "audio/webm",
-                    ],
-                    &["audio/mpeg", "audio/mp4"],
-                    20 * 1024 * 1024,
-                ),
-                file: media_capability(
-                    &[
-                        "application/pdf",
-                        "text/plain",
-                        "text/csv",
-                        "application/json",
-                        "application/zip",
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    ],
-                    &[
-                        "application/pdf",
-                        "text/plain",
-                        "text/csv",
-                        "application/json",
-                        "application/zip",
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    ],
-                    20 * 1024 * 1024,
-                ),
-                sticker: if media_enabled {
-                    tinychannels_bus::ContentCapability {
-                        inbound: true,
-                        outbound: true,
-                        accepted_types: vec!["image/webp".into()],
-                        emitted_types: vec!["image/webp".into()],
-                        max_size_bytes: Some(20 * 1024 * 1024),
-                        ..Default::default()
-                    }
-                } else {
-                    tinychannels_bus::ContentCapability::default()
-                },
-                location: tinychannels_bus::ContentCapability {
-                    inbound: true,
-                    outbound: true,
-                    ..Default::default()
-                },
-                contact: tinychannels_bus::ContentCapability {
-                    inbound: true,
-                    outbound: true,
-                    ..Default::default()
-                },
-                buttons: tinychannels_bus::ContentCapability {
-                    outbound: true,
-                    ..Default::default()
-                },
-                button_presentation: tinychannels_bus::ButtonPresentationCapabilities {
-                    max_actions_per_row: Some(8),
-                    max_rows: Some(100),
-                    max_label_length: Some(64),
-                    max_value_bytes: Some(64),
-                    ..Default::default()
-                },
-                poll: tinychannels_bus::ContentCapability {
-                    outbound: true,
-                    ..Default::default()
-                },
-                presentation: tinychannels_bus::ContentCapability {
-                    outbound: true,
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            actions: tinychannels_bus::ActionCapabilities {
-                supported: actions,
-                ..Default::default()
-            },
-            voice_in,
-            voice_out,
-            events: tinychannels_bus::EventCapabilities {
-                supported: vec![
-                    "button_callback".into(),
-                    "reaction_added".into(),
-                    "reaction_removed".into(),
-                    "outbound_reaction".into(),
-                    "message_updated".into(),
-                ],
-            },
-            ..Default::default()
-        }
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    fn history_key_ignores_thread(&self) -> bool {
-        true
-    }
-
-    /// Recipient-less proactive sends (cron/heartbeat) deliver to the bot's
-    /// configured default `chat_id`. `None` when unconfigured, so proactive
-    /// routing skips Telegram rather than letting `send` POST to an empty
-    /// `chat_id` (mirrors Discord — #3712 Telegram parity).
-    fn proactive_target(&self) -> Option<String> {
-        self.chat_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-    }
-
-    fn supports_reactions(&self) -> bool {
-        true
-    }
-
-    fn supports_edit(&self) -> bool {
-        true
-    }
-
-    fn supports_reply_to_id(&self) -> bool {
-        true
-    }
-
-    fn supports_thread_id(&self) -> bool {
-        true
-    }
-
-    fn supports_draft_updates(&self) -> bool {
-        self.stream_mode != StreamMode::Off
-    }
-
-    async fn send_draft(&self, message: &SendMessage) -> anyhow::Result<Option<String>> {
-        self.send_draft_provider(message).await
-    }
-
-    async fn update_draft(
-        &self,
-        recipient: &str,
-        message_id: &str,
-        text: &str,
-    ) -> anyhow::Result<()> {
-        self.update_draft_provider(recipient, message_id, text)
-            .await
-    }
-
-    async fn finalize_draft(
-        &self,
-        recipient: &str,
-        message_id: &str,
-        text: &str,
-        thread_ts: Option<&str>,
-    ) -> anyhow::Result<()> {
-        self.finalize_draft_provider(recipient, message_id, text, thread_ts)
-            .await
-    }
-
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        // Strip tool_call tags before processing to prevent Markdown parsing failures
-        let content = strip_tool_call_tags(&message.content);
-        let parent_message_id = Self::parse_message_id(message.thread_ts.as_deref());
-
-        // Parse recipient: "chat_id" or "chat_id:thread_id" format
-        let (chat_id, thread_id) = match message.recipient.split_once(':') {
-            Some((chat, thread)) => (chat, Some(thread)),
-            None => (message.recipient.as_str(), None),
-        };
-
-        self.send_text_chunks(&content, chat_id, thread_id, parent_message_id)
-            .await
-    }
-
-    async fn send_typed_with_receipt(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
-        self.send_v2_with_receipt(message).await
-    }
-
-    async fn send_reaction(
-        &self,
-        conversation: &tinychannels_bus::channel::ConversationRef,
-        provider_message_id: &str,
-        reaction: &tinychannels_bus::channel::ChannelReaction,
-        remove: bool,
-    ) -> anyhow::Result<()> {
-        self.send_reaction_v2(conversation, provider_message_id, reaction, remove)
-            .await
-    }
-
-    async fn edit_message(
-        &self,
-        receipt: &tinychannels_bus::channel::MessageReceipt,
-        intent: &tinychannels_bus::channel::ChannelOutboundIntent,
-    ) -> anyhow::Result<tinychannels_bus::channel::MessageReceipt> {
-        self.edit_message_v2(receipt, intent).await
-    }
-
-    async fn delete_message(
-        &self,
-        receipt: &tinychannels_bus::channel::MessageReceipt,
-    ) -> anyhow::Result<()> {
-        self.delete_message_v2(receipt).await
-    }
-
-    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        let (_cancel_tx, cancellation) = tokio::sync::watch::channel(false);
-        self.listen_loop(Some(tx), None, cancellation).await
-    }
-
-    async fn health_check(&self) -> bool {
-        self.health_status().await
-    }
-
-    async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        tracing::info!(recipient, "Telegram start_typing invoked");
-        // Emit immediately so short model turns still show "typing…"
-        if !self.send_typing_action_once(recipient).await? {
-            anyhow::bail!("Telegram rejected the typing action");
-        }
-
-        {
-            let guard = self.typing_handle.lock();
-            if guard
-                .as_ref()
-                .is_some_and(|task| task.recipient == recipient)
-            {
-                return Ok(());
-            }
-        }
-        self.stop_typing(recipient).await?;
-
-        let client = self.http_client();
-        let url = self.api_url("sendChatAction");
-        let recipient_owned = recipient.to_string();
-        let recipient_for_log = recipient_owned.clone();
-        let body = Self::typing_body_for_recipient(recipient);
-
-        let handle = tokio::spawn(async move {
-            loop {
-                Self::refresh_typing_once(&client, &url, &body, &recipient_for_log).await;
-                // Telegram typing indicator expires after 5s; refresh at 4s
-                tokio::time::sleep(Duration::from_secs(4)).await;
-            }
-        });
-
-        let mut guard = self.typing_handle.lock();
-        *guard = Some(TelegramTypingTask {
-            recipient: recipient_owned,
-            handle,
-        });
-
-        Ok(())
-    }
-
-    async fn stop_typing(&self, _recipient: &str) -> anyhow::Result<()> {
-        tracing::info!("Telegram stop_typing invoked");
-        let mut guard = self.typing_handle.lock();
-        if let Some(task) = guard.take() {
-            task.handle.abort();
-        }
-        Ok(())
-    }
-}
-
 fn telegram_receipt_part(
     id: &str,
     kind: tinychannels_bus::channel::MessageReceiptPartKind,
@@ -2670,12 +2325,12 @@ async fn send_typed_media_with_receipt(
         .account_id
         .clone()
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Telegram media send requires a configured account"))?;
+        .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?;
     let turn_id = message
         .turn_id
         .clone()
         .filter(|turn_id| !turn_id.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Telegram media send requires originating turn identity"))?;
+        .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?;
     let scope = tinychannels_bus::HostVoiceScope {
         configured_instance,
         channel: channel_ref.clone(),
@@ -2692,12 +2347,12 @@ async fn send_typed_media_with_receipt(
         .as_deref()
         .is_some_and(|thread_id| thread_id.parse::<i64>().is_err())
     {
-        anyhow::bail!("Telegram thread_id must be a numeric message thread ID");
+        return Err(TelegramBadFormatError.into());
     }
     if let Some(reply_to) = message.reply_to_id.as_deref() {
         reply_to
             .parse::<i64>()
-            .map_err(|_| anyhow::anyhow!("Telegram reply_to_id must be a numeric message ID"))?;
+            .map_err(|_| anyhow::Error::new(TelegramBadFormatError))?;
     }
     let repository = channel
         .media_repository
@@ -3052,6 +2707,237 @@ async fn send_typed_media_with_receipt(
     Ok(tinychannels_bus::channel::ChannelSendOutcome { receipt, error })
 }
 
+impl TelegramChannel {
+    pub(super) async fn send_compat_message(&self, message: &SendMessage) -> anyhow::Result<()> {
+        let mut intent = crate::channel::outbound_intent_from_send_message("telegram", message);
+        // The frozen interaction DTO's provider-specific payload is a legacy
+        // serialization detail. Telegram's typed API accepts text parts, and
+        // the other routing fields from the converter remain authoritative.
+        intent.payload = tinychannels_bus::OutboundPayload::Text {
+            text: message.content.clone(),
+        };
+        let outbound = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
+        let outcome = crate::channel::ChannelTypedSend::send_typed(self, &outbound)
+            .await
+            .map_err(|error| anyhow::anyhow!(error.message))?;
+        if let Some(error) = outcome.error {
+            return Err(anyhow::anyhow!(error.message));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        let progressive_edits = self.supports_progressive_edits();
+        let streaming_reply_pipeline = self.supports_draft_updates();
+        let reply_to_id = self.supports_reply_to_id();
+        let thread_id = self.supports_thread_id();
+        let media_enabled = self.media_repository.is_some();
+        let mut actions = vec!["send".into(), "typing".into(), "delete".into()];
+        if progressive_edits {
+            actions.push("draft-update".into());
+        }
+        if self.supports_edit() {
+            actions.push("edit".into());
+        }
+        if reply_to_id || thread_id {
+            actions.push("reply".into());
+        }
+        if thread_id {
+            actions.push("thread-reply".into());
+        }
+        // The module controller also exposes Bot API forum-topic lifecycle
+        // operations for configured chats. Telegram cannot list topics.
+        actions.extend(["thread-create".into(), "thread-update".into()]);
+        actions.extend(["react".into(), "reactions".into()]);
+        let mut parts = vec!["text".into()];
+        parts.extend([
+            "location".into(),
+            "contact".into(),
+            "buttons".into(),
+            "poll".into(),
+            "presentation".into(),
+        ]);
+        let media_capability = |accepted: &[&str], emitted: &[&str], max_size_bytes: u64| {
+            if media_enabled {
+                tinychannels_bus::ContentCapability {
+                    inbound: true,
+                    outbound: true,
+                    accepted_types: accepted.iter().map(|kind| (*kind).to_owned()).collect(),
+                    emitted_types: emitted.iter().map(|kind| (*kind).to_owned()).collect(),
+                    max_size_bytes: Some(max_size_bytes),
+                    ..Default::default()
+                }
+            } else {
+                tinychannels_bus::ContentCapability::default()
+            }
+        };
+        if media_enabled {
+            parts.extend([
+                "image".into(),
+                "video".into(),
+                "audio".into(),
+                "file".into(),
+                "sticker".into(),
+            ]);
+        }
+        let (voice_in, voice_out) = if self.voice_media_store.is_some() {
+            parts.push("voice_note".into());
+            (
+                tinychannels_bus::VoiceCapabilities {
+                    supported: true,
+                    max_size_bytes: Some(8 * 1024 * 1024),
+                    transcript_sources: vec![
+                        tinychannels_bus::VoiceTranscriptSource::Provider,
+                        tinychannels_bus::VoiceTranscriptSource::HostStt,
+                    ],
+                    ..Default::default()
+                },
+                tinychannels_bus::VoiceCapabilities {
+                    supported: true,
+                    accepted_codecs: vec!["ogg_opus".into(), "m4a_aac".into(), "mp3".into()],
+                    max_size_bytes: Some(8 * 1024 * 1024),
+                    synthesis: self.voice_synthesis,
+                    ..Default::default()
+                },
+            )
+        } else {
+            (
+                tinychannels_bus::VoiceCapabilities::default(),
+                tinychannels_bus::VoiceCapabilities::default(),
+            )
+        };
+        tinychannels_bus::ChannelCapabilities {
+            remote_control: true,
+            chat_approvals: true,
+            history_key_ignores_thread: true,
+            reactions: true,
+            progressive_edits,
+            streaming_reply_pipeline,
+            addressing: tinychannels_bus::AddressingCapabilities {
+                reply_to_id,
+                thread_id,
+                ..Default::default()
+            },
+            content: tinychannels_bus::ContentCapabilities {
+                parts,
+                text: tinychannels_bus::ContentCapability {
+                    inbound: true,
+                    outbound: true,
+                    ..Default::default()
+                },
+                image: media_capability(
+                    &["image/jpeg", "image/png", "image/gif", "image/webp"],
+                    &["image/jpeg", "image/png"],
+                    10 * 1024 * 1024,
+                ),
+                video: media_capability(
+                    &["video/mp4", "video/quicktime", "video/webm"],
+                    &["video/mp4"],
+                    20 * 1024 * 1024,
+                ),
+                audio: media_capability(
+                    &[
+                        "audio/ogg",
+                        "audio/mpeg",
+                        "audio/mp4",
+                        "audio/wav",
+                        "audio/webm",
+                    ],
+                    &["audio/mpeg", "audio/mp4"],
+                    20 * 1024 * 1024,
+                ),
+                file: media_capability(
+                    &[
+                        "application/pdf",
+                        "text/plain",
+                        "text/csv",
+                        "application/json",
+                        "application/zip",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    ],
+                    &[
+                        "application/pdf",
+                        "text/plain",
+                        "text/csv",
+                        "application/json",
+                        "application/zip",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    ],
+                    20 * 1024 * 1024,
+                ),
+                sticker: if media_enabled {
+                    tinychannels_bus::ContentCapability {
+                        inbound: true,
+                        outbound: true,
+                        accepted_types: vec!["image/webp".into()],
+                        emitted_types: vec!["image/webp".into()],
+                        max_size_bytes: Some(20 * 1024 * 1024),
+                        ..Default::default()
+                    }
+                } else {
+                    tinychannels_bus::ContentCapability::default()
+                },
+                location: tinychannels_bus::ContentCapability {
+                    inbound: true,
+                    outbound: true,
+                    ..Default::default()
+                },
+                contact: tinychannels_bus::ContentCapability {
+                    inbound: true,
+                    outbound: true,
+                    ..Default::default()
+                },
+                buttons: tinychannels_bus::ContentCapability {
+                    outbound: true,
+                    ..Default::default()
+                },
+                button_presentation: tinychannels_bus::ButtonPresentationCapabilities {
+                    max_actions_per_row: Some(8),
+                    max_rows: Some(100),
+                    max_label_length: Some(64),
+                    max_value_bytes: Some(64),
+                    ..Default::default()
+                },
+                poll: tinychannels_bus::ContentCapability {
+                    outbound: true,
+                    ..Default::default()
+                },
+                presentation: tinychannels_bus::ContentCapability {
+                    outbound: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            actions: tinychannels_bus::ActionCapabilities {
+                supported: actions,
+                ..Default::default()
+            },
+            voice_in,
+            voice_out,
+            events: tinychannels_bus::EventCapabilities {
+                supported: vec![
+                    "button_callback".into(),
+                    "reaction_added".into(),
+                    "reaction_removed".into(),
+                    "outbound_reaction".into(),
+                    "message_updated".into(),
+                ],
+            },
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn proactive_target(&self) -> Option<String> {
+        self.chat_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    }
+}
+
 #[async_trait]
 impl crate::channel::ChannelAdapter for TelegramChannel {
     fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
@@ -3067,11 +2953,11 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
     }
 
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.capabilities()
+        TelegramChannel::declared_capabilities(self)
     }
 
     fn proactive_target(&self) -> Option<String> {
-        Channel::proactive_target(self)
+        TelegramChannel::proactive_target(self)
     }
 
     async fn start(

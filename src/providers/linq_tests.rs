@@ -1,4 +1,8 @@
+#![allow(deprecated)]
+
 use super::*;
+use crate::channel::{ChannelAdapter, ChannelTyping};
+use tinychannels_bus::SendMessage;
 
 fn make_channel() -> LinqChannel {
     LinqChannel::new(
@@ -11,7 +15,7 @@ fn make_channel() -> LinqChannel {
 #[test]
 fn linq_channel_name() {
     let ch = make_channel();
-    assert_eq!(ch.name(), "linq");
+    assert_eq!(ch.descriptor().id, "linq");
 }
 
 #[test]
@@ -392,7 +396,7 @@ fn linq_phone_number_accessor() {
 }
 
 #[tokio::test]
-async fn injected_linq_client_propagates_transport_failure_and_keeps_webhook_listener_idle() {
+async fn injected_linq_client_propagates_transport_failure_without_polling_for_webhooks() {
     let client = reqwest::Client::builder()
         .proxy(reqwest::Proxy::all("http://127.0.0.1:0").unwrap())
         .timeout(std::time::Duration::from_secs(1))
@@ -401,21 +405,21 @@ async fn injected_linq_client_propagates_transport_failure_and_keeps_webhook_lis
     let channel =
         LinqChannel::with_http_client("token".into(), "+15551234567".into(), vec![], client);
     assert!(
-        channel
-            .send(&SendMessage::new("hello", "chat"))
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "chat"))
             .await
             .is_err()
     );
     assert!(channel.start_typing("chat").await.is_err());
     assert!(channel.stop_typing("chat").await.is_err());
-    assert!(!channel.health_check().await);
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(10), channel.listen(tx))
-            .await
-            .is_err()
-    );
-    assert!(rx.try_recv().is_err());
+    assert!(!crate::provider_test_support::is_healthy(&channel).await);
+    let sink = crate::provider_test_support::RecordingInboundSink::default();
+    crate::channel::ChannelAdapter::start(&channel, &sink)
+        .await
+        .expect("webhook ingress is hosted by the module, not a provider poller");
+    crate::channel::ChannelAdapter::stop(&channel)
+        .await
+        .expect("webhook adapter stop is idempotent");
+    assert!(sink.events().is_empty());
 }
 
 #[test]

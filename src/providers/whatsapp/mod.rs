@@ -5,7 +5,7 @@ mod outbound;
 use crate::providers::whatsapp_shared::capabilities::{CapabilitySpec, capabilities};
 use crate::providers::whatsapp_shared::error::WaFailure;
 use crate::providers::whatsapp_shared::window::{BoundedMap, SeenSet};
-use crate::traits::{Channel, ChannelMessage, SendMessage};
+use crate::traits::ChannelMessage;
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -25,9 +25,9 @@ fn ensure_https(url: &str) -> anyhow::Result<()> {
 ///
 /// Native v2 adapter. Outbound goes to the Graph API (text, media, voice,
 /// location, contacts, reactions, read receipts, typing). Inbound is
-/// webhook-driven: the host forwards each raw POST to
-/// [`Channel::deliver_webhook`], which authenticates it with the Meta app
-/// secret before anything is parsed. [`Channel::listen`] only parks.
+/// webhook-driven: the host forwards each raw POST to the typed
+/// [`ChannelAdapter::deliver_webhook`](crate::channel::ChannelAdapter::deliver_webhook), which authenticates it with the Meta app
+/// secret before anything is parsed. [`ChannelAdapter::start`](crate::channel::ChannelAdapter::start) only parks.
 ///
 /// # Runtime Negotiation
 ///
@@ -190,7 +190,7 @@ impl WhatsAppChannel {
     /// Parse an incoming webhook payload into text-only legacy messages.
     ///
     /// This is the v21 text projection and does not authenticate anything.
-    /// Production ingress is [`Channel::deliver_webhook`], which verifies the
+    /// Production ingress is [`ChannelAdapter::deliver_webhook`](crate::channel::ChannelAdapter::deliver_webhook), which verifies the
     /// signature, binds the destination and carries every content kind.
     pub fn parse_webhook_payload(&self, payload: &serde_json::Value) -> Vec<ChannelMessage> {
         let mut messages = Vec::new();
@@ -364,7 +364,9 @@ impl WhatsAppChannel {
         self.ingest_webhook(signature, body)
             .await
             .map_err(|failure| match failure {
-                WaFailure::Rejected(message) | WaFailure::Unsupported(message) => {
+                WaFailure::Rejected(message)
+                | WaFailure::BadFormat(message)
+                | WaFailure::Unsupported(message) => {
                     anyhow::Error::new(tinychannels_runtime::WebhookRejected(message))
                 }
                 uncertain => anyhow::Error::new(uncertain),
@@ -391,131 +393,6 @@ fn failure_of(error: &anyhow::Error) -> WaFailure {
 
 fn unsupported(message: &str) -> crate::channel::ChannelSendError {
     WaFailure::unsupported(message).into_send_error()
-}
-
-#[async_trait]
-impl Channel for WhatsAppChannel {
-    fn name(&self) -> &str {
-        "whatsapp"
-    }
-
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.provider_capabilities()
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    fn supports_reactions(&self) -> bool {
-        true
-    }
-
-    fn supports_reply_to_id(&self) -> bool {
-        true
-    }
-
-    fn history_key_ignores_thread(&self) -> bool {
-        true
-    }
-
-    #[allow(
-        deprecated,
-        reason = "the v21 text send is kept as a projection of the typed send"
-    )]
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        let typed =
-            tinychannels_bus::ChannelOutboundMessage::from_legacy_message("whatsapp", message);
-        self.send_v2(&typed)
-            .await
-            .map(|_| ())
-            .map_err(anyhow::Error::new)
-    }
-
-    async fn send_typed(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<()> {
-        self.send_v2(message)
-            .await
-            .map(|_| ())
-            .map_err(anyhow::Error::new)
-    }
-
-    async fn send_typed_with_receipt(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<crate::channel::ChannelSendOutcome> {
-        self.send_v2(message).await.map_err(anyhow::Error::new)
-    }
-
-    #[allow(
-        deprecated,
-        reason = "the listener seam is how a legacy host receives webhook ingress"
-    )]
-    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        // Inbound traffic is pushed by Meta to `deliver_webhook`; the listener
-        // only keeps the legacy sink so a host without typed ingress still
-        // receives it, then parks until the channel is cancelled.
-        *self.listener.lock() = Some(tx);
-        // Release the sender when the listener ends or is aborted, so the
-        // module's inbound forwarder can finish during shutdown.
-        let _release = crate::providers::whatsapp_shared::window::ClearOnDrop(&self.listener);
-        tracing::info!(
-            "[whatsapp] cloud channel active (webhook mode); authenticated deliveries are \
-            ingested through the module"
-        );
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-        }
-    }
-
-    async fn health_check(&self) -> bool {
-        self.health_status().await
-    }
-
-    async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        self.start_typing_provider(recipient).await
-    }
-
-    async fn stop_typing(&self, _recipient: &str) -> anyhow::Result<()> {
-        self.stop_typing_provider().await
-    }
-
-    async fn send_reaction(
-        &self,
-        conversation: &tinychannels_bus::ConversationRef,
-        provider_message_id: &str,
-        reaction: &tinychannels_bus::ChannelReaction,
-        remove: bool,
-    ) -> anyhow::Result<()> {
-        self.send_reaction_provider(conversation, provider_message_id, reaction, remove)
-            .await
-    }
-
-    async fn mark_read(
-        &self,
-        _conversation: &tinychannels_bus::ConversationRef,
-        provider_message_id: &str,
-    ) -> anyhow::Result<()> {
-        self.mark_read_provider(provider_message_id).await
-    }
-
-    async fn deliver_webhook(
-        &self,
-        signature: Option<&str>,
-        body: &[u8],
-    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
-        self.deliver_webhook_provider(signature, body).await
-    }
-
-    fn verify_webhook(&self, mode: &str, verify_token: &str, challenge: &str) -> Option<String> {
-        self.verify_webhook_provider(mode, verify_token, challenge)
-    }
 }
 
 #[async_trait]

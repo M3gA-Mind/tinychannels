@@ -1,4 +1,5 @@
 use super::*;
+use crate::channel::ChannelAdapter;
 
 fn make_channel() -> LarkChannel {
     LarkChannel::new(
@@ -13,7 +14,7 @@ fn make_channel() -> LarkChannel {
 #[test]
 fn lark_channel_name() {
     let ch = make_channel();
-    assert_eq!(ch.name(), "lark");
+    assert_eq!(ch.descriptor().id, "lark");
 }
 
 #[test]

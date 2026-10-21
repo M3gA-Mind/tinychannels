@@ -1,6 +1,6 @@
 //! Channel facade for the Yuanbao provider.
 //!
-//! This module owns the OpenHuman [`Channel`] implementation and keeps
+//! This module owns the provider's typed [`ChannelAdapter`](crate::channel::ChannelAdapter) implementation and keeps
 //! provider wiring out of `mod.rs`. Protocol decoding, transport, inbound
 //! filtering, and outbound sending remain delegated to sibling modules.
 
@@ -9,14 +9,16 @@ use std::sync::Arc;
 use std::time::Duration;
 use tinychannels_runtime::config::YuanbaoConfigExt as _;
 
-use async_trait::async_trait;
 use tokio::sync::{Mutex as TokioMutex, mpsc, watch};
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+#[cfg(test)]
+use tracing::info;
+use tracing::warn;
 
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::native::HostPorts as NativeState;
-use crate::traits::{Channel, ChannelMessage, SendMessage};
+#[cfg(test)]
+use crate::traits::ChannelMessage;
 
 use super::config::YuanbaoConfig;
 use super::connection::{InboundEvent, YuanbaoConnection};
@@ -371,151 +373,6 @@ impl YuanbaoChannel {
     }
 }
 
-#[async_trait]
-impl Channel for YuanbaoChannel {
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        crate::providers::native::NativeProvider::declared_capabilities(self)
-    }
-
-    fn name(&self) -> &str {
-        "yuanbao"
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        let chunks = self.split_message(&message.content);
-        let ref_msg_id = message.thread_ts.as_deref();
-        let recipient = self.resolve_recipient(&message.recipient).await;
-        for chunk in &chunks {
-            self.outbound
-                .send_text(&recipient, chunk, ref_msg_id)
-                .await?;
-        }
-        Ok(())
-    }
-
-    fn supports_draft_updates(&self) -> bool {
-        // Routes turns through the streaming code path even though Yuanbao
-        // itself has no edit-message capability. We accept the UX cost (no
-        // progressive rendering — the reply appears all at once in
-        // `finalize_draft`) in exchange for streaming's tolerance of
-        // malformed `usage` chunks; the non-streaming parser fails the
-        // whole turn when an upstream LLM returns string-typed token counts.
-        true
-    }
-
-    fn supports_progressive_edits(&self) -> bool {
-        false
-    }
-
-    async fn send_draft(&self, message: &SendMessage) -> anyhow::Result<Option<String>> {
-        // Marker id so dispatch spins up the progress consumer task;
-        // nothing is sent to the user here. Real content goes out in
-        // `finalize_draft`. See `supports_draft_updates` for rationale.
-        Ok(Some(format!("yb-draft:{}", message.recipient)))
-    }
-
-    async fn update_draft(
-        &self,
-        _recipient: &str,
-        _message_id: &str,
-        _text: &str,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn finalize_draft(
-        &self,
-        recipient: &str,
-        _message_id: &str,
-        text: &str,
-        thread_ts: Option<&str>,
-    ) -> anyhow::Result<()> {
-        let chunks = self.split_message(text);
-        let recipient = self.resolve_recipient(recipient).await;
-        for chunk in &chunks {
-            self.outbound
-                .send_text(&recipient, chunk, thread_ts)
-                .await?;
-        }
-        Ok(())
-    }
-
-    async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        // Take the inbound receiver. A second listener would just exit early.
-        let mut inbound_rx = match self.inbound_rx.lock().await.take() {
-            Some(rx) => rx,
-            None => {
-                warn!("[yuanbao] listen() called twice — second call exits");
-                return Ok(());
-            }
-        };
-
-        let conn = Arc::clone(&self.connection);
-        let shutdown_rx = self.shutdown_tx.subscribe();
-        let mut conn_task = tokio::spawn(async move {
-            conn.run(shutdown_rx).await;
-        });
-
-        info!("[yuanbao] channel listening — pipeline ready");
-        let mut shutdown_rx2 = self.shutdown_tx.subscribe();
-        loop {
-            tokio::select! {
-                _ = shutdown_rx2.changed() => {
-                    info!("[yuanbao] listen loop received shutdown");
-                    break;
-                }
-                event = inbound_rx.recv() => {
-                    match event {
-                        Some(InboundEvent::Push(frame)) => {
-                            self.dispatch_push(frame, &tx).await;
-                        }
-                        Some(InboundEvent::Kickout(reason)) => {
-                            warn!("[yuanbao] kickout: {} — stopping listen loop", reason);
-                            break;
-                        }
-                        None => {
-                            warn!("[yuanbao] inbound channel closed");
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        let _ = self.shutdown_tx.send(true);
-        // Give the connection task a brief window to run its own shutdown cleanup
-        // (flush pending, update is_connected, etc.) before force-aborting.
-        match tokio::time::timeout(std::time::Duration::from_secs(2), &mut conn_task).await {
-            Ok(_) => {}
-            Err(_) => conn_task.abort(),
-        }
-        Ok(())
-    }
-
-    async fn health_check(&self) -> bool {
-        self.connection.is_connected()
-    }
-
-    async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        self.set_typing_native(recipient, true).await
-    }
-
-    async fn stop_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        self.set_typing_native(recipient, false).await
-    }
-
-    fn supports_reactions(&self) -> bool {
-        false
-    }
-}
-
 impl YuanbaoChannel {
     pub(crate) async fn set_typing_native(
         &self,
@@ -534,6 +391,7 @@ impl YuanbaoChannel {
         }
         Ok(())
     }
+    #[cfg(test)]
     async fn dispatch_push(&self, frame: types::ConnFrame, tx: &mpsc::Sender<ChannelMessage>) {
         // The Yuanbao gateway pushes inbound messages with `cmd_type=Push`;
         // the actual `cmd` word is decided server-side and varies (mirrors
@@ -727,6 +585,7 @@ impl YuanbaoChannel {
         Ok(())
     }
 
+    #[cfg(test)]
     async fn publish_voice(&self, ctx: &super::inbound::PipelineCtx) -> bool {
         use crate::providers::native::inbound::publish;
         let Some(events) = self.native.events.as_ref() else {

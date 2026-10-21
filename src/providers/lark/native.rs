@@ -282,6 +282,9 @@ impl LarkChannel {
             .unwrap_or_default(),
             _ => String::new(),
         };
+        // Feishu inserts these placeholders into plain text for mentioned
+        // users. Keep the historical user-facing text on the typed path too.
+        let text = super::strip_at_placeholders(&text).trim().to_owned();
         let thread_id = message
             .get("thread_id")
             .and_then(serde_json::Value::as_str)
@@ -546,39 +549,63 @@ impl LarkChannel {
         message_type: &str,
         content: serde_json::Value,
     ) -> Result<String, ChannelSendError> {
-        let token = self
+        let mut token = self
             .get_tenant_access_token()
             .await
             .map_err(|_| known_unsent("Lark authentication failed before message delivery"))?;
-        let response = self
-            .http_client()
-            .post(self.send_message_url())
-            .bearer_auth(token)
-            .json(&serde_json::json!({
-                "receive_id": recipient,
-                "msg_type": message_type,
-                "content": content.to_string(),
-            }))
-            .send()
-            .await
-            .map_err(|_| uncertain_send("Lark message request failed"))?;
-        let status = response.status();
-        let body = response
-            .json::<serde_json::Value>()
-            .await
-            .map_err(|_| uncertain_send("Lark message response was invalid"))?;
-        if !status.is_success() || body.get("code").and_then(serde_json::Value::as_i64) != Some(0) {
-            return Err(if status.is_client_error() {
-                known_unsent("Lark rejected the message")
-            } else {
-                uncertain_send("Lark message delivery outcome is unknown")
-            });
+        for attempt in 0..=1 {
+            let response = self
+                .http_client()
+                .post(self.send_message_url())
+                .bearer_auth(&token)
+                .json(&serde_json::json!({
+                    "receive_id": recipient,
+                    "msg_type": message_type,
+                    "content": content.to_string(),
+                }))
+                .send()
+                .await
+                .map_err(|_| uncertain_send("Lark message request failed"))?;
+            let status = response.status();
+            let body = response.json::<serde_json::Value>().await.ok();
+            let token_expired = status == reqwest::StatusCode::UNAUTHORIZED
+                || body
+                    .as_ref()
+                    .and_then(|body| body.get("code"))
+                    .and_then(serde_json::Value::as_i64)
+                    == Some(99991663);
+            if token_expired && attempt == 0 {
+                self.invalidate_token_if_current(&token).await;
+                token = self
+                    .get_tenant_access_token()
+                    .await
+                    .map_err(|_| known_unsent("Lark authentication failed before message retry"))?;
+                continue;
+            }
+            if token_expired {
+                return Err(known_unsent("Lark rejected the message authentication"));
+            }
+            let body = body.ok_or_else(|| uncertain_send("Lark message response was invalid"))?;
+            if !status.is_success()
+                || body.get("code").and_then(serde_json::Value::as_i64) != Some(0)
+            {
+                return Err(if status.is_client_error() {
+                    known_unsent("Lark rejected the message")
+                } else {
+                    uncertain_send("Lark message delivery outcome is unknown")
+                });
+            }
+            let message_id = body
+                .pointer("/data/message_id")
+                .and_then(serde_json::Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    uncertain_send("Lark accepted a message without returning its id")
+                })?;
+            return Ok(message_id);
         }
-        body.pointer("/data/message_id")
-            .and_then(serde_json::Value::as_str)
-            .filter(|id| !id.is_empty())
-            .map(str::to_owned)
-            .ok_or_else(|| uncertain_send("Lark accepted a message without returning its id"))
+        Err(uncertain_send("Lark message delivery outcome is unknown"))
     }
 
     async fn opus_audio(&self, file: &FileStep) -> Result<(Vec<u8>, String), ChannelSendError> {

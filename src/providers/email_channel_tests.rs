@@ -1,4 +1,8 @@
+#![allow(deprecated)]
+
 use super::*;
+use crate::channel::ChannelAdapter;
+use tinychannels_bus::SendMessage;
 use tokio::sync::Notify;
 
 #[test]
@@ -110,7 +114,7 @@ async fn email_channel_new() {
 #[test]
 fn email_channel_name() {
     let channel = EmailChannel::new(EmailConfig::default());
-    assert_eq!(channel.name(), "email");
+    assert_eq!(channel.descriptor().id, "email");
 }
 
 #[test]
@@ -616,7 +620,9 @@ async fn channel_send_delivers_over_the_async_transport() {
         subject: Some("Greetings".to_string()),
         ..SendMessage::new("Body text", "to@example.com")
     };
-    channel.send(&message).await.unwrap();
+    crate::provider_test_support::send_v1(&channel, &message)
+        .await
+        .unwrap();
 
     let transcript = server.await.unwrap();
     assert!(
@@ -1141,7 +1147,7 @@ async fn health_check_over_tls_fails_against_a_plaintext_server() {
     let mut channel = imap_channel(&["*"], 30);
     channel.config.imap_host = "localhost".to_string();
     channel.config.imap_port = port;
-    assert!(!channel.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&channel).await);
 }
 
 /// `listen` keeps reconnecting while the server keeps failing the TLS
@@ -1160,7 +1166,8 @@ async fn listen_retries_a_failing_server() {
     channel.config.imap_host = "localhost".to_string();
     channel.config.imap_port = port;
     let (tx, _rx) = mpsc::channel(1);
-    let listen = tokio::spawn(async move { channel.listen(tx).await });
+    let listen =
+        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
     timeout(HANG_GUARD, accepts)
         .await
         .expect("three connection attempts")
@@ -1301,8 +1308,7 @@ fn building_a_message_rejects_a_bad_address() {
 async fn send_and_capture(content: &str) -> String {
     let (port, server) = blocking_smtp_server();
     let channel = EmailChannel::new(smtp_config(port, false));
-    channel
-        .send(&SendMessage::new(content, "to@example.com"))
+    crate::provider_test_support::send_v1(&channel, &SendMessage::new(content, "to@example.com"))
         .await
         .unwrap();
     tokio::task::spawn_blocking(move || server.join().unwrap())

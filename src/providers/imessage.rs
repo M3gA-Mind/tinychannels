@@ -14,9 +14,10 @@ mod native;
 
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::native::HostPorts as NativeState;
-use crate::traits::{Channel, ChannelMessage, SendMessage};
+#[cfg(test)]
+use crate::traits::ChannelMessage;
+#[cfg(test)]
 use anyhow::Context as _;
-use async_trait::async_trait;
 use directories::UserDirs;
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
@@ -24,7 +25,9 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
+#[cfg(test)]
+use tokio::sync::mpsc;
+use tokio::sync::watch;
 
 type ListenerCancellationSlot = Arc<StdMutex<Option<(u64, watch::Sender<bool>)>>>;
 
@@ -232,85 +235,11 @@ fn is_valid_chat_guid(target: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '@'))
 }
 
-#[async_trait]
-impl Channel for IMessageChannel {
-    fn name(&self) -> &str {
-        "imessage"
-    }
-
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.declared()
-    }
-
-    async fn send_typed_with_receipt(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<crate::channel::ChannelSendOutcome> {
-        crate::providers::native::outbound::send_typed(self, message)
-            .await
-            .map_err(crate::providers::native::to_anyhow)
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        // Defense-in-depth: validate target format before any interpolation
-        if !is_valid_imessage_target(&message.recipient) {
-            anyhow::bail!(
-                "Invalid iMessage target: must be a phone number (+1234567890) or email (user@example.com)"
-            );
-        }
-
-        // SECURITY: Escape both message AND target to prevent AppleScript injection
-        // See: CWE-78 (OS Command Injection)
-        let escaped_msg = escape_applescript(&message.content);
-        let escaped_target = escape_applescript(&message.recipient);
-
-        let script = format!(
-            r#"tell application "Messages"
-    set targetService to 1st account whose service type = iMessage
-    set targetBuddy to participant "{escaped_target}" of targetService
-    send "{escaped_msg}" to targetBuddy
-end tell"#
-        );
-
-        let (program, leading_args) = self
-            .script_command
-            .split_first()
-            .ok_or_else(|| anyhow::anyhow!("no AppleScript runner configured"))?;
-        let output = tokio::process::Command::new(program)
-            .args(leading_args)
-            .arg("-e")
-            .arg(&script)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("iMessage send failed: {stderr}");
-        }
-
-        Ok(())
-    }
-
-    async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        self.listen_with_ready(tx, None).await
-    }
-
-    async fn health_check(&self) -> bool {
-        self.is_healthy_on(std::env::consts::OS)
-    }
-}
-
 impl IMessageChannel {
     /// Run the listener and optionally signal after its startup cursor is fixed.
     /// The readiness sender is used by tests to synchronize first-message
     /// delivery with the same cursor boundary as the production listener.
+    #[cfg(test)]
     async fn listen_with_ready(
         &self,
         tx: mpsc::Sender<ChannelMessage>,

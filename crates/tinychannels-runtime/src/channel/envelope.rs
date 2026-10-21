@@ -1,3 +1,6 @@
+// Scoped allowance for the one-release v21 wire DTO compatibility surface.
+#![allow(deprecated)]
+
 //! Legacy inbound projections.
 use crate::channel::types::{ChannelRef, ConversationRef, SenderRef};
 use crate::traits::ChannelMessage;

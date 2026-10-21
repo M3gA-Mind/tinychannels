@@ -5,7 +5,6 @@ use crate::channel::{
 };
 use crate::providers::imessage::fixtures::*;
 use crate::providers::native::fixtures::stored_media;
-use crate::traits::Channel;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -840,13 +839,16 @@ async fn operations_applescript_cannot_do_are_explicitly_unsupported() {
 }
 
 #[tokio::test]
-async fn the_descriptor_status_and_legacy_methods_use_the_native_surface() {
+async fn the_descriptor_status_and_typed_methods_use_the_native_surface() {
     let rig = rig();
     let descriptor = ChannelAdapter::descriptor(&rig.channel);
     assert_eq!(descriptor.id, "imessage");
     assert_eq!(descriptor.metadata["adapterMode"], "native-v2");
     assert_eq!(descriptor.metadata["voiceOut"], "attachment");
-    assert_eq!(Channel::capabilities(&rig.channel), rig.channel.declared());
+    assert_eq!(
+        ChannelAdapter::declared_capabilities(&rig.channel),
+        rig.channel.declared()
+    );
     assert_eq!(
         ChannelAdapter::status(&rig.channel)
             .await
@@ -855,13 +857,12 @@ async fn the_descriptor_status_and_legacy_methods_use_the_native_surface() {
         "imessage"
     );
     let recorder = rig.spawn_messages();
-    let outcome =
-        Channel::send_typed_with_receipt(&rig.channel, &message(PEER, vec![text("typed")]))
-            .await
-            .unwrap();
+    let outcome = ChannelTypedSend::send_typed(&rig.channel, &message(PEER, vec![text("typed")]))
+        .await
+        .unwrap();
     recorder.abort();
     assert_eq!(outcome.receipt.platform_message_ids, ["SENT1"]);
-    let error = Channel::send_typed_with_receipt(
+    let error = ChannelTypedSend::send_typed(
         &rig.channel,
         &message(
             PEER,
@@ -878,12 +879,6 @@ async fn the_descriptor_status_and_legacy_methods_use_the_native_surface() {
     )
     .await
     .unwrap_err();
-    assert!(
-        error
-            .downcast_ref::<crate::providers::native::NativeFailure>()
-            .unwrap()
-            .0
-            .unsupported
-    );
-    let _ = SendErrorKind::Unknown;
+    assert_eq!(error.kind, SendErrorKind::BadFormat);
+    assert!(error.unsupported);
 }

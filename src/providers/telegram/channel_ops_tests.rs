@@ -3,7 +3,9 @@ use crate::providers::telegram::fixtures::*;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tinychannels_runtime::channel::ChannelAdapter;
+use tinychannels_runtime::channel::{
+    ChannelAdapter, ChannelInboundSink, ChannelStreamingDraft, ChannelTypedSend, ChannelTyping,
+};
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -82,6 +84,25 @@ impl crate::host::EventSink for TelegramConformanceEvents {
     }
 }
 
+#[async_trait::async_trait]
+impl ChannelInboundSink for TelegramConformanceEvents {
+    async fn push(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        match ingress {
+            tinychannels_bus::ChannelIngress::Event(event) => {
+                self.events.lock().unwrap().push(event);
+            }
+            tinychannels_bus::ChannelIngress::Inbound(envelope) => {
+                self.inbounds.lock().unwrap().push(envelope);
+            }
+        }
+        self.notified.notify_one();
+        Ok(())
+    }
+}
+
 fn rich_part(part: tinychannels_bus::ContentPart) -> tinychannels_bus::OutboundPayload {
     tinychannels_bus::OutboundPayload::Parts {
         parts: vec![tinychannels_bus::OutboundContentPart::Content { part }],
@@ -95,6 +116,33 @@ fn conformance_media(
     tinychannels_bus::MediaReference {
         opaque_id: Some(format!("telegram-{name}")),
         kind,
+        ..Default::default()
+    }
+}
+
+fn plain_text_intent(text: &str, conversation_id: &str) -> tinychannels_bus::ChannelOutboundIntent {
+    tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "telegram-plain-text-test".into(),
+        channel_id: "telegram".into(),
+        conversation_id: conversation_id.into(),
+        payload: tinychannels_bus::OutboundPayload::Text { text: text.into() },
+        ..Default::default()
+    }
+}
+
+fn draft_text_intent(
+    text: &str,
+    conversation_id: &str,
+    reply_to_id: Option<&str>,
+    thread_id: Option<&str>,
+) -> tinychannels_bus::ChannelOutboundIntent {
+    tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "telegram-draft-test".into(),
+        channel_id: "telegram".into(),
+        conversation_id: conversation_id.into(),
+        reply_to_id: reply_to_id.map(str::to_owned),
+        thread_id: thread_id.map(str::to_owned),
+        payload: tinychannels_bus::OutboundPayload::Text { text: text.into() },
         ..Default::default()
     }
 }
@@ -330,12 +378,12 @@ impl TelegramWireFixture {
         }
         self.events.events.lock().unwrap().clear();
         self.events.inbounds.lock().unwrap().clear();
-        let (tx, _rx) = tokio::sync::mpsc::channel(4);
         let channel = self.channel.clone();
-        let listener = tokio::spawn(async move {
-            #[allow(deprecated)]
-            tinychannels_runtime::traits::Channel::listen(channel.as_ref(), tx).await
-        });
+        let events = self.events.clone();
+        let listener =
+            tokio::spawn(
+                async move { ChannelAdapter::start(channel.as_ref(), events.as_ref()).await },
+            );
         let capture = tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
                 self.events.notified.notified().await;
@@ -1042,14 +1090,15 @@ fn outbound_voice_message(
 
 #[test]
 fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() {
-    let without_store = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).capabilities();
+    let without_store =
+        TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).declared_capabilities();
     assert!(!without_store.voice_in.supported);
     assert!(!without_store.voice_out.supported);
     assert!(!without_store.voice_out.synthesis);
 
     let with_storage = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
         .with_voice_media_store(Arc::new(VoiceReadFixture))
-        .capabilities();
+        .declared_capabilities();
     assert!(with_storage.voice_in.supported);
     assert!(with_storage.content.parts.contains(&"text".into()));
     assert!(with_storage.content.parts.contains(&"voice_note".into()));
@@ -1064,7 +1113,7 @@ fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() 
     let with_all_ports = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
         .with_voice_media_store(Arc::new(VoiceReadFixture))
         .with_voice_synthesis(true)
-        .capabilities();
+        .declared_capabilities();
     assert!(with_all_ports.voice_out.synthesis);
 }
 
@@ -1072,7 +1121,7 @@ fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() 
 fn telegram_voice_capabilities_preserve_base_text_and_stream_descriptor() {
     let off = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
         .with_voice_media_store(Arc::new(VoiceReadFixture))
-        .capabilities();
+        .declared_capabilities();
     assert!(off.content.text.inbound && off.content.text.outbound);
     assert!(off.content.parts.contains(&"text".into()));
     assert!(off.content.parts.contains(&"voice_note".into()));
@@ -1083,7 +1132,7 @@ fn telegram_voice_capabilities_preserve_base_text_and_stream_descriptor() {
     let on = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
         .with_streaming(StreamMode::Partial, 100, true)
         .with_voice_media_store(Arc::new(VoiceReadFixture))
-        .capabilities();
+        .declared_capabilities();
     assert!(on.progressive_edits);
     assert!(on.streaming_reply_pipeline);
     assert!(on.actions.supported.contains(&"draft-update".into()));
@@ -1091,13 +1140,14 @@ fn telegram_voice_capabilities_preserve_base_text_and_stream_descriptor() {
 
 #[test]
 fn telegram_advertises_typed_media_only_with_scoped_storage() {
-    let unavailable = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).capabilities();
+    let unavailable =
+        TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).declared_capabilities();
     assert!(!unavailable.content.image.outbound);
     assert!(!unavailable.content.file.inbound);
 
     let configured = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
         .with_media_repository(Arc::new(TypedMediaReadFixture))
-        .capabilities();
+        .declared_capabilities();
     assert!(configured.content.image.inbound && configured.content.image.outbound);
     assert!(configured.content.video.inbound && configured.content.video.outbound);
     assert!(configured.content.audio.inbound && configured.content.audio.outbound);
@@ -1382,7 +1432,9 @@ async fn telegram_resolves_and_uploads_voice_larger_than_inline_intent_limit() {
     assert!(inline.len() < tinychannels_bus::module_relay::RELAY_FRAME_BYTES);
     assert!(!String::from_utf8_lossy(&inline).contains("audio_base64"));
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
     assert_eq!(
         outcome.receipt.primary_platform_message_id.as_deref(),
         Some("53")
@@ -1434,7 +1486,9 @@ async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt
         }],
     };
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
 
     assert_eq!(
         outcome.receipt.primary_platform_message_id.as_deref(),
@@ -1526,7 +1580,9 @@ async fn typed_voice_sends_long_transcript_as_receipted_followup_text() {
             },
         ],
     };
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
     assert_eq!(outcome.error, None);
     assert_eq!(outcome.receipt.platform_message_ids, ["54", "55"]);
     assert_eq!(
@@ -1612,7 +1668,9 @@ async fn long_voice_transcript_failure_retains_partial_receipts_without_retry() 
             },
         ],
     };
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["56", "57"]);
     let error = outcome
         .error
@@ -1678,7 +1736,7 @@ async fn typed_voice_keeps_transcript_as_caption_and_sends_one_native_receipt() 
         },
     );
 
-    let result = channel.send_typed_with_receipt(&message).await;
+    let result = ChannelTypedSend::send_typed(&channel, &message).await;
     assert!(
         result.is_ok(),
         "mixed transcript+voice must be supported: {result:?}"
@@ -1701,35 +1759,44 @@ async fn typed_voice_keeps_transcript_as_caption_and_sends_one_native_receipt() 
 async fn typed_voice_rejects_missing_host_storage_reference_and_origin_turn() {
     let server = mock_api().await;
     let message = outbound_voice_message(Some("voice-ref"), Some("turn-1"));
-    let missing_store = channel_for(&server, &["*"])
-        .send_typed_with_receipt(&message)
+    let missing_store_channel = channel_for(&server, &["*"]);
+    let missing_store = ChannelTypedSend::send_typed(&missing_store_channel, &message)
         .await
         .unwrap_err();
+    assert_eq!(missing_store.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!missing_store.sent_before_error);
     assert!(
         missing_store
-            .to_string()
-            .contains("requires host media resolution")
+            .message
+            .contains("rejected before provider dispatch")
     );
 
     let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
-    let missing_reference = channel
-        .send_typed_with_receipt(&outbound_voice_message(None, Some("turn-1")))
-        .await
-        .unwrap_err();
+    let missing_reference =
+        ChannelTypedSend::send_typed(&channel, &outbound_voice_message(None, Some("turn-1")))
+            .await
+            .unwrap_err();
+    assert_eq!(
+        missing_reference.kind,
+        crate::channel::SendErrorKind::Forbidden
+    );
+    assert!(!missing_reference.sent_before_error);
     assert!(
         missing_reference
-            .to_string()
-            .contains("no host-owned opaque reference")
+            .message
+            .contains("rejected before provider dispatch")
     );
 
-    let missing_turn = channel
-        .send_typed_with_receipt(&outbound_voice_message(Some("voice-ref"), None))
-        .await
-        .unwrap_err();
+    let missing_turn =
+        ChannelTypedSend::send_typed(&channel, &outbound_voice_message(Some("voice-ref"), None))
+            .await
+            .unwrap_err();
+    assert_eq!(missing_turn.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!missing_turn.sent_before_error);
     assert!(
         missing_turn
-            .to_string()
-            .contains("requires originating turn identity")
+            .message
+            .contains("rejected before provider dispatch")
     );
     assert!(server.received_requests().await.unwrap().is_empty());
 }
@@ -1752,10 +1819,12 @@ async fn send_draft_posts_placeholder_and_returns_message_id() {
     .await;
     let ch = streaming(&server);
 
-    let id = ch
-        .send_draft(&SendMessage::new("", "100:7").in_thread(Some("55".into())))
-        .await
-        .unwrap();
+    let id = ChannelStreamingDraft::start_draft(
+        &ch,
+        draft_text_intent("", "100:7", Some("55"), Some("7")),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(id.as_deref(), Some("321"));
     assert_eq!(
@@ -1776,10 +1845,10 @@ async fn send_draft_without_message_id_in_result_returns_none() {
     mount_post(&server, "sendMessage", ok_with(serde_json::json!({}))).await;
     let ch = streaming(&server);
 
-    let id = ch
-        .send_draft(&SendMessage::new("thinking", "100"))
-        .await
-        .unwrap();
+    let id =
+        ChannelStreamingDraft::start_draft(&ch, draft_text_intent("thinking", "100", None, None))
+            .await
+            .unwrap();
     assert_eq!(id, None);
     assert_eq!(
         json_bodies(&server, "sendMessage").await[0]["text"],
@@ -1798,13 +1867,16 @@ async fn send_draft_surfaces_api_rejection() {
     .await;
     let ch = streaming(&server);
 
-    let err = ch
-        .send_draft(&SendMessage::new("x", "100"))
+    let err = ChannelStreamingDraft::start_draft(&ch, draft_text_intent("x", "100", None, None))
         .await
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("sendMessage (draft) failed"), "{err}");
-    assert!(err.contains("chat not found"), "{err}");
+        .unwrap_err();
+    assert_eq!(err.kind, crate::channel::SendErrorKind::Unknown);
+    assert!(err.sent_before_error);
+    assert!(
+        err.message.contains("draft creation outcome is uncertain"),
+        "{}",
+        err.message
+    );
 }
 
 fn streaming_draft_intent(text: &str) -> tinychannels_bus::ChannelOutboundIntent {
@@ -2340,7 +2412,9 @@ async fn bridge_approval_presentation_renders_scoped_inline_choice_actions() {
         }],
     );
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
 
     assert!(outcome.error.is_none());
     assert_eq!(outcome.receipt.platform_message_ids, ["991"]);
@@ -2432,7 +2506,9 @@ async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
         },
     ];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
 
     assert_eq!(outcome.receipt.platform_message_ids, ["11", "22", "11"]);
     assert_eq!(outcome.receipt.parts.len(), 3);
@@ -2502,7 +2578,11 @@ async fn typed_image_rejects_non_numeric_platform_thread_before_upload() {
         },
     }];
 
-    assert!(channel.send_typed_with_receipt(&message).await.is_err());
+    assert!(
+        ChannelTypedSend::send_typed(&channel, &message)
+            .await
+            .is_err()
+    );
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -2537,7 +2617,9 @@ async fn typed_media_preserves_legacy_address_and_requires_host_opaque_id() {
         },
     }];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["701"]);
     assert_eq!(outcome.receipt.thread_id.as_deref(), Some("77"));
 
@@ -2548,11 +2630,10 @@ async fn typed_media_preserves_legacy_address_and_requires_host_opaque_id() {
     {
         media.opaque_id = None;
     }
-    let error = channel
-        .send_typed_with_receipt(&missing_reference)
+    let error = ChannelTypedSend::send_typed(&channel, &missing_reference)
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("before provider dispatch"));
+    assert!(error.message.contains("before provider dispatch"));
     assert_eq!(json_bodies(&server, "sendPhoto").await.len(), 1);
 }
 
@@ -2584,7 +2665,9 @@ async fn typed_text_partial_failure_keeps_real_ids_and_stops_before_media() {
         image,
     ];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
 
     assert_eq!(outcome.receipt.platform_message_ids, ["702"]);
     assert_eq!(outcome.receipt.parts.len(), 1);
@@ -2633,44 +2716,36 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
 
     let mut no_conversation = scoped_typed_media_message("stored-photo-1");
     no_conversation.conversation_ref.as_mut().unwrap().id = "  ".into();
-    let error = channel
-        .send_typed_with_receipt(&no_conversation)
+    let error = ChannelTypedSend::send_typed(&channel, &no_conversation)
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("before provider dispatch"));
+    assert!(error.message.contains("before provider dispatch"));
     assert!(server.received_requests().await.unwrap().is_empty());
 
     let mut no_account = scoped_typed_media_message("stored-photo-1");
     no_account.channel_ref.as_mut().unwrap().account_id = None;
-    assert!(
-        channel
-            .send_typed_with_receipt(&no_account)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("before provider dispatch")
-    );
+    let error = ChannelTypedSend::send_typed(&channel, &no_account)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!error.sent_before_error);
 
     let mut no_turn = scoped_typed_media_message("stored-photo-1");
     no_turn.turn_id = None;
-    assert!(
-        channel
-            .send_typed_with_receipt(&no_turn)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("before provider dispatch")
-    );
+    let error = ChannelTypedSend::send_typed(&channel, &no_turn)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!error.sent_before_error);
     assert!(server.received_requests().await.unwrap().is_empty());
 
     let mut no_reply = scoped_typed_media_message("stored-photo-1");
     no_reply.reply_to_id = Some("not-a-platform-id".into());
     assert!(
-        channel
-            .send_typed_with_receipt(&no_reply)
+        ChannelTypedSend::send_typed(&channel, &no_reply)
             .await
             .unwrap_err()
-            .to_string()
+            .message
             .contains("before provider dispatch")
     );
 
@@ -2693,21 +2768,19 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
             });
     }
     assert!(
-        channel
-            .send_typed_with_receipt(&unsupported)
+        ChannelTypedSend::send_typed(&channel, &unsupported)
             .await
             .unwrap_err()
-            .to_string()
+            .message
             .contains("before provider dispatch")
     );
 
     let zero_dimensions = scoped_typed_media_message("zero-dimension-photo");
     assert!(
-        channel
-            .send_typed_with_receipt(&zero_dimensions)
+        ChannelTypedSend::send_typed(&channel, &zero_dimensions)
             .await
             .unwrap_err()
-            .to_string()
+            .message
             .contains("before provider dispatch")
     );
 
@@ -2726,11 +2799,10 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
         },
     }];
     assert!(
-        channel
-            .send_typed_with_receipt(&sticker)
+        ChannelTypedSend::send_typed(&channel, &sticker)
             .await
             .unwrap_err()
-            .to_string()
+            .message
             .contains("before provider dispatch")
     );
 
@@ -2763,7 +2835,9 @@ async fn native_webp_sticker_uses_send_sticker_and_returns_its_message_id() {
         },
     }];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
 
     assert!(outcome.error.is_none());
     assert_eq!(outcome.receipt.platform_message_ids, ["811"]);
@@ -2806,7 +2880,9 @@ async fn typed_media_caption_failure_after_text_keeps_receipt_and_forbids_retry(
         },
     ];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
 
     assert_eq!(outcome.receipt.platform_message_ids, ["700"]);
     assert_eq!(outcome.receipt.parts.len(), 1);
@@ -2861,7 +2937,9 @@ async fn typed_media_failure_after_text_keeps_real_partial_ids_and_forbids_retry
             },
         });
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
 
     assert_eq!(outcome.receipt.platform_message_ids, ["11"]);
     let error = outcome.error.expect("partial delivery must be explicit");
@@ -2903,7 +2981,7 @@ async fn configured_local_adapter_accepts_and_delivers_typed_telegram_media() {
             account_id: account.account_id.clone(),
             ..Default::default()
         },
-        channel.capabilities(),
+        channel.declared_capabilities(),
         Arc::new(TelegramConformanceSink(channel.clone())),
     );
     let outcome = adapter
@@ -2977,7 +3055,9 @@ async fn typed_audio_upload_preserves_caption_title_and_duration() {
         },
     }];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
 
     assert_eq!(outcome.receipt.platform_message_ids, ["44"]);
     let requests = server.received_requests().await.unwrap();
@@ -3047,7 +3127,9 @@ async fn typed_video_and_file_upload_use_native_multipart_with_real_receipts() {
         },
     ];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
 
     assert_eq!(outcome.receipt.platform_message_ids, ["51", "52"]);
     assert_eq!(outcome.receipt.parts.len(), 2);
@@ -3146,7 +3228,9 @@ async fn unsupported_native_video_and_image_formats_fall_back_to_documents() {
         },
     ];
 
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
 
     assert_eq!(outcome.receipt.platform_message_ids, ["61", "62"]);
     let requests = server.received_requests().await.unwrap();
@@ -3209,13 +3293,11 @@ async fn telegram_rejects_wav_audio_before_native_upload() {
         },
     }];
 
-    let error = channel.send_typed_with_receipt(&message).await.unwrap_err();
+    let error = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap_err();
 
-    assert!(
-        error
-            .to_string()
-            .contains("rejected before provider dispatch")
-    );
+    assert!(error.message.contains("rejected before provider dispatch"));
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -3250,9 +3332,11 @@ async fn telegram_photo_over_ten_megabytes_is_rejected_before_http() {
         },
     }];
 
-    let error = channel.send_typed_with_receipt(&message).await.unwrap_err();
+    let error = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap_err();
 
-    assert!(error.to_string().contains("before provider dispatch"));
+    assert!(error.message.contains("before provider dispatch"));
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -3321,8 +3405,7 @@ async fn typed_send_receipt_uses_actual_telegram_ids_and_full_address() {
     )
     .await;
     let ch = channel_for(&server, &["*"]);
-    let outcome = ch
-        .send_typed_with_receipt(&typed_text("idem", "hello".into()))
+    let outcome = ChannelTypedSend::send_typed(&ch, &typed_text("idem", "hello".into()))
         .await
         .unwrap();
     assert_eq!(outcome.error, None);
@@ -3453,7 +3536,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
             account_id: scope.channel.account_id.clone(),
             ..Default::default()
         },
-        channel.capabilities(),
+        channel.declared_capabilities(),
         Arc::new(TelegramConformanceSink(channel.clone())),
     );
     let fixture = TelegramWireFixture {
@@ -3502,7 +3585,7 @@ async fn typed_send_receipt_keeps_ordered_multiple_text_parts() {
             },
         });
 
-    let outcome = ch.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&ch, &message).await.unwrap();
 
     assert_eq!(
         json_bodies(&server, "sendMessage").await[0]["text"],
@@ -3535,7 +3618,7 @@ async fn typed_send_receipt_applies_tool_call_tag_sanitization() {
         "before<tool_call>hidden</tool_call>[REACTION:👍|321] [IMAGE:https://example.test/image.png]".into(),
     );
 
-    let outcome = ch.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&ch, &message).await.unwrap();
 
     assert_eq!(outcome.error, None);
     let bodies = json_bodies(&server, "sendMessage").await;
@@ -3561,13 +3644,13 @@ async fn typed_send_rejects_non_numeric_reply_reference_before_provider_io() {
     let mut message = typed_text("bad-reply-id", "hello".into());
     message.reply_to_id = Some("reply:legacy".into());
 
-    let error = ch.send_typed_with_receipt(&message).await.unwrap_err();
+    let error = ChannelTypedSend::send_typed(&ch, &message)
+        .await
+        .unwrap_err();
 
-    assert!(
-        error
-            .to_string()
-            .contains("reply_to_id must be a numeric message ID")
-    );
+    assert_eq!(error.kind, crate::channel::SendErrorKind::BadFormat);
+    assert!(!error.sent_before_error);
+    assert!(error.message.contains("invalid address"));
     assert!(json_bodies(&server, "sendMessage").await.is_empty());
 }
 
@@ -3720,7 +3803,7 @@ async fn typed_send_keeps_delivered_chunk_ids_when_later_chunk_fails() {
                 markdown_dialect: None,
             },
         });
-    let outcome = ch.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(&ch, &message).await.unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["321"]);
     assert_eq!(outcome.receipt.parts.len(), 1);
     assert!(outcome.error.as_ref().is_some_and(|error| !error.retryable));
@@ -3741,8 +3824,7 @@ async fn typed_send_without_provider_message_id_is_ambiguous_and_not_retried() {
     let server = mock_api().await;
     mount_post(&server, "sendMessage", ok_with(serde_json::json!({}))).await;
     let ch = channel_for(&server, &["*"]);
-    let outcome = ch
-        .send_typed_with_receipt(&typed_text("missing-id", "hello".into()))
+    let outcome = ChannelTypedSend::send_typed(&ch, &typed_text("missing-id", "hello".into()))
         .await
         .unwrap();
     let error = outcome.error.expect("missing ID cannot report success");
@@ -3763,8 +3845,7 @@ async fn typed_send_connection_refusal_is_definitely_not_sent_and_sanitized() {
     drop(listener);
     let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
     ch.api_base = format!("http://{address}");
-    let outcome = ch
-        .send_typed_with_receipt(&typed_text("transport-error", "hello".into()))
+    let outcome = ChannelTypedSend::send_typed(&ch, &typed_text("transport-error", "hello".into()))
         .await
         .unwrap();
     let error = outcome
@@ -3817,8 +3898,7 @@ async fn accepted_request_disconnect_remains_ambiguous() {
     let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
     ch.api_base = format!("http://{address}");
 
-    let outcome = ch
-        .send_typed_with_receipt(&typed_text("disconnected", "hello".into()))
+    let outcome = ChannelTypedSend::send_typed(&ch, &typed_text("disconnected", "hello".into()))
         .await
         .unwrap();
     let request = accepted.await.unwrap();
@@ -3897,10 +3977,10 @@ async fn fallback_connection_refusal_after_markdown_rejection_is_not_sent() {
     let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
     ch.api_base = format!("http://{address}");
 
-    let outcome = ch
-        .send_typed_with_receipt(&typed_text("fallback-refused", "hello".into()))
-        .await
-        .unwrap();
+    let outcome =
+        ChannelTypedSend::send_typed(&ch, &typed_text("fallback-refused", "hello".into()))
+            .await
+            .unwrap();
     let request = first_request.await.unwrap();
     assert!(request.windows(10).any(|window| window == b"parse_mode"));
     let error = outcome.error.expect("fallback connection is refused");
@@ -3914,7 +3994,13 @@ async fn update_draft_edits_message_and_records_edit_time() {
     mount_post(&server, "editMessageText", ok()).await;
     let ch = streaming(&server);
 
-    ch.update_draft("100:3", "12", "partial").await.unwrap();
+    ChannelStreamingDraft::update_draft(
+        &ch,
+        "12",
+        draft_text_intent("partial", "100:3", None, Some("3")),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         json_bodies(&server, "editMessageText").await,
@@ -3930,7 +4016,9 @@ async fn update_draft_truncates_oversized_text_to_limit() {
     let ch = streaming(&server);
     let text = "é".repeat(TELEGRAM_MAX_MESSAGE_LENGTH);
 
-    ch.update_draft("100", "12", &text).await.unwrap();
+    ChannelStreamingDraft::update_draft(&ch, "12", draft_text_intent(&text, "100", None, None))
+        .await
+        .unwrap();
 
     let sent = json_bodies(&server, "editMessageText").await[0]["text"]
         .as_str()
@@ -3955,7 +4043,9 @@ async fn update_draft_rejection_is_swallowed_and_not_recorded() {
     .await;
     let ch = streaming(&server);
 
-    ch.update_draft("100", "12", "same").await.unwrap();
+    ChannelStreamingDraft::update_draft(&ch, "12", draft_text_intent("same", "100", None, None))
+        .await
+        .unwrap();
     assert!(!ch.last_draft_edit.lock().contains_key("100"));
 }
 
@@ -3963,7 +4053,9 @@ async fn update_draft_rejection_is_swallowed_and_not_recorded() {
 async fn update_draft_invalid_message_id_skips_network() {
     let server = mock_api().await;
     let ch = streaming(&server);
-    ch.update_draft("100", "abc", "text").await.unwrap();
+    ChannelStreamingDraft::update_draft(&ch, "abc", draft_text_intent("text", "100", None, None))
+        .await
+        .unwrap();
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -3976,9 +4068,13 @@ async fn finalize_draft_edits_with_markdown_and_clears_rate_limit() {
         .lock()
         .insert("100".into(), std::time::Instant::now());
 
-    ch.finalize_draft("100", "8", "done <tool_call>{}</tool_call>", None)
-        .await
-        .unwrap();
+    ChannelStreamingDraft::finalize_draft(
+        &ch,
+        "8",
+        draft_text_intent("done <tool_call>{}</tool_call>", "100", None, None),
+    )
+    .await
+    .unwrap();
 
     let bodies = json_bodies(&server, "editMessageText").await;
     assert_eq!(bodies.len(), 1);
@@ -4003,9 +4099,13 @@ async fn finalize_draft_retries_plain_edit_when_markdown_rejected() {
     mount_post(&server, "editMessageText", ok()).await;
     let ch = streaming(&server);
 
-    ch.finalize_draft("100", "8", "final *text", None)
-        .await
-        .unwrap();
+    ChannelStreamingDraft::finalize_draft(
+        &ch,
+        "8",
+        draft_text_intent("final *text", "100", None, None),
+    )
+    .await
+    .unwrap();
 
     let bodies = json_bodies(&server, "editMessageText").await;
     assert_eq!(bodies.len(), 2);
@@ -4020,9 +4120,13 @@ async fn finalize_draft_falls_back_to_new_message_when_edits_fail() {
     mount_post(&server, "sendMessage", ok()).await;
     let ch = streaming(&server);
 
-    ch.finalize_draft("100:4", "8", "final", Some("77"))
-        .await
-        .unwrap();
+    ChannelStreamingDraft::finalize_draft(
+        &ch,
+        "8",
+        draft_text_intent("final", "100:4", Some("77"), Some("4")),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(json_bodies(&server, "editMessageText").await.len(), 2);
     let sent = json_bodies(&server, "sendMessage").await;
@@ -4038,9 +4142,13 @@ async fn finalize_draft_short_text_with_invalid_id_sends_new_message() {
     mount_post(&server, "sendMessage", ok()).await;
     let ch = streaming(&server);
 
-    ch.finalize_draft("100", "nope", "final", None)
-        .await
-        .unwrap();
+    ChannelStreamingDraft::finalize_draft(
+        &ch,
+        "nope",
+        draft_text_intent("final", "100", None, None),
+    )
+    .await
+    .unwrap();
 
     assert!(json_bodies(&server, "editMessageText").await.is_empty());
     assert_eq!(sent_texts(&server).await, vec!["final".to_string()]);
@@ -4054,7 +4162,9 @@ async fn finalize_draft_oversized_text_deletes_draft_and_sends_chunks() {
     let ch = streaming(&server);
     let text = "y".repeat(TELEGRAM_MAX_MESSAGE_LENGTH + 1);
 
-    ch.finalize_draft("100", "8", &text, None).await.unwrap();
+    ChannelStreamingDraft::finalize_draft(&ch, "8", draft_text_intent(&text, "100", None, None))
+        .await
+        .unwrap();
 
     assert_eq!(
         json_bodies(&server, "deleteMessage").await,
@@ -4070,7 +4180,9 @@ async fn finalize_draft_oversized_text_with_invalid_id_sends_chunks_only() {
     let ch = streaming(&server);
     let text = "y".repeat(TELEGRAM_MAX_MESSAGE_LENGTH + 1);
 
-    ch.finalize_draft("100", "bad", &text, None).await.unwrap();
+    ChannelStreamingDraft::finalize_draft(&ch, "bad", draft_text_intent(&text, "100", None, None))
+        .await
+        .unwrap();
 
     assert!(json_bodies(&server, "deleteMessage").await.is_empty());
     assert_eq!(json_bodies(&server, "sendMessage").await.len(), 2);
@@ -4082,7 +4194,7 @@ async fn legacy_reaction_marker_is_plain_text_not_a_telegram_operation() {
     mount_post(&server, "sendMessage", ok()).await;
     let ch = channel_for(&server, &["*"]);
 
-    Channel::send(&ch, &SendMessage::new("[REACTION:🔥] hello", "100"))
+    ChannelAdapter::send(&ch, plain_text_intent("[REACTION:🔥] hello", "100"))
         .await
         .unwrap();
 
@@ -4141,23 +4253,43 @@ async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
     )
     .await;
     mount_post(&server, "sendMessage", ok()).await;
-    let events = Arc::new(RecordingEvents::default());
+    let events = Arc::new(TelegramConformanceEvents::default());
     let channel = Arc::new(fast_backoff(
         channel_for(&server, &["alice", "42"]).with_events(events.clone()),
     ));
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let listener = tokio::spawn({
         let channel = channel.clone();
-        async move { channel.listen(tx).await }
+        let events = events.clone();
+        async move { ChannelAdapter::start(channel.as_ref(), events.as_ref()).await }
     });
-    tokio::time::timeout(GUARD, rx.recv())
+    tokio::time::timeout(GUARD, async {
+        loop {
+            let has_callbacks = events
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| {
+                    serde_json::to_value(event)
+                        .is_ok_and(|value| value["type"] == "button_callback")
+                })
+                .count()
+                >= 2;
+            let has_inbound = !events.inbounds.lock().unwrap().is_empty();
+            if has_callbacks && has_inbound {
+                break;
+            }
+            events.notified.notified().await;
+        }
+    })
+    .await
+    .expect("typed listener delivered allowed callbacks and inbound messages");
+    ChannelAdapter::stop(channel.as_ref())
         .await
-        .expect("allowed message terminates listener")
-        .expect("message delivered");
-    drop(rx);
+        .expect("typed listener stops");
     tokio::time::timeout(GUARD, listener)
         .await
-        .expect("listener exits after receiver closes")
+        .expect("listener exits after stop")
         .unwrap()
         .unwrap();
 
@@ -4166,8 +4298,8 @@ async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
         .lock()
         .unwrap()
         .iter()
-        .filter(|(_, kind, _)| kind == "button_callback")
-        .map(|(_, _, payload)| payload.clone())
+        .filter_map(|event| serde_json::to_value(event).ok())
+        .filter(|event| event["type"] == "button_callback")
         .collect::<Vec<_>>();
     assert_eq!(callbacks.len(), 2);
     assert_eq!(callbacks[0]["type"], "button_callback");
@@ -4260,7 +4392,7 @@ async fn send_bare_existing_path_remains_plain_text() {
     let file = dir.path().join("report.pdf");
     std::fs::write(&file, b"%PDF").unwrap();
 
-    Channel::send(&ch, &SendMessage::new(file.to_str().unwrap(), "100"))
+    ChannelAdapter::send(&ch, plain_text_intent(file.to_str().unwrap(), "100"))
         .await
         .unwrap();
 
@@ -4279,7 +4411,7 @@ async fn health_check_reflects_get_me_status() {
         .mount(&server)
         .await;
     let ch = channel_for(&server, &["*"]);
-    assert!(ch.health_check().await);
+    assert!(crate::provider_test_support::is_healthy(&ch).await);
     assert_eq!(
         ChannelAdapter::status(&ch)
             .await
@@ -4296,7 +4428,7 @@ async fn health_check_reflects_get_me_status() {
         .mount(&failing)
         .await;
     let failing_channel = channel_for(&failing, &["*"]);
-    assert!(!failing_channel.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&failing_channel).await);
     assert_eq!(
         ChannelAdapter::status(&failing_channel)
             .await
@@ -4308,40 +4440,24 @@ async fn health_check_reflects_get_me_status() {
 
     let mut dead = TelegramChannel::new("tok".into(), vec!["*".into()], false);
     dead.api_base = dead_base();
-    assert!(!dead.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&dead).await);
 }
 
 #[tokio::test]
-async fn start_typing_sends_immediately_and_reuses_task_for_same_recipient() {
+async fn typed_typing_sends_action_for_scoped_conversation() {
     let server = mock_api().await;
     mount_post(&server, "sendChatAction", ok_with(serde_json::json!(true))).await;
     let ch = channel_for(&server, &["*"]);
 
-    ch.start_typing("100:6").await.unwrap();
-    // The background refresher's first iteration posts right away; wait for it.
-    tokio::time::timeout(GUARD, async {
-        while json_bodies(&server, "sendChatAction").await.len() < 2 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("typing refresher posted");
-    let first_task_id = ch.typing_handle.lock().as_ref().unwrap().handle.id();
-
-    ch.start_typing("100:6").await.unwrap();
-    assert_eq!(
-        ch.typing_handle.lock().as_ref().unwrap().handle.id(),
-        first_task_id,
-        "same recipient keeps the running refresher"
-    );
+    ChannelTyping::start_typing(&ch, "100:6").await.unwrap();
 
     let bodies = json_bodies(&server, "sendChatAction").await;
+    assert_eq!(bodies.len(), 1);
     assert!(bodies.iter().all(|b| b["chat_id"] == "100"
         && b["action"] == "typing"
         && b["message_thread_id"] == "6"));
 
-    ch.stop_typing("100:6").await.unwrap();
-    assert!(ch.typing_handle.lock().is_none());
+    ChannelTyping::stop_typing(&ch, "100:6").await.unwrap();
 }
 
 #[tokio::test]
@@ -4379,8 +4495,8 @@ async fn typing_refresh_reports_acceptance_rejection_and_transport_error() {
 #[test]
 fn telegram_advertises_reaction_support() {
     let ch = TelegramChannel::new("tok".into(), vec!["*".into()], false);
-    assert!(ch.supports_reactions());
-    let caps = ch.capabilities();
+    let caps = ch.declared_capabilities();
+    assert!(caps.reactions);
     assert!(caps.actions.supported.contains(&"typing".into()));
     assert!(caps.actions.supported.contains(&"edit".into()));
     assert!(caps.actions.supported.contains(&"delete".into()));
@@ -4584,54 +4700,95 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
         .await;
     mount_post(&server, "sendMessage", ok()).await;
 
-    let events = Arc::new(RecordingEvents::default());
+    let events = Arc::new(TelegramConformanceEvents::default());
     let ch = Arc::new(fast_backoff(
         channel_for(&server, &["alice"]).with_events(events.clone()),
     ));
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let listener = tokio::spawn({
         let ch = ch.clone();
-        async move { ch.listen(tx).await }
+        let events = events.clone();
+        async move { ChannelAdapter::start(ch.as_ref(), events.as_ref()).await }
     });
 
-    let first = tokio::time::timeout(GUARD, rx.recv())
+    tokio::time::timeout(GUARD, async {
+        loop {
+            let has_inbound = events
+                .inbounds
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|envelope| envelope.message_id == "telegram_100_5");
+            let has_events = events.events.lock().unwrap().len() >= 2;
+            if has_inbound && has_events {
+                break;
+            }
+            events.notified.notified().await;
+        }
+    })
+    .await
+    .expect("typed listener dispatched message and reaction events");
+    let first = events
+        .inbounds
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|envelope| envelope.message_id == "telegram_100_5")
+        .cloned()
+        .expect("original message delivered");
+    assert_eq!(first.sender.id, "7");
+    assert!(first.parts.iter().any(|part| matches!(
+        part,
+        tinychannels_bus::ContentPart::Text { text, .. } if text == "original hello"
+    )));
+    tokio::time::timeout(GUARD, async {
+        loop {
+            let polls = json_bodies(&server, "getUpdates").await;
+            if polls.iter().any(|poll| poll["offset"] == 16) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("listener should poll with the accepted update offset before stop");
+    ChannelAdapter::stop(ch.as_ref())
         .await
-        .expect("message dispatched")
-        .expect("channel open");
-    assert_eq!(first.content, "original hello");
-    assert_eq!(first.sender, "alice");
-    drop(rx);
+        .expect("typed listener stops");
 
     tokio::time::timeout(GUARD, listener)
         .await
-        .expect("listen returns once receiver is gone")
+        .expect("listen returns after stop")
         .unwrap()
         .unwrap();
 
-    let recorded = events.events.lock().unwrap().clone();
+    let recorded = events
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|event| serde_json::to_value(event).expect("serialize typed channel event"))
+        .collect::<Vec<_>>();
     assert_eq!(recorded.len(), 2);
-    assert_eq!(recorded[0].1, "message_updated");
-    assert_eq!(recorded[0].2["type"], "message_updated");
-    assert_eq!(recorded[0].2["sourceEventId"], "13");
-    assert_eq!(recorded[0].2["conversation"]["id"], "100");
-    assert_eq!(recorded[0].2["messageId"], "telegram_100_5");
-    assert_eq!(recorded[0].2["providerMessageId"], "5");
-    assert_eq!(recorded[0].2["conversation"]["kind"], "group");
-    assert_eq!(recorded[0].2["conversation"]["topicId"], "88");
-    assert_eq!(recorded[0].2["parts"][0]["text"], "edited hello");
-    assert_eq!(recorded[1].1, "reaction_added");
-    assert_eq!(recorded[1].2["type"], "reaction_added");
-    assert_eq!(recorded[1].2["sourceEventId"], "15");
+    assert_eq!(recorded[0]["type"], "message_updated");
+    assert_eq!(recorded[0]["sourceEventId"], "13");
+    assert_eq!(recorded[0]["conversation"]["id"], "100");
+    assert_eq!(recorded[0]["messageId"], "telegram_100_5");
+    assert_eq!(recorded[0]["providerMessageId"], "5");
+    assert_eq!(recorded[0]["conversation"]["kind"], "group");
+    assert_eq!(recorded[0]["conversation"]["topicId"], "88");
+    assert_eq!(recorded[0]["parts"][0]["text"], "edited hello");
+    assert_eq!(recorded[1]["type"], "reaction_added");
+    assert_eq!(recorded[1]["sourceEventId"], "15");
     assert_eq!(
-        recorded[1].2["eventId"],
+        recorded[1]["eventId"],
         "telegram:update:15:reaction:added:100:5:❤"
     );
-    assert_eq!(recorded[1].2["messageId"], "telegram_100_5");
-    assert_eq!(recorded[1].2["providerMessageId"], "5");
-    assert_eq!(recorded[1].2["conversation"]["id"], "100");
-    assert_eq!(recorded[1].2["conversation"]["topicId"], "88");
-    assert_eq!(recorded[1].2["actor"]["id"], "7");
-    assert_eq!(recorded[1].2["reaction"]["value"], "❤");
+    assert_eq!(recorded[1]["messageId"], "telegram_100_5");
+    assert_eq!(recorded[1]["providerMessageId"], "5");
+    assert_eq!(recorded[1]["conversation"]["id"], "100");
+    assert_eq!(recorded[1]["conversation"]["topicId"], "88");
+    assert_eq!(recorded[1]["actor"]["id"], "7");
+    assert_eq!(recorded[1]["reaction"]["value"], "❤");
     assert_eq!(json_bodies(&server, "deleteWebhook").await.len(), 1);
     // The unauthorized sender got the approval prompt.
     let prompts = sent_texts(&server).await;
@@ -4670,6 +4827,25 @@ impl crate::host::EventSink for RejectingInboundEvents {
     }
 }
 
+#[async_trait::async_trait]
+impl ChannelInboundSink for RejectingInboundEvents {
+    async fn push(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        if matches!(ingress, tinychannels_bus::ChannelIngress::Inbound(_)) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            return Err(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "fixture ingress delivery failed".into(),
+                retryable: false,
+                ..Default::default()
+            });
+        }
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn listen_does_not_duplicate_inbound_after_ordered_sink_failure() {
     let server = mock_api().await;
@@ -4691,22 +4867,15 @@ async fn listen_does_not_duplicate_inbound_after_ordered_sink_failure() {
     let channel = Arc::new(fast_backoff(
         channel_for(&server, &["alice"]).with_events(events.clone()),
     ));
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let listener = tokio::spawn({
         let channel = channel.clone();
-        async move { channel.listen(tx).await }
+        let events = events.clone();
+        async move { ChannelAdapter::start(channel.as_ref(), events.as_ref()).await }
     });
 
-    let delivered_on_legacy_path = tokio::time::timeout(GUARD, rx.recv())
-        .await
-        .expect("listener must finish after the ingress callback fails");
-    assert!(
-        delivered_on_legacy_path.is_none(),
-        "an ambiguous callback failure must not submit the same update through the legacy queue"
-    );
     let result = tokio::time::timeout(GUARD, listener)
         .await
-        .expect("listener must return after callback failure")
+        .expect("listener must return after typed ingress failure")
         .unwrap();
     assert!(result.is_err());
     assert_eq!(events.0.load(Ordering::SeqCst), 1);
@@ -4746,29 +4915,52 @@ async fn listen_backs_off_when_webhook_delete_fails_and_on_transport_error() {
 
     let mut ch = fast_backoff(channel_for(&server, &["alice"]));
     ch.mention_only = true;
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let ch = Arc::new(ch);
+    let events = Arc::new(TelegramConformanceEvents::default());
     let listener = tokio::spawn({
         let ch = ch.clone();
-        async move { ch.listen(tx).await }
+        let events = events.clone();
+        async move { ChannelAdapter::start(ch.as_ref(), events.as_ref()).await }
     });
 
-    let msg = tokio::time::timeout(GUARD, rx.recv())
-        .await
-        .expect("message dispatched")
-        .expect("channel open");
-    assert_eq!(
-        msg.content, "hey ping",
-        "mention stripped in mention-only group"
+    tokio::time::timeout(GUARD, async {
+        loop {
+            if !events.inbounds.lock().unwrap().is_empty() {
+                break;
+            }
+            events.notified.notified().await;
+        }
+    })
+    .await
+    .expect("typed message dispatched");
+    let msg = events.inbounds.lock().unwrap()[0].clone();
+    assert!(
+        msg.parts.iter().any(|part| matches!(
+            part,
+            tinychannels_bus::ContentPart::Text { text, .. } if text == "hey ping"
+        )),
+        "mention stripped in mention-only group: {:?}",
+        msg.parts
     );
     assert_eq!(json_bodies(&server, "deleteWebhook").await.len(), 1);
-    listener.abort();
+    ChannelAdapter::stop(ch.as_ref())
+        .await
+        .expect("typed listener stops");
+    tokio::time::timeout(GUARD, listener)
+        .await
+        .expect("typed listener exits")
+        .unwrap()
+        .unwrap();
 
     // Transport failures back off and retry rather than ending the loop.
     let mut dead = fast_backoff(TelegramChannel::new("tok".into(), vec!["*".into()], true));
     dead.api_base = dead_base();
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let outcome = tokio::time::timeout(Duration::from_millis(300), dead.listen(tx)).await;
+    let sink = TelegramConformanceEvents::default();
+    let outcome = tokio::time::timeout(
+        Duration::from_millis(300),
+        ChannelAdapter::start(&dead, &sink),
+    )
+    .await;
     assert!(
         outcome.is_err(),
         "listen keeps retrying on transport errors"
@@ -5291,13 +5483,11 @@ async fn draft_edit_validates_receipt_ids_and_reports_wire_failures() {
 #[test]
 fn telegram_declares_remote_control_approvals_and_proactive_defaults() {
     let ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
-    assert!(Channel::supports_remote_control(&ch));
-    assert!(Channel::supports_chat_approvals(&ch));
-    assert!(Channel::history_key_ignores_thread(&ch));
-    assert_eq!(
-        crate::channel::ChannelAdapter::proactive_target(&ch),
-        Channel::proactive_target(&ch)
-    );
+    let capabilities = ch.declared_capabilities();
+    assert!(capabilities.remote_control);
+    assert!(capabilities.chat_approvals);
+    assert!(capabilities.history_key_ignores_thread);
+    assert_eq!(ChannelAdapter::proactive_target(&ch), ch.proactive_target());
 }
 
 #[tokio::test]

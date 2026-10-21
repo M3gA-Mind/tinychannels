@@ -1,8 +1,11 @@
 //! REST and webhook tests for the Lark channel. A local TLS fixture answers
 //! the Feishu/Lark API hosts; the webhook receiver is served on loopback.
 
+#![allow(deprecated)]
+
 use super::*;
 use base64::Engine as _;
+use tinychannels_bus::SendMessage;
 
 pub(super) struct FixtureVoiceCodec;
 
@@ -359,7 +362,7 @@ async fn lark_image_and_message_receipt_failures_keep_delivery_certainty() {
         } else if request.target.starts_with("/open-apis/im/v1/messages?") {
             match server_message_attempts.fetch_add(1, Ordering::SeqCst) {
                 0 => (200, r#"{"code":0,"data":{}}"#.into()),
-                1 => (400, r#"{"code":99991663,"msg":"rejected"}"#.into()),
+                1 => (400, r#"{"code":230001,"msg":"rejected"}"#.into()),
                 2 => (500, r#"{"code":99991663,"msg":"server error"}"#.into()),
                 _ => (200, "not-json".into()),
             }
@@ -424,7 +427,11 @@ async fn lark_image_and_message_receipt_failures_keep_delivery_certainty() {
     );
     assert!(unreadable_error.sent_before_error);
     assert_eq!(image_attempts.load(Ordering::SeqCst), 5);
-    assert_eq!(message_attempts.load(Ordering::SeqCst), 4);
+    assert_eq!(
+        message_attempts.load(Ordering::SeqCst),
+        5,
+        "each of the five outbound attempts should issue one message request"
+    );
 }
 
 #[tokio::test]
@@ -783,27 +790,38 @@ pub(super) fn token_ok(token: &str) -> (u16, String) {
     )
 }
 
+fn typed_send_error(error: &anyhow::Error) -> &tinychannels_bus::channel::ChannelSendError {
+    &error
+        .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+        .expect("typed adapter send error")
+        .0
+}
+
 #[tokio::test]
 async fn send_fetches_a_token_once_and_posts_a_text_message() {
     let server = HttpsServer::start(|request| {
         if is_token_request(request) {
             token_ok("t-1")
         } else {
-            (200, r#"{"code":0}"#.into())
+            (
+                200,
+                serde_json::json!({"code": 0, "data": {"message_id": "om-text-1"}}).to_string(),
+            )
         }
     })
     .await;
     let channel = channel_with(&server, true);
 
-    channel
-        .send(&SendMessage::new("hello lark", "oc_chat"))
+    crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello lark", "oc_chat"))
         .await
         .unwrap();
-    channel
-        .send(&SendMessage::new("second", "oc_chat"))
+    crate::provider_test_support::send_v1(&channel, &SendMessage::new("second", "oc_chat"))
         .await
         .unwrap();
-    assert!(channel.health_check().await, "cached token stays healthy");
+    assert!(
+        crate::provider_test_support::is_healthy(&channel).await,
+        "cached token stays healthy"
+    );
 
     let requests = server.requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 3, "the token is fetched once and cached");
@@ -825,10 +843,7 @@ async fn send_fetches_a_token_once_and_posts_a_text_message() {
         "/open-apis/im/v1/messages?receive_id_type=chat_id"
     );
     assert_eq!(header(send, "authorization"), Some("Bearer t-1"));
-    assert_eq!(
-        header(send, "content-type"),
-        Some("application/json; charset=utf-8")
-    );
+    assert_eq!(header(send, "content-type"), Some("application/json"));
     assert_eq!(send.body["receive_id"], "oc_chat");
     assert_eq!(send.body["msg_type"], "text");
     assert_eq!(
@@ -1148,19 +1163,25 @@ async fn send_refreshes_an_expired_token_and_retries_once() {
                 let n = tokens.fetch_add(1, Ordering::SeqCst) + 1;
                 token_ok(&format!("t-{n}"))
             } else if sends.fetch_add(1, Ordering::SeqCst) == 0 {
-                (401, r#"{"code":99991663}"#.into())
+                (401, r#"{"code":99991663,"msg":"token expired"}"#.into())
             } else {
-                (200, r#"{"code":0}"#.into())
+                (
+                    200,
+                    r#"{"code":0,"data":{"message_id":"om-retried"}}"#.into(),
+                )
             }
         }
     })
     .await;
     let channel = channel_with(&server, false);
 
-    channel
-        .send(&SendMessage::new("retry me", "oc_chat"))
-        .await
-        .unwrap();
+    let result =
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("retry me", "oc_chat"))
+            .await;
+    assert!(
+        result.is_ok(),
+        "a refreshed token should allow one retry: {result:?}"
+    );
 
     let requests = server.requests.lock().unwrap().clone();
     let auth: Vec<_> = requests
@@ -1173,6 +1194,79 @@ async fn send_refreshes_an_expired_token_and_retries_once() {
 }
 
 #[tokio::test]
+async fn empty_unauthorized_response_still_refreshes_before_retry() {
+    let tokens = Arc::new(AtomicUsize::new(0));
+    let sends = Arc::new(AtomicUsize::new(0));
+    let server = HttpsServer::start({
+        let tokens = tokens.clone();
+        let sends = sends.clone();
+        move |request| {
+            if is_token_request(request) {
+                let n = tokens.fetch_add(1, Ordering::SeqCst) + 1;
+                token_ok(&format!("t-{n}"))
+            } else if sends.fetch_add(1, Ordering::SeqCst) == 0 {
+                (401, String::new())
+            } else {
+                (
+                    200,
+                    r#"{"code":0,"data":{"message_id":"om-after-empty-401"}}"#.into(),
+                )
+            }
+        }
+    })
+    .await;
+    let channel = channel_with(&server, false);
+
+    crate::provider_test_support::send_v1(&channel, &SendMessage::new("retry", "oc_chat"))
+        .await
+        .expect("the HTTP 401 status alone must trigger the bounded token refresh");
+
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(tokens.load(Ordering::SeqCst), 2);
+    assert_eq!(sends.load(Ordering::SeqCst), 2);
+    assert_eq!(header(&requests[1], "authorization"), Some("Bearer t-1"));
+    assert_eq!(header(&requests[3], "authorization"), Some("Bearer t-2"));
+}
+
+#[tokio::test]
+async fn a_second_token_expired_response_is_known_unsent() {
+    let tokens = Arc::new(AtomicUsize::new(0));
+    let sends = Arc::new(AtomicUsize::new(0));
+    let server = HttpsServer::start({
+        let tokens = tokens.clone();
+        let sends = sends.clone();
+        move |request| {
+            if is_token_request(request) {
+                let n = tokens.fetch_add(1, Ordering::SeqCst) + 1;
+                token_ok(&format!("t-{n}"))
+            } else if sends.fetch_add(1, Ordering::SeqCst) == 0 {
+                (401, r#"{"code":99991663,"msg":"expired"}"#.into())
+            } else {
+                (200, r#"{"code":99991663,"msg":"expired again"}"#.into())
+            }
+        }
+    })
+    .await;
+    let channel = channel_with(&server, false);
+
+    let error = crate::provider_test_support::send_v1(
+        &channel,
+        &SendMessage::new("do not retry again", "oc_chat"),
+    )
+    .await
+    .unwrap_err();
+    let typed = typed_send_error(&error);
+    assert_eq!(
+        typed.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
+    );
+    assert!(!typed.sent_before_error);
+    assert!(typed.retryable);
+    assert_eq!(tokens.load(Ordering::SeqCst), 2);
+    assert_eq!(sends.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn send_reports_failures_with_and_without_a_token_refresh() {
     let server = HttpsServer::start(|request| {
         if is_token_request(request) {
@@ -1182,14 +1276,17 @@ async fn send_reports_failures_with_and_without_a_token_refresh() {
         }
     })
     .await;
-    let error = channel_with(&server, true)
-        .send(&SendMessage::new("x", "oc_chat"))
+    let channel = channel_with(&server, true);
+    let error = crate::provider_test_support::send_v1(&channel, &SendMessage::new("x", "oc_chat"))
         .await
         .unwrap_err();
+    let send_error = typed_send_error(&error);
     assert_eq!(
-        error.to_string(),
-        "Lark send failed after token refresh: still unauthorized"
+        send_error.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
     );
+    assert!(send_error.retryable);
+    assert!(!send_error.sent_before_error);
 
     let server = HttpsServer::start(|request| {
         if is_token_request(request) {
@@ -1199,11 +1296,16 @@ async fn send_reports_failures_with_and_without_a_token_refresh() {
         }
     })
     .await;
-    let error = channel_with(&server, true)
-        .send(&SendMessage::new("x", "oc_chat"))
+    let channel = channel_with(&server, true);
+    let error = crate::provider_test_support::send_v1(&channel, &SendMessage::new("x", "oc_chat"))
         .await
         .unwrap_err();
-    assert_eq!(error.to_string(), "Lark send failed: upstream exploded");
+    let send_error = typed_send_error(&error);
+    assert_eq!(
+        send_error.kind,
+        tinychannels_bus::channel::SendErrorKind::Unknown
+    );
+    assert!(send_error.sent_before_error);
 }
 
 #[tokio::test]
@@ -1211,15 +1313,17 @@ async fn token_errors_fail_send_and_health_check() {
     let server =
         HttpsServer::start(|_| (200, r#"{"code":10003,"msg":"invalid app_secret"}"#.into())).await;
     let channel = channel_with(&server, true);
-    assert!(!channel.health_check().await);
-    let error = channel
-        .send(&SendMessage::new("x", "oc_chat"))
+    assert!(!crate::provider_test_support::is_healthy(&channel).await);
+    let error = crate::provider_test_support::send_v1(&channel, &SendMessage::new("x", "oc_chat"))
         .await
         .unwrap_err();
+    let send_error = typed_send_error(&error);
     assert_eq!(
-        error.to_string(),
-        "Lark tenant_access_token failed: invalid app_secret"
+        send_error.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
     );
+    assert!(send_error.retryable);
+    assert!(!send_error.sent_before_error);
 
     let server = HttpsServer::start(|_| (200, r#"{"code":0}"#.into())).await;
     let error = channel_with(&server, true)
@@ -1241,11 +1345,18 @@ async fn ws_endpoint_errors_stop_listen_before_connecting() {
     let server =
         HttpsServer::start(|_| (200, r#"{"code":1000040345,"msg":"bad app"}"#.into())).await;
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let error = channel_with(&server, true).listen(tx).await.unwrap_err();
+    let channel = channel_with(&server, true);
+    let error = crate::provider_test_support::listen_v1(&channel, tx)
+        .await
+        .unwrap_err();
+    let typed = error
+        .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+        .expect("typed listener error");
     assert_eq!(
-        error.to_string(),
-        "Lark WS endpoint failed: code=1000040345 msg=bad app"
+        typed.0.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
     );
+    assert!(typed.0.retryable);
     let requests = server.requests.lock().unwrap().clone();
     assert_eq!(requests[0].target, "/callback/ws/endpoint");
     assert_eq!(header(&requests[0], "locale"), Some("zh"));
@@ -1256,18 +1367,35 @@ async fn ws_endpoint_errors_stop_listen_before_connecting() {
 
     let server = HttpsServer::start(|_| (200, r#"{"code":1}"#.into())).await;
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let error = channel_with(&server, false).listen(tx).await.unwrap_err();
+    let channel = channel_with(&server, false);
+    let error = crate::provider_test_support::listen_v1(&channel, tx)
+        .await
+        .unwrap_err();
+    let typed = error
+        .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+        .expect("typed listener error");
     assert_eq!(
-        error.to_string(),
-        "Lark WS endpoint failed: code=1 msg=(none)"
+        typed.0.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
     );
+    assert!(typed.0.retryable);
     let requests = server.requests.lock().unwrap().clone();
     assert_eq!(header(&requests[0], "locale"), Some("en"));
 
     let server = HttpsServer::start(|_| (200, r#"{"code":0}"#.into())).await;
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let error = channel_with(&server, true).listen(tx).await.unwrap_err();
-    assert_eq!(error.to_string(), "Lark WS endpoint: empty data");
+    let channel = channel_with(&server, true);
+    let error = crate::provider_test_support::listen_v1(&channel, tx)
+        .await
+        .unwrap_err();
+    let typed = error
+        .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+        .expect("typed listener error");
+    assert_eq!(
+        typed.0.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
+    );
+    assert!(typed.0.retryable);
 }
 
 fn webhook_event(open_id: &str, text: &str) -> serde_json::Value {
@@ -1276,9 +1404,11 @@ fn webhook_event(open_id: &str, text: &str) -> serde_json::Value {
         "event": {
             "sender": { "sender_id": { "open_id": open_id } },
             "message": {
+                "message_id": "webhook-message-1",
                 "message_type": "text",
                 "content": serde_json::json!({"text": text}).to_string(),
-                "chat_id": "oc_chat"
+                "chat_id": "oc_chat",
+                "chat_type": "p2p"
             }
         }
     })
@@ -1289,8 +1419,17 @@ async fn webhook_mode_requires_a_port() {
     let mut channel = LarkChannel::new("a".into(), "s".into(), "verify-token".into(), None, vec![]);
     channel.receive_mode = crate::config::LarkReceiveMode::Webhook;
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let error = channel.listen(tx).await.unwrap_err();
-    assert!(error.to_string().contains("requires `port`"), "{error}");
+    let error = crate::provider_test_support::listen_v1(&channel, tx)
+        .await
+        .unwrap_err();
+    let typed = error
+        .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+        .expect("typed listener error");
+    assert_eq!(
+        typed.0.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
+    );
+    assert!(typed.0.retryable);
 }
 
 #[tokio::test]
@@ -1309,7 +1448,8 @@ async fn webhook_server_forwards_verified_events() {
     );
     channel.receive_mode = crate::config::LarkReceiveMode::Webhook;
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    let server = tokio::spawn(async move { channel.listen(tx).await });
+    let server =
+        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
 
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let url = format!("http://127.0.0.1:{port}/lark");

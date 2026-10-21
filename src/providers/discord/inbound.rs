@@ -245,6 +245,7 @@ impl DiscordChannel {
     }
 
     /// Handle `MESSAGE_CREATE`. Returns `false` when the legacy receiver is gone.
+    #[cfg(test)]
     pub(super) async fn handle_message_create(
         &self,
         d: &Value,

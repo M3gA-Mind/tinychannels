@@ -26,14 +26,17 @@ pub(super) enum Payload {
 
 /// Typed failure that crosses the legacy `anyhow` seam unchanged.
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) struct DiscordError(pub(crate) ChannelSendError);
 
+#[cfg(test)]
 impl std::fmt::Display for DiscordError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0.message)
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for DiscordError {}
 
 /// Rejected before any request left the process: nothing was sent.

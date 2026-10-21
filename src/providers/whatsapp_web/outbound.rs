@@ -161,7 +161,7 @@ impl WhatsAppWebChannel {
             ));
         }
         self.recipient_to_jid(conversation)
-            .map_err(|_| WaFailure::rejected("WhatsApp recipient address is invalid"))
+            .map_err(|_| WaFailure::bad_format("WhatsApp recipient address is invalid"))
     }
 
     pub(super) fn live_client(&self) -> Result<Arc<dyn OutboundClient>, WaFailure> {
@@ -190,7 +190,9 @@ impl WhatsAppWebChannel {
     ) -> (Vec<(String, MessageReceiptPartKind)>, Option<WaFailure>) {
         let mut sent = Vec::new();
         let outcome: Result<(), WaFailure> = async {
-            let uncertain = |_| WaFailure::uncertain("WhatsApp Web send outcome is uncertain");
+            let uncertain = |_error: anyhow::Error| {
+                WaFailure::uncertain("WhatsApp Web send outcome is uncertain")
+            };
             match part {
                 PlannedPart::Text(text) => {
                     let mut context = context;
@@ -288,8 +290,8 @@ impl WhatsAppWebChannel {
         message: &ChannelOutboundMessage,
     ) -> Result<ChannelSendOutcome, WaFailure> {
         let scope = plan::outbound_scope(message, "whatsapp")?;
-        let client = self.live_client()?;
         let to = self.admitted_jid(&scope.conversation.id)?;
+        let client = self.live_client()?;
         let planned = plan_parts(
             message,
             &scope,

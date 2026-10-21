@@ -1,4 +1,6 @@
 use super::*;
+use crate::channel::ChannelTyping;
+use crate::traits::SendMessage;
 use serde_json::json;
 
 // Helper: create a channel with mention_only=false (legacy behavior).
@@ -511,19 +513,18 @@ async fn rest_requests_preserve_auth_thread_routing_and_server_errors() {
         channel.get_bot_identity().await,
         ("bot-id".into(), "bot-name".into())
     );
-    assert!(channel.health_check().await);
+    assert!(crate::provider_test_support::is_healthy(&channel).await);
     Mock::given(method("POST"))
         .and(path("/api/v4/posts"))
         .and(header("authorization", "Bearer test-token"))
         .and(body_json(
             json!({"channel_id": "room", "root_id": "root", "message": "reply"}),
         ))
-        .respond_with(ResponseTemplate::new(201))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({"id": "reply-post"})))
         .expect(1)
         .mount(&server)
         .await;
-    channel
-        .send(&SendMessage::new("reply", "room:root"))
+    crate::provider_test_support::send_v1(&channel, &SendMessage::new("reply", "room:root"))
         .await
         .unwrap();
     Mock::given(method("POST"))
@@ -535,12 +536,18 @@ async fn rest_requests_preserve_auth_thread_routing_and_server_errors() {
         .expect(1)
         .mount(&server)
         .await;
-    let error = channel
-        .send(&SendMessage::new("top-level", "room"))
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("403"));
-    assert!(error.to_string().contains("permission denied"));
+    let error =
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("top-level", "room"))
+            .await
+            .unwrap_err();
+    let error = error
+        .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+        .expect("typed send errors preserve their structured classification")
+        .0
+        .clone();
+    assert_eq!(error.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!error.sent_before_error);
+    assert!(!error.message.contains("permission denied"));
     server.verify().await;
     server.reset().await;
     Mock::given(method("GET"))
@@ -551,16 +558,15 @@ async fn rest_requests_preserve_auth_thread_routing_and_server_errors() {
         channel.get_bot_identity().await,
         (String::new(), String::new())
     );
-    assert!(!channel.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&channel).await);
     let unreachable = mock_channel("http://127.0.0.1:0".into());
     assert_eq!(
         unreachable.get_bot_identity().await,
         (String::new(), String::new())
     );
-    assert!(!unreachable.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&unreachable).await);
     assert!(
-        unreachable
-            .send(&SendMessage::new("hello", "room"))
+        crate::provider_test_support::send_v1(&unreachable, &SendMessage::new("hello", "room"))
             .await
             .is_err()
     );
@@ -635,12 +641,15 @@ async fn listener_recovers_from_invalid_json_and_delivers_posts_in_time_order() 
         })
         .mount(&server).await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let listener = tokio::spawn(async move { channel.listen(tx).await });
+    let listener =
+        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
     tokio::time::timeout(std::time::Duration::from_secs(15), async {
         let first = rx.recv().await.unwrap();
         let second = rx.recv().await.unwrap();
-        assert_eq!((first.content.as_str(), first.reply_target.as_str()), ("first", "room:earlier"));
-        assert_eq!((second.content.as_str(), second.reply_target.as_str()), ("second", "room:later"));
+        assert_eq!((first.content.as_str(), first.reply_target.as_str()), ("first", "room"));
+        assert_eq!(first.thread_ts.as_deref(), Some("earlier"));
+        assert_eq!((second.content.as_str(), second.reply_target.as_str()), ("second", "room"));
+        assert_eq!(second.thread_ts.as_deref(), Some("later"));
         // A newer post on the next poll must terminate listening when the receiver closes.
         server.reset().await;
         Mock::given(path("/api/v4/channels/room/posts"))
@@ -650,7 +659,12 @@ async fn listener_recovers_from_invalid_json_and_delivers_posts_in_time_order() 
             }})))
             .expect(1).mount(&server).await;
         drop(rx);
-        listener.await.unwrap().unwrap();
+        let error = listener.await.unwrap().unwrap_err();
+        let error = error
+            .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+            .expect("typed sink rejection remains a structured listener error");
+        assert_eq!(error.0.kind, crate::channel::SendErrorKind::Transient);
+        assert!(error.0.retryable);
         server.verify().await;
     }).await.unwrap();
 }

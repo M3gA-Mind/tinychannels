@@ -1,4 +1,8 @@
+#![allow(deprecated)]
+
 use super::*;
+use crate::channel::{ChannelAdapter, ChannelTyping};
+use tinychannels_bus::SendMessage;
 
 #[cfg(feature = "whatsapp-web")]
 fn make_channel() -> WhatsAppWebChannel {
@@ -14,7 +18,7 @@ fn make_channel() -> WhatsAppWebChannel {
 #[cfg(feature = "whatsapp-web")]
 fn whatsapp_web_channel_name() {
     let ch = make_channel();
-    assert_eq!(ch.name(), "whatsapp");
+    assert_eq!(ch.descriptor().id, "whatsapp");
 }
 
 #[test]
@@ -59,18 +63,18 @@ fn whatsapp_web_normalize_phone_preserves_plus() {
 #[cfg(feature = "whatsapp-web")]
 async fn whatsapp_web_health_check_disconnected() {
     let ch = make_channel();
-    assert!(!ch.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&ch).await);
 }
 
 #[tokio::test]
 #[cfg(feature = "whatsapp-web")]
 async fn whatsapp_web_health_check_tracks_connected_flag() {
     let ch = make_channel();
-    assert!(!ch.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&ch).await);
     ch.connected.store(true, Ordering::Release);
-    assert!(ch.health_check().await);
+    assert!(crate::provider_test_support::is_healthy(&ch).await);
     ch.connected.store(false, Ordering::Release);
-    assert!(!ch.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&ch).await);
 }
 
 #[test]
@@ -603,19 +607,23 @@ fn message(recipient: &str, content: &str) -> SendMessage {
 #[tokio::test]
 async fn outbound_calls_fail_before_the_bot_is_built() {
     let ch = make_channel();
-    for err in [
-        ch.send(&message("+1234567890", "hi")).await.unwrap_err(),
-        ch.start_typing("+1234567890").await.unwrap_err(),
-        ch.stop_typing("+1234567890").await.unwrap_err(),
-    ] {
-        assert!(err.to_string().contains("client not connected"), "{err}");
+    let send_error = crate::provider_test_support::send_v1(&ch, &message("+1234567890", "hi"))
+        .await
+        .unwrap_err()
+        .to_string();
+    let start_error = ch.start_typing("+1234567890").await.unwrap_err().message;
+    let stop_error = ch.stop_typing("+1234567890").await.unwrap_err().message;
+    for err in [send_error, start_error, stop_error] {
+        assert!(err.to_string().contains("not connected"), "{err}");
     }
 }
 
 #[tokio::test]
 async fn send_delivers_text_to_an_allowed_number_as_a_phone_jid() {
     let (ch, fake) = connected_channel(false);
-    ch.send(&message("+1234567890", "hello")).await.unwrap();
+    crate::provider_test_support::send_v1(&ch, &message("+1234567890", "hello"))
+        .await
+        .unwrap();
     assert_eq!(
         fake.texts(),
         [("1234567890@s.whatsapp.net".to_owned(), "hello".to_owned())]
@@ -626,7 +634,7 @@ async fn send_delivers_text_to_an_allowed_number_as_a_phone_jid() {
 async fn send_into_a_provenanced_group_uses_the_group_jid() {
     let (ch, fake) = connected_channel(false);
     ch.allowed_groups.lock().insert("987654321@g.us".into());
-    ch.send(&message("987654321@g.us", "to group"))
+    crate::provider_test_support::send_v1(&ch, &message("987654321@g.us", "to group"))
         .await
         .unwrap();
     assert_eq!(
@@ -636,10 +644,28 @@ async fn send_into_a_provenanced_group_uses_the_group_jid() {
 }
 
 #[tokio::test]
-async fn blocked_recipients_are_skipped_silently() {
+async fn blocked_recipients_are_rejected_before_provider_io() {
     let (ch, fake) = connected_channel(false);
-    ch.send(&message("+9999999999", "nope")).await.unwrap();
-    ch.send(&message("11111@g.us", "nope")).await.unwrap();
+    let dm = crate::provider_test_support::send_v1(&ch, &message("+9999999999", "nope"))
+        .await
+        .unwrap_err();
+    let group = crate::provider_test_support::send_v1(&ch, &message("11111@g.us", "nope"))
+        .await
+        .unwrap_err();
+    let dm = dm
+        .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+        .unwrap()
+        .0
+        .clone();
+    let group = group
+        .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+        .unwrap()
+        .0
+        .clone();
+    for error in [dm, group] {
+        assert_eq!(error.kind, crate::channel::SendErrorKind::Forbidden);
+        assert!(!error.sent_before_error);
+    }
     ch.start_typing("+9999999999").await.unwrap();
     ch.stop_typing("+9999999999").await.unwrap();
     assert!(fake.calls().is_empty());
@@ -650,19 +676,28 @@ async fn unparseable_recipients_are_rejected() {
     let ch = WhatsAppWebChannel::new("/tmp/t.db".into(), None, None, vec![]);
     let fake = Arc::new(RecordingClient::default());
     *ch.client.lock() = Some(fake.clone() as Arc<dyn OutboundClient>);
+    ch.connected.store(true, Ordering::Release);
 
-    let empty = ch.send(&message("   ", "x")).await.unwrap_err();
-    assert!(empty.to_string().contains("cannot be empty"), "{empty}");
+    let empty = crate::provider_test_support::send_v1(&ch, &message("   ", "x"))
+        .await
+        .unwrap_err();
+    let empty = empty
+        .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+        .unwrap()
+        .0
+        .clone();
+    assert_eq!(
+        empty.kind,
+        crate::channel::SendErrorKind::BadFormat,
+        "invalid recipient must be rejected before provider I/O"
+    );
+    assert!(!empty.sent_before_error);
     let no_digits = ch.start_typing("+abc").await.unwrap_err();
-    assert!(
-        no_digits.to_string().contains("valid phone number"),
-        "{no_digits}"
-    );
+    assert_eq!(no_digits.kind, crate::channel::SendErrorKind::BadFormat);
+    assert!(!no_digits.sent_before_error);
     let bad_jid = ch.stop_typing("@@").await.unwrap_err();
-    assert!(
-        bad_jid.to_string().contains("Invalid WhatsApp JID"),
-        "{bad_jid}"
-    );
+    assert_eq!(bad_jid.kind, crate::channel::SendErrorKind::BadFormat);
+    assert!(!bad_jid.sent_before_error);
     assert!(fake.calls().is_empty());
 }
 
@@ -681,17 +716,26 @@ async fn typing_states_go_to_the_recipient_jid() {
 #[tokio::test]
 async fn client_failures_surface_with_their_operation() {
     let (ch, _fake) = connected_channel(true);
-    let send = ch.send(&message("+1234567890", "x")).await.unwrap_err();
-    assert_eq!(send.to_string(), "send boom");
+    let send = crate::provider_test_support::send_v1(&ch, &message("+1234567890", "x"))
+        .await
+        .unwrap_err();
+    let send = send
+        .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+        .unwrap()
+        .0
+        .clone();
+    assert_eq!(send.kind, crate::channel::SendErrorKind::Unknown);
+    assert!(send.sent_before_error);
+    assert_eq!(send.message, "WhatsApp Web send outcome is uncertain");
     let composing = ch.start_typing("+1234567890").await.unwrap_err();
     assert_eq!(
-        composing.to_string(),
-        "Failed to send typing state (composing): composing boom"
+        composing.message,
+        "WhatsApp Web operation outcome is uncertain"
     );
     let paused = ch.stop_typing("+1234567890").await.unwrap_err();
     assert_eq!(
-        paused.to_string(),
-        "Failed to send typing state (paused): paused boom"
+        paused.message,
+        "WhatsApp Web operation outcome is uncertain"
     );
 }
 
@@ -773,8 +817,6 @@ impl crate::channel::ChannelInboundSink for TypedRecordingSink {
 #[tokio::test]
 #[cfg(feature = "whatsapp-web")]
 async fn typed_adapter_start_can_stop_and_restart_without_retaining_a_legacy_listener() {
-    use crate::channel::ChannelAdapter as _;
-
     let channel = Arc::new(make_channel());
     let sink = Arc::new(TypedRecordingSink {
         ingress: tokio::sync::Mutex::new(Vec::new()),
@@ -918,30 +960,25 @@ async fn the_real_client_refuses_outbound_while_logged_out() {
     };
     wait_for_client(&ch).await;
 
-    let send = tokio::time::timeout(HANG_GUARD, ch.send(&message("+1234567890", "hi")))
-        .await
-        .expect("send hung");
+    let send = tokio::time::timeout(
+        HANG_GUARD,
+        crate::provider_test_support::send_v1(ch.as_ref(), &message("+1234567890", "hi")),
+    )
+    .await
+    .expect("send hung");
     assert!(send.is_err());
     let composing = tokio::time::timeout(HANG_GUARD, ch.start_typing("+1234567890"))
         .await
         .expect("start_typing hung")
         .unwrap_err();
-    assert!(
-        composing
-            .to_string()
-            .starts_with("Failed to send typing state (composing): "),
-        "{composing}"
-    );
+    assert_eq!(composing.kind, crate::channel::SendErrorKind::Unknown);
+    assert!(composing.sent_before_error);
     let paused = tokio::time::timeout(HANG_GUARD, ch.stop_typing("+1234567890"))
         .await
         .expect("stop_typing hung")
         .unwrap_err();
-    assert!(
-        paused
-            .to_string()
-            .starts_with("Failed to send typing state (paused): "),
-        "{paused}"
-    );
+    assert_eq!(paused.kind, crate::channel::SendErrorKind::Unknown);
+    assert!(paused.sent_before_error);
 
     let (_, hook) = lifecycle.hooks.lock().pop().expect("hook registered");
     hook().await;
@@ -1058,7 +1095,6 @@ async fn without_usable_host_storage_the_session_falls_back_to_memory() {
 
 mod v2 {
     use super::*;
-    use crate::channel::ChannelAdapter as _;
     use crate::providers::whatsapp_shared::fakes::{CollectingSink, MemoryMedia, MemoryVoices};
     use crate::providers::whatsapp_web::fakes::{Call, RecordingClient, base_state};
     use tinychannels_bus::channel::{ChannelRef, ConversationRef};
@@ -1101,20 +1137,24 @@ mod v2 {
     #[test]
     fn capabilities_follow_the_wired_ports_and_the_protocol() {
         let (bare, _) = linked();
-        let facts = bare.capabilities();
+        let facts = bare.declared_capabilities();
         assert!(facts.reactions && facts.addressing.reply_to_id && !facts.addressing.thread_id);
         assert!(facts.actions.supported.iter().any(|a| a == "edit"));
         assert!(!facts.content.image.outbound && !facts.voice_out.supported);
-        assert!(bare.supports_reactions() && bare.supports_edit() && bare.supports_reply_to_id());
-        assert!(bare.history_key_ignores_thread());
+        assert!(crate::provider_test_support::supports_reactions(&bare));
+        assert!(crate::provider_test_support::supports_edit(&bare));
+        assert!(crate::provider_test_support::supports_reply_to_id(&bare));
+        assert!(crate::provider_test_support::history_key_ignores_thread(
+            &bare
+        ));
         let wired = WhatsAppWebChannel::new("/tmp/t.db".into(), None, None, vec![])
             .with_media_repository(Arc::new(MemoryMedia::default()))
             .with_voice_media_store(Arc::new(MemoryVoices::default()))
             .with_voice_synthesis(true);
-        let facts = wired.capabilities();
+        let facts = wired.declared_capabilities();
         assert!(facts.content.sticker.outbound && facts.voice_out.native_waveform);
         assert!(facts.voice_out.synthesis);
-        assert_eq!(wired.declared_capabilities(), wired.capabilities());
+        assert_eq!(wired.declared_capabilities(), wired.declared_capabilities());
         let descriptor = wired.descriptor();
         assert_eq!(
             descriptor.metadata.get("backend").map(String::as_str),
@@ -1125,15 +1165,17 @@ mod v2 {
     #[tokio::test]
     async fn typed_sends_edits_deletes_reactions_and_read_receipts_run_on_the_session() {
         let (channel, client) = linked();
-        Channel::send_typed(&channel, &typed("one")).await.unwrap();
-        let outcome = Channel::send_typed_with_receipt(&channel, &typed("two"))
+        crate::channel::ChannelTypedSend::send_typed(&channel, &typed("one"))
+            .await
+            .unwrap();
+        let outcome = crate::channel::ChannelTypedSend::send_typed(&channel, &typed("two"))
             .await
             .unwrap();
         let receipt = outcome.receipt;
-        let edited = Channel::edit_message(
+        let edited = crate::channel::ChannelEdit::edit(
             &channel,
             &receipt,
-            &tinychannels_bus::ChannelOutboundIntent {
+            tinychannels_bus::ChannelOutboundIntent {
                 conversation_id: "+15550001111".into(),
                 channel_id: "whatsapp".into(),
                 payload: tinychannels_bus::OutboundPayload::Text {
@@ -1145,15 +1187,27 @@ mod v2 {
         .await
         .unwrap();
         assert_eq!(edited.platform_message_ids, receipt.platform_message_ids);
-        Channel::delete_message(&channel, &receipt).await.unwrap();
+        crate::channel::ChannelDelete::delete(&channel, &receipt)
+            .await
+            .unwrap();
         let thumbs = tinychannels_bus::ChannelReaction {
             value: "👍".into(),
             custom_emoji_id: None,
         };
-        Channel::send_reaction(&channel, &conversation(), "3EB0X", &thumbs, false)
-            .await
-            .unwrap();
-        Channel::mark_read(&channel, &conversation(), "3EB0X")
+        crate::channel::ChannelReaction::send_reaction(
+            &channel,
+            &ChannelRef {
+                id: "whatsapp".into(),
+                account_id: None,
+            },
+            &conversation(),
+            "3EB0X",
+            &thumbs,
+            false,
+        )
+        .await
+        .unwrap();
+        crate::channel::ChannelAdapter::mark_read(&channel, &conversation(), "3EB0X")
             .await
             .unwrap();
         let kinds: Vec<_> = client

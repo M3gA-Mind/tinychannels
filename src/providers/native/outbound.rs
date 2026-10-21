@@ -2,7 +2,9 @@
 //! up front (so a bad attachment fails before any text is sent), deliver step by
 //! step through the provider, and assemble the receipt.
 
-use super::{NativeFailure, NativeProvider, pre_dispatch, unsupported};
+#[cfg(test)]
+use super::NativeFailure;
+use super::{NativeProvider, pre_dispatch, unsupported};
 use crate::providers::slack::text::{chunk_text, strip_tool_call_tags};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -469,6 +471,7 @@ pub(crate) async fn send_typed<P: NativeProvider + ?Sized>(
 }
 
 /// Carry a typed failure through `anyhow`; callers recover it by downcast.
+#[cfg(test)]
 pub(crate) fn to_anyhow(error: ChannelSendError) -> anyhow::Error {
     anyhow::Error::new(NativeFailure(error))
 }

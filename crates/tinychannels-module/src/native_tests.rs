@@ -36,10 +36,7 @@ async fn a_configured_discord_account_starts_without_retaining_legacy_channel() 
         None,
         true,
     );
-    assert!(
-        running.channel.is_none(),
-        "configured Discord launch must retain only its typed adapter"
-    );
+    assert_eq!(running.provider_name(), "discord");
     assert_eq!(
         running.adapter_handle().mode,
         crate::provider::AdapterMode::DiscordNativeV2

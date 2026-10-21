@@ -1,57 +1,33 @@
 //! Runtime mechanics shared by TinyChannels hosts.
 //!
 //! This crate owns shared provider seams and algorithms, without concrete
-//! provider transports or host policy. Hosts observe listener lifecycle through [`ListenerObserver`].
+//! provider transports or host policy. Hosts observe lifecycle through typed adapters.
 
-use std::sync::Arc;
-use std::time::Duration;
-
-#[allow(
-    deprecated,
-    reason = "listener API remains a v21 adapter for one release"
-)]
-use crate::traits::ChannelMessage;
 use rand::RngExt as _;
-use tokio_util::sync::CancellationToken;
 
-#[allow(deprecated, reason = "legacy provider adapters migrate in issue #103")]
 mod cli;
-#[allow(deprecated, reason = "legacy listener adapters migrate in issue #103")]
 mod dispatch;
 mod health;
+#[cfg(test)]
+#[path = "health_tests.rs"]
+mod health_tests;
 #[allow(
     deprecated,
     reason = "legacy session projection remains during v22 migration"
 )]
 mod session;
+#[cfg(test)]
+#[path = "traits_tests.rs"]
+mod traits_tests;
 
 pub use cli::CliChannel;
-#[allow(
-    deprecated,
-    reason = "legacy listener API remains during v22 migration"
-)]
 pub use dispatch::{RuntimeChannelMessage, run_dispatch_loop};
-pub use health::{ChannelHealthState, check_channels_health, classify_health_result};
+pub use health::{ChannelHealthState, classify_health_result};
 #[allow(deprecated, reason = "legacy session API remains during v22 migration")]
 pub use session::{ChannelSession, run_in_session};
 
 /// Maximum reconnect jitter added to a listener retry.
 pub const MAX_JITTER_MS: u64 = 1_000;
-
-/// Host callback for listener lifecycle facts.
-pub trait ListenerObserver: Send + Sync {
-    /// A listener is about to enter its receive loop.
-    fn connected(&self, _channel: &str) {}
-    /// A listener exited and will be retried.
-    fn disconnected(&self, _channel: &str, _reason: &str, _failed: bool) {}
-    /// A retry has been scheduled after a listener exit.
-    fn restarted(&self, _channel: &str) {}
-}
-
-/// A listener observer with no host side effects.
-#[derive(Debug, Default)]
-pub struct NoopListenerObserver;
-impl ListenerObserver for NoopListenerObserver {}
 
 /// Compute the bounded listener queue capacity for a provider count.
 pub fn compute_max_in_flight_messages(channel_count: usize) -> usize {
@@ -134,43 +110,6 @@ pub fn select_acknowledgment_reaction(content: &str) -> &'static str {
     options[variant % options.len()]
 }
 
-/// Spawn a reconnecting listener. Host-specific observability is delivered to
-/// `observer`; the retry policy remains identical for every host.
-#[allow(
-    deprecated,
-    reason = "legacy provider listener adapter migrates in issue #103"
-)]
-pub fn spawn_supervised_listener(
-    channel: Arc<dyn Channel>,
-    tx: tokio::sync::mpsc::Sender<ChannelMessage>,
-    initial_backoff_secs: u64,
-    max_backoff_secs: u64,
-    observer: Arc<dyn ListenerObserver>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let name = channel.name().to_owned();
-        let mut backoff = initial_backoff_secs.max(1);
-        let max_backoff = max_backoff_secs.max(backoff);
-        loop {
-            observer.connected(&name);
-            let result = channel.listen(tx.clone()).await;
-            if tx.is_closed() {
-                break;
-            }
-            match result {
-                Ok(()) => observer.disconnected(&name, "exited unexpectedly", false),
-                Err(error) => observer.disconnected(&name, &error.to_string(), true),
-            }
-            observer.restarted(&name);
-            tokio::time::sleep(
-                Duration::from_secs(backoff) + Duration::from_millis(jitter_millis(backoff)),
-            )
-            .await;
-            backoff = backoff.saturating_mul(2).min(max_backoff);
-        }
-    })
-}
-
 /// Sample full reconnect jitter, bounded to avoid dwarfing the base retry.
 pub fn jitter_millis(backoff_secs: u64) -> u64 {
     let window = backoff_secs.saturating_mul(1_000).min(MAX_JITTER_MS);
@@ -188,62 +127,24 @@ pub fn log_worker_join_result(result: Result<(), tokio::task::JoinError>) {
     }
 }
 
-/// Maintain a typing indicator until `cancellation_token` is cancelled.
-pub fn spawn_scoped_typing_task(
-    channel: Arc<dyn Channel>,
-    recipient: String,
-    cancellation_token: CancellationToken,
-    refresh_interval: Duration,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                () = cancellation_token.cancelled() => break,
-                _ = tokio::time::sleep(refresh_interval) => {
-                    if let Err(error) = channel.start_typing(&recipient).await {
-                        tracing::debug!(channel = channel.name(), "typing start failed: {error}");
-                    }
-                }
-            }
-        }
-        if let Err(error) = channel.stop_typing(&recipient).await {
-            tracing::debug!(channel = channel.name(), "typing stop failed: {error}");
-        }
-    })
-}
-
 #[cfg(test)]
 #[path = "runtime_extras_tests.rs"]
-#[allow(
-    deprecated,
-    reason = "tests still exercise the explicit v21 provider seam"
-)]
 mod runtime_extras_tests;
 
 #[cfg(test)]
 #[path = "lib_tests.rs"]
-#[allow(
-    deprecated,
-    reason = "tests still exercise the explicit v21 provider seam"
-)]
 mod tests;
 
 pub mod adapters;
-#[allow(deprecated, reason = "v21 conversion shims remain for one release")]
 pub mod channel;
-#[allow(
-    deprecated,
-    reason = "legacy host context consumes the v21 adapter during migration"
-)]
 pub mod context;
 pub mod delivery;
 pub mod relay;
 pub mod security;
 pub mod text;
-#[allow(deprecated, reason = "v21 send adapter remains for one release")]
 pub mod traits;
 pub use tinychannels_bus::{capabilities, error, names, version};
-pub use traits::{Channel, ChannelSendExt, SendMessageExt, WebhookRejected};
+pub use traits::WebhookRejected;
 
 pub mod controllers;
 
@@ -251,8 +152,4 @@ pub mod config;
 
 #[cfg(test)]
 #[path = "relocation_tests.rs"]
-#[allow(
-    deprecated,
-    reason = "tests still exercise the explicit v21 DTO re-exports"
-)]
 mod relocation_tests;

@@ -3,15 +3,15 @@ use super::super::text::{
     TELEGRAM_MAX_MESSAGE_LENGTH, split_message_for_telegram, strip_tool_call_tags,
 };
 use super::TelegramChannel;
+use crate::channel::{ChannelAdapter, ChannelStreamingDraft, ChannelTyping};
 use crate::config::StreamMode;
-use crate::traits::{Channel, SendMessage};
 use std::path::Path;
 use std::time::Duration;
 
 #[test]
 fn telegram_channel_name() {
     let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-    assert_eq!(ch.name(), "telegram");
+    assert_eq!(ch.descriptor().id, "telegram");
 }
 
 #[test]
@@ -37,67 +37,38 @@ fn proactive_target_uses_configured_chat_id() {
 }
 
 #[test]
-fn typing_handle_starts_as_none() {
+fn typing_capability_is_declared() {
     let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-    let guard = ch.typing_handle.lock();
-    assert!(guard.is_none());
+    assert!(
+        ch.declared_capabilities()
+            .actions
+            .supported
+            .contains(&"typing".into())
+    );
 }
 
 #[tokio::test]
-async fn stop_typing_clears_handle() {
+async fn typed_stop_typing_is_idempotent() {
     let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-
-    // Manually insert a dummy handle
-    {
-        let mut guard = ch.typing_handle.lock();
-        *guard = Some(super::TelegramTypingTask {
-            recipient: "123".to_string(),
-            handle: tokio::spawn(async {
-                tokio::time::sleep(Duration::from_secs(60)).await;
-            }),
-        });
-    }
-
-    // stop_typing should abort and clear
-    ch.stop_typing("123").await.unwrap();
-
-    let guard = ch.typing_handle.lock();
-    assert!(guard.is_none());
-}
-
-#[tokio::test]
-async fn start_typing_replaces_previous_handle() {
-    let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-
-    // Insert a dummy handle first
-    {
-        let mut guard = ch.typing_handle.lock();
-        *guard = Some(super::TelegramTypingTask {
-            recipient: "123".to_string(),
-            handle: tokio::spawn(async {
-                tokio::time::sleep(Duration::from_secs(60)).await;
-            }),
-        });
-    }
-
-    // start_typing should abort the old handle and set a new one
-    let _ = ch.start_typing("123").await;
-
-    let guard = ch.typing_handle.lock();
-    assert!(guard.is_some());
+    ChannelTyping::stop_typing(&ch, "123").await.unwrap();
 }
 
 #[test]
 fn supports_draft_updates_respects_stream_mode() {
     let off = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-    assert!(!off.supports_draft_updates());
+    assert!(
+        !off.declared_capabilities()
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "draft-update")
+    );
 
     let partial = TelegramChannel::new("fake-token".into(), vec!["*".into()], false)
         .with_streaming(StreamMode::Partial, 750, true);
-    assert!(partial.supports_draft_updates());
     assert!(
         partial
-            .capabilities()
+            .declared_capabilities()
             .actions
             .supported
             .iter()
@@ -105,7 +76,7 @@ fn supports_draft_updates_respects_stream_mode() {
     );
     assert!(
         partial
-            .capabilities()
+            .declared_capabilities()
             .actions
             .supported
             .iter()
@@ -118,8 +89,7 @@ fn supports_draft_updates_respects_stream_mode() {
 #[tokio::test]
 async fn send_draft_returns_none_when_stream_mode_off() {
     let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-    let id = ch
-        .send_draft(&SendMessage::new("draft", "123"))
+    let id = ChannelStreamingDraft::start_draft(&ch, draft_intent("draft", "123", None))
         .await
         .unwrap();
     assert!(id.is_none());
@@ -136,7 +106,9 @@ async fn update_draft_rate_limit_short_circuits_network() {
         .lock()
         .insert("123".to_string(), std::time::Instant::now());
 
-    let result = ch.update_draft("123", "42", "delta text").await;
+    let result =
+        ChannelStreamingDraft::update_draft(&ch, "42", draft_intent("delta text", "123", None))
+            .await;
     assert!(result.is_ok());
 }
 
@@ -151,9 +123,12 @@ async fn update_draft_utf8_truncation_is_safe_for_multibyte_text() {
 
     // Invalid message_id returns early after building display_text.
     // This asserts truncation never panics on UTF-8 boundaries.
-    let result = ch
-        .update_draft("123", "not-a-number", &long_emoji_text)
-        .await;
+    let result = ChannelStreamingDraft::update_draft(
+        &ch,
+        "not-a-number",
+        draft_intent(&long_emoji_text, "123", None),
+    )
+    .await;
     assert!(result.is_ok());
 }
 
@@ -168,10 +143,28 @@ async fn finalize_draft_invalid_message_id_falls_back_to_chunk_send() {
 
     // For oversized text + invalid draft message_id, finalize_draft should
     // fall back to chunked send instead of returning early.
-    let result = ch
-        .finalize_draft("123", "not-a-number", &long_text, None)
-        .await;
+    let result = ChannelStreamingDraft::finalize_draft(
+        &ch,
+        "not-a-number",
+        draft_intent(&long_text, "123", None),
+    )
+    .await;
     assert!(result.is_err());
+}
+
+fn draft_intent(
+    text: &str,
+    conversation_id: &str,
+    reply_to_id: Option<&str>,
+) -> tinychannels_bus::ChannelOutboundIntent {
+    tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "telegram-channel-test-draft".into(),
+        channel_id: "telegram".into(),
+        conversation_id: conversation_id.into(),
+        reply_to_id: reply_to_id.map(str::to_owned),
+        payload: tinychannels_bus::OutboundPayload::Text { text: text.into() },
+        ..Default::default()
+    }
 }
 
 #[test]

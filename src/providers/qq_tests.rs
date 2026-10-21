@@ -1,9 +1,13 @@
+#![allow(deprecated)]
+
 use super::*;
+use crate::channel::ChannelAdapter;
+use tinychannels_bus::SendMessage;
 
 #[test]
 fn test_name() {
     let ch = QQChannel::new("id".into(), "secret".into(), vec![]);
-    assert_eq!(ch.name(), "qq");
+    assert_eq!(ch.descriptor().id, "qq");
 }
 
 #[test]
@@ -86,7 +90,9 @@ fn new_constructor_stores_fields() {
 #[tokio::test]
 async fn oauth_cache_gateway_and_send_preserve_auth_and_routing() {
     use super::super::http_test_support::HttpsServer;
-    let server = HttpsServer::start(|request| {
+    let send_ids = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let response_ids = send_ids.clone();
+    let server = HttpsServer::start(move |request| {
         if request.target == "/app/getAppAccessToken" {
             assert_eq!(request.method, "POST");
             assert_eq!(
@@ -108,7 +114,8 @@ async fn oauth_cache_gateway_and_send_preserve_auth_and_routing() {
         if request.target.contains("blocked") {
             (403, "denied".into())
         } else {
-            (200, "{}".into())
+            let id = response_ids.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            (200, json!({"id": format!("qq-message-{id}")}).to_string())
         }
     })
     .await;
@@ -119,25 +126,32 @@ async fn oauth_cache_gateway_and_send_preserve_auth_and_routing() {
     assert_eq!(server.requests.lock().unwrap().len(), 1);
     *channel.token_cache.write().await = Some(("expired".into(), 0));
     assert_eq!(channel.get_token().await.unwrap(), "token");
-    assert!(channel.health_check().await);
+    assert!(crate::provider_test_support::is_healthy(&channel).await);
     assert_eq!(
         channel.get_gateway_url("token").await.unwrap(),
         "ws://localhost/gateway"
     );
-    for recipient in ["group:room", "user:alice", "bob"] {
-        channel
-            .send(&SendMessage::new("hello", recipient))
-            .await
-            .unwrap();
+    for (index, recipient) in ["group:room", "user:alice", "bob"].into_iter().enumerate() {
+        let outcome =
+            crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", recipient))
+                .await
+                .unwrap();
+        assert_eq!(
+            outcome.receipt.primary_platform_message_id.as_deref(),
+            Some(format!("qq-message-{}", index + 1).as_str())
+        );
     }
-    assert!(
-        channel
-            .send(&SendMessage::new("hello", "blocked"))
+    let denied =
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "user:blocked"))
             .await
             .unwrap_err()
-            .to_string()
-            .contains("denied")
-    );
+            .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+            .expect("typed QQ errors retain their structured classification")
+            .0
+            .clone();
+    assert_eq!(denied.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!denied.sent_before_error);
+    assert!(!denied.message.contains("denied"));
     let requests = server.requests.lock().unwrap();
     for target in [
         "/v2/groups/room/messages",
@@ -160,7 +174,7 @@ async fn oauth_and_gateway_reject_invalid_responses_and_network_failures() {
             server.client.clone(),
         );
         assert!(channel.fetch_access_token().await.is_err());
-        assert!(!channel.health_check().await);
+        assert!(!crate::provider_test_support::is_healthy(&channel).await);
         assert!(channel.get_gateway_url("token").await.is_err());
     }
     for (expires, lifetime) in [
@@ -198,18 +212,16 @@ async fn oauth_and_gateway_reject_invalid_responses_and_network_failures() {
         .build()
         .unwrap();
     let channel = QQChannel::with_http_client("id".into(), "secret".into(), vec![], client);
-    assert!(!channel.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&channel).await);
     assert!(channel.get_gateway_url("token").await.is_err());
     assert!(
-        channel
-            .send(&SendMessage::new("hello", "alice"))
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "alice"))
             .await
             .is_err()
     );
     *channel.token_cache.write().await = Some(("token".into(), u64::MAX));
     assert!(
-        channel
-            .send(&SendMessage::new("hello", "alice"))
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "alice"))
             .await
             .is_err()
     );
@@ -298,7 +310,7 @@ async fn gateway_listener_identifies_heartbeats_filters_and_routes_private_and_g
                     json!({"t": "C2C_MESSAGE_CREATE", "d": {"id": "closed", "content": "closed", "author": {"user_openid": "alice"}}})
                 }
                 -3 => {
-                    json!({"t": "GROUP_AT_MESSAGE_CREATE", "d": {"id": "closed", "content": "closed", "author": {"member_openid": "alice"}}})
+                    json!({"t": "GROUP_AT_MESSAGE_CREATE", "d": {"id": "closed", "content": "closed", "group_openid": "room", "author": {"member_openid": "alice"}}})
                 }
                 op => json!({"op": op}),
             };
@@ -315,7 +327,10 @@ async fn gateway_listener_identifies_heartbeats_filters_and_routes_private_and_g
             gateway.client.clone(),
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let listening = tokio::spawn(async move { channel.listen(tx).await });
+        let listening =
+            tokio::spawn(
+                async move { crate::provider_test_support::listen_v1(&channel, tx).await },
+            );
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let first = rx.recv().await.unwrap();
             let second = rx.recv().await.unwrap();
@@ -336,19 +351,27 @@ async fn gateway_listener_identifies_heartbeats_filters_and_routes_private_and_g
                 ),
                 ("alice", "group:room", "second")
             );
-            assert!(Uuid::parse_str(&first.id).is_ok());
+            assert_eq!(first.id, "private");
+            assert_eq!(second.id, "group");
             assert!(first.timestamp > 0);
             drop(rx);
             release_tx.send(()).unwrap();
-            assert!(
-                listening
-                    .await
-                    .unwrap()
-                    .unwrap_err()
-                    .to_string()
-                    .contains("connection closed")
-            );
-            websocket.await.unwrap();
+            let error = tokio::time::timeout(std::time::Duration::from_secs(2), listening)
+                .await
+                .unwrap_or_else(|_| panic!("QQ listener did not finish for close case {finish}"))
+                .unwrap()
+                .unwrap_err();
+            let error = error
+                .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+                .expect("typed listener failures retain their structured classification");
+            assert_eq!(error.0.kind, crate::channel::SendErrorKind::Transient);
+            assert!(error.0.retryable);
+            tokio::time::timeout(std::time::Duration::from_secs(2), websocket)
+                .await
+                .unwrap_or_else(|_| {
+                    panic!("QQ mock websocket did not finish for close case {finish}")
+                })
+                .unwrap();
         })
         .await
         .unwrap();

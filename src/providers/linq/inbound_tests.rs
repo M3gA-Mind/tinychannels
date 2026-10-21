@@ -1,6 +1,6 @@
 use super::*;
+use crate::channel::ChannelAdapter;
 use crate::providers::linq::fixtures::*;
-use crate::traits::Channel;
 use serde_json::json;
 use tinychannels_bus::{ContentPart, ConversationKind};
 use wiremock::matchers::{method, path};
@@ -10,9 +10,7 @@ async fn deliver(
     channel: &LinqChannel,
     body: &str,
 ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
-    channel
-        .deliver_webhook(Some(&signed(body)), body.as_bytes())
-        .await
+    ChannelAdapter::deliver_webhook(channel, Some(&signed(body)), body.as_bytes()).await
 }
 
 fn is_rejection(error: &anyhow::Error) -> bool {
@@ -49,9 +47,7 @@ async fn unsigned_badly_signed_stale_and_unconfigured_deliveries_are_rejected() 
         Some(tampered.as_str()),
         Some(garbled),
     ] {
-        let error = rig
-            .channel
-            .deliver_webhook(signature, body.as_bytes())
+        let error = ChannelAdapter::deliver_webhook(&rig.channel, signature, body.as_bytes())
             .await
             .unwrap_err();
         assert!(is_rejection(&error), "{signature:?}");
@@ -66,9 +62,7 @@ async fn authenticated_but_malformed_bodies_are_rejected() {
     let server = mock_api(b"").await;
     let rig = rig(&server);
     let not_utf8 = [0xff, 0xfe];
-    let error = rig
-        .channel
-        .deliver_webhook(Some("t=1,v1=00"), &not_utf8)
+    let error = ChannelAdapter::deliver_webhook(&rig.channel, Some("t=1,v1=00"), &not_utf8)
         .await
         .unwrap_err();
     assert!(is_rejection(&error));

@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
+#[cfg(test)]
 use tinychannels_bus::channel::ChannelSendError;
 
 pub(crate) const SLACK_API_BASE: &str = "https://slack.com/api";
@@ -22,14 +23,17 @@ pub(crate) const SLACK_SEEN_WINDOW: usize = 2048;
 /// A typed send failure carried through `anyhow` so `Channel::send_typed_with_receipt`
 /// callers can recover the structured error.
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) struct SlackFailure(pub(crate) ChannelSendError);
 
+#[cfg(test)]
 impl std::fmt::Display for SlackFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.0.message)
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for SlackFailure {}
 
 /// Slack channel: Socket Mode (or history polling) in, Web API out.

@@ -41,8 +41,11 @@
 //!
 //! [`whatsapp-rust`]: https://docs.rs/whatsapp-rust/0.7
 
-use crate::traits::{Channel, ChannelMessage, SendMessage};
+#[cfg(feature = "whatsapp-web")]
+use crate::traits::ChannelMessage;
+#[cfg(feature = "whatsapp-web")]
 use anyhow::Result;
+#[cfg(feature = "whatsapp-web")]
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -384,7 +387,7 @@ pub struct WhatsAppWebChannel {
     /// in. Without this, any caller able to pass a `recipient` could post
     /// into arbitrary joined groups via the @g.us suffix.
     allowed_groups: Arc<Mutex<HashSet<String>>>,
-    /// Sink for inbound `ChannelMessage`s. Populated when [`Channel::listen`]
+    /// Sink for inbound typed ingress. Populated when [`ChannelAdapter::start`](crate::channel::ChannelAdapter::start)
     /// is called and shared with the event-handler closure.
     tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ChannelMessage>>>>,
     /// Cancellation for the configured typed listener. The provider callback
@@ -419,7 +422,7 @@ impl WhatsAppWebChannel {
         messages.iter().filter(move |message| !is_from_me(message))
     }
 
-    /// Construct a channel. The bot does not connect until [`Channel::listen`]
+    /// Construct a channel. The bot does not connect until [`ChannelAdapter::start`](crate::channel::ChannelAdapter::start)
     /// is invoked.
     pub fn new(
         session_path: String,
@@ -725,10 +728,11 @@ impl WhatsAppWebChannel {
         }
     }
 
-    /// Body of [`Channel::listen`] over an injected network stack: the
+    /// Body of [`ChannelAdapter::start`](crate::channel::ChannelAdapter::start) over an injected network stack: the
     /// transport the bot connects through and the HTTP client it fetches the
     /// app version with. Production passes the WebSocket transport and the
     /// ureq client; tests pass offline doubles.
+    #[cfg(test)]
     async fn listen_with<T, H>(
         &self,
         tx: tokio::sync::mpsc::Sender<ChannelMessage>,
@@ -1020,8 +1024,6 @@ impl WhatsAppWebChannel {
     }
 
     async fn start_typing_provider(&self, recipient: &str) -> Result<()> {
-        let client = self.connected_client()?;
-
         if !self.should_allow_outbound(recipient) {
             tracing::warn!(
                 "WhatsApp Web: typing target {} not in allowed list",
@@ -1030,7 +1032,20 @@ impl WhatsAppWebChannel {
             return Ok(());
         }
 
-        let to = self.recipient_to_jid(recipient)?;
+        let to = self.recipient_to_jid(recipient).map_err(|_| {
+            anyhow::Error::new(
+                crate::providers::whatsapp_shared::error::WaFailure::bad_format(
+                    "WhatsApp recipient address is invalid",
+                ),
+            )
+        })?;
+        let client = self.connected_client().map_err(|_| {
+            anyhow::Error::new(
+                crate::providers::whatsapp_shared::error::WaFailure::rejected(
+                    "WhatsApp Web client is not connected",
+                ),
+            )
+        })?;
         client
             .send_composing(&to)
             .await
@@ -1041,8 +1056,6 @@ impl WhatsAppWebChannel {
     }
 
     async fn stop_typing_provider(&self, recipient: &str) -> Result<()> {
-        let client = self.connected_client()?;
-
         if !self.should_allow_outbound(recipient) {
             tracing::warn!(
                 "WhatsApp Web: typing target {} not in allowed list",
@@ -1051,7 +1064,20 @@ impl WhatsAppWebChannel {
             return Ok(());
         }
 
-        let to = self.recipient_to_jid(recipient)?;
+        let to = self.recipient_to_jid(recipient).map_err(|_| {
+            anyhow::Error::new(
+                crate::providers::whatsapp_shared::error::WaFailure::bad_format(
+                    "WhatsApp recipient address is invalid",
+                ),
+            )
+        })?;
+        let client = self.connected_client().map_err(|_| {
+            anyhow::Error::new(
+                crate::providers::whatsapp_shared::error::WaFailure::rejected(
+                    "WhatsApp Web client is not connected",
+                ),
+            )
+        })?;
         client
             .send_paused(&to)
             .await
@@ -1059,135 +1085,6 @@ impl WhatsAppWebChannel {
 
         tracing::debug!("WhatsApp Web: stop typing for {}", recipient);
         Ok(())
-    }
-}
-
-#[cfg(feature = "whatsapp-web")]
-#[async_trait]
-impl Channel for WhatsAppWebChannel {
-    fn name(&self) -> &str {
-        "whatsapp"
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    fn supports_reactions(&self) -> bool {
-        true
-    }
-
-    fn supports_edit(&self) -> bool {
-        true
-    }
-
-    fn supports_reply_to_id(&self) -> bool {
-        true
-    }
-
-    fn history_key_ignores_thread(&self) -> bool {
-        true
-    }
-
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.provider_capabilities()
-    }
-
-    fn media_account_identity(&self) -> Option<String> {
-        self.provider_media_account_identity()
-    }
-
-    async fn send_typed(&self, message: &tinychannels_bus::ChannelOutboundMessage) -> Result<()> {
-        self.send_v2(message)
-            .await
-            .map(|_| ())
-            .map_err(anyhow::Error::new)
-    }
-
-    async fn send_typed_with_receipt(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> Result<crate::channel::ChannelSendOutcome> {
-        self.send_v2(message).await.map_err(anyhow::Error::new)
-    }
-
-    async fn send_reaction(
-        &self,
-        conversation: &tinychannels_bus::ConversationRef,
-        provider_message_id: &str,
-        reaction: &tinychannels_bus::ChannelReaction,
-        remove: bool,
-    ) -> Result<()> {
-        self.react_v2(conversation, provider_message_id, reaction, remove)
-            .await
-            .map_err(anyhow::Error::new)
-    }
-
-    async fn mark_read(
-        &self,
-        conversation: &tinychannels_bus::ConversationRef,
-        provider_message_id: &str,
-    ) -> Result<()> {
-        self.mark_read_provider(conversation, provider_message_id)
-            .await
-    }
-
-    async fn edit_message(
-        &self,
-        receipt: &tinychannels_bus::channel::MessageReceipt,
-        intent: &tinychannels_bus::ChannelOutboundIntent,
-    ) -> Result<tinychannels_bus::channel::MessageReceipt> {
-        self.edit_v2(receipt, intent)
-            .await
-            .map_err(anyhow::Error::new)
-    }
-
-    async fn delete_message(
-        &self,
-        receipt: &tinychannels_bus::channel::MessageReceipt,
-    ) -> Result<()> {
-        self.delete_v2(receipt).await.map_err(anyhow::Error::new)
-    }
-
-    async fn send(&self, message: &SendMessage) -> Result<()> {
-        let client = self.connected_client()?;
-
-        if !self.should_allow_outbound(&message.recipient) {
-            tracing::warn!(
-                "WhatsApp Web: recipient {} not in allowed list",
-                Self::redact_recipient(&message.recipient)
-            );
-            return Ok(());
-        }
-
-        let to = self.recipient_to_jid(&message.recipient)?;
-        client
-            .send_message(to, outbound::text_message(&message.content, None))
-            .await?;
-        tracing::debug!("WhatsApp Web: sent message to {}", message.recipient);
-        Ok(())
-    }
-
-    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> Result<()> {
-        let transport = Self::websocket_transport(std::env::var("WHATSAPP_WS_URL").ok());
-        let http_client = whatsapp_rust_ureq_http_client::UreqHttpClient::new();
-        self.listen_with(tx, transport, http_client).await
-    }
-
-    async fn health_check(&self) -> bool {
-        self.connected.load(Ordering::Acquire)
-    }
-
-    async fn start_typing(&self, recipient: &str) -> Result<()> {
-        self.start_typing_provider(recipient).await
-    }
-
-    async fn stop_typing(&self, recipient: &str) -> Result<()> {
-        self.stop_typing_provider(recipient).await
     }
 }
 
@@ -1213,6 +1110,10 @@ impl crate::channel::ChannelAdapter for WhatsAppWebChannel {
             ]),
             ..Default::default()
         }
+    }
+
+    fn media_account_identity(&self) -> Option<String> {
+        self.provider_media_account_identity()
     }
 
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
@@ -1421,46 +1322,6 @@ impl WhatsAppWebChannel {
     ) -> Self {
         self.lifecycle = Some(lifecycle);
         self
-    }
-}
-
-#[cfg(not(feature = "whatsapp-web"))]
-#[async_trait]
-impl Channel for WhatsAppWebChannel {
-    fn name(&self) -> &str {
-        "whatsapp"
-    }
-
-    async fn send(&self, _message: &SendMessage) -> Result<()> {
-        anyhow::bail!(
-            "WhatsApp Web channel requires the 'whatsapp-web' feature. \
-            Enable with: cargo build --features whatsapp-web"
-        );
-    }
-
-    async fn listen(&self, _tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> Result<()> {
-        anyhow::bail!(
-            "WhatsApp Web channel requires the 'whatsapp-web' feature. \
-            Enable with: cargo build --features whatsapp-web"
-        );
-    }
-
-    async fn health_check(&self) -> bool {
-        false
-    }
-
-    async fn start_typing(&self, _recipient: &str) -> Result<()> {
-        anyhow::bail!(
-            "WhatsApp Web channel requires the 'whatsapp-web' feature. \
-            Enable with: cargo build --features whatsapp-web"
-        );
-    }
-
-    async fn stop_typing(&self, _recipient: &str) -> Result<()> {
-        anyhow::bail!(
-            "WhatsApp Web channel requires the 'whatsapp-web' feature. \
-            Enable with: cargo build --features whatsapp-web"
-        );
     }
 }
 

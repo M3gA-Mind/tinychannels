@@ -1,3 +1,6 @@
+// Scoped allowance for the one-release v21 wire DTO compatibility surface.
+#![allow(deprecated)]
+
 //! Bounded-concurrency dispatch of inbound channel messages.
 
 use std::future::Future;

@@ -1,6 +1,6 @@
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
-use crate::traits::{Channel, ChannelMessage, SendMessage};
-use anyhow::{Result, bail};
+use crate::traits::ChannelMessage;
+use anyhow::Result;
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -171,6 +171,7 @@ impl MattermostChannel {
 }
 
 impl MattermostChannel {
+    #[cfg(test)]
     async fn inbound_envelope(
         &self,
         post: &serde_json::Value,
@@ -463,53 +464,6 @@ impl MattermostChannel {
             last_create_at = next_cursor;
         }
     }
-
-    /// Post one message and return the id Mattermost assigned to it.
-    async fn post_message(&self, message: &SendMessage) -> Result<Vec<String>> {
-        // Mattermost supports threading via 'root_id'.
-        // We pack 'channel_id:root_id' into recipient if it's a thread.
-        let (channel_id, root_id) = if let Some((c, r)) = message.recipient.split_once(':') {
-            (c, Some(r))
-        } else {
-            (message.recipient.as_str(), None)
-        };
-
-        let mut body_map = serde_json::json!({
-            "channel_id": channel_id,
-            "message": message.content
-        });
-
-        if let Some(root) = root_id {
-            body_map.as_object_mut().unwrap().insert(
-                "root_id".to_string(),
-                serde_json::Value::String(root.to_string()),
-            );
-        }
-
-        let resp = self
-            .http_client()
-            .post(format!("{}/api/v4/posts", self.base_url))
-            .bearer_auth(&self.bot_token)
-            .json(&body_map)
-            .send()
-            .await?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp
-                .text()
-                .await
-                .unwrap_or_else(|e| format!("<failed to read response: {e}>"));
-            bail!("Mattermost post failed ({status}): {body}");
-        }
-
-        let ids = resp
-            .json::<serde_json::Value>()
-            .await
-            .ok()
-            .and_then(|post| post.get("id").and_then(|id| id.as_str()).map(str::to_owned));
-        Ok(ids.into_iter().collect())
-    }
 }
 
 fn valid_file_id(file_id: &str) -> bool {
@@ -517,138 +471,6 @@ fn valid_file_id(file_id: &str) -> bool {
         && file_id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-}
-
-#[async_trait]
-impl Channel for MattermostChannel {
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        crate::providers::long_tail::LongTail::declared(self)
-    }
-
-    fn name(&self) -> &str {
-        "mattermost"
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    async fn send(&self, message: &SendMessage) -> Result<()> {
-        self.post_message(message).await.map(|_| ())
-    }
-
-    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> Result<()> {
-        let channel_id = self
-            .channel_id
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("Mattermost channel_id required for listening"))?;
-
-        let (bot_user_id, bot_username) = self.get_bot_identity().await;
-        #[allow(clippy::cast_possible_truncation)]
-        let mut last_create_at = (std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()) as i64;
-
-        tracing::info!("Mattermost channel listening on {}...", channel_id);
-
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-
-            let resp = match self
-                .http_client()
-                .get(format!(
-                    "{}/api/v4/channels/{}/posts",
-                    self.base_url, channel_id
-                ))
-                .bearer_auth(&self.bot_token)
-                .query(&[("since", last_create_at.to_string())])
-                .send()
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!("Mattermost poll error: {e}");
-                    continue;
-                }
-            };
-
-            let data: serde_json::Value = match resp.json().await {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::warn!("Mattermost parse error: {e}");
-                    continue;
-                }
-            };
-
-            if let Some(posts) = data.get("posts").and_then(|p| p.as_object()) {
-                // Process in chronological order
-                let mut post_list: Vec<_> = posts.values().collect();
-                post_list.sort_by_key(|p| p.get("create_at").and_then(|c| c.as_i64()).unwrap_or(0));
-
-                for post in post_list {
-                    let msg = self.parse_mattermost_post(
-                        post,
-                        &bot_user_id,
-                        &bot_username,
-                        last_create_at,
-                        &channel_id,
-                    );
-                    let create_at = post
-                        .get("create_at")
-                        .and_then(|c| c.as_i64())
-                        .unwrap_or(last_create_at);
-                    last_create_at = last_create_at.max(create_at);
-
-                    let typed_delivered = if let Some(message) = msg.as_ref() {
-                        if let Some(envelope) =
-                            self.inbound_envelope(post, &channel_id, message).await
-                        {
-                            crate::providers::native::inbound::publish(
-                                "mattermost",
-                                self.events.as_ref(),
-                                envelope,
-                            )
-                            .await
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-
-                    if !typed_delivered
-                        && let Some(channel_msg) = msg.filter(|message| !message.content.is_empty())
-                        && tx.send(channel_msg).await.is_err()
-                    {
-                        return Ok(());
-                    }
-                }
-            }
-        }
-    }
-
-    async fn health_check(&self) -> bool {
-        self.http_client()
-            .get(format!("{}/api/v4/users/me", self.base_url))
-            .bearer_auth(&self.bot_token)
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
-    }
-
-    async fn start_typing(&self, recipient: &str) -> Result<()> {
-        self.start_typing_loop(recipient).await
-    }
-
-    async fn stop_typing(&self, _recipient: &str) -> Result<()> {
-        self.stop_typing_loop()
-    }
 }
 
 impl MattermostChannel {
@@ -975,6 +797,18 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
             );
         }
         capabilities
+    }
+
+    async fn health_state(&self) -> &'static str {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::providers::native::NativeProvider::health_state(self),
+        )
+        .await
+        {
+            Ok(state) => state,
+            Err(_) => "unhealthy",
+        }
     }
 
     fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {

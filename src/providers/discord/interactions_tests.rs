@@ -1,7 +1,6 @@
 use super::*;
-use crate::providers::discord::http::DiscordError;
+use crate::channel::{ChannelDelete, ChannelEdit, ChannelStreamingDraft};
 use crate::providers::discord::support::*;
-use crate::traits::{Channel, SendMessage};
 use serde_json::json;
 use tinychannels_bus::channel::{MessageReceiptPart, MessageReceiptPartKind};
 use tinychannels_bus::{ChannelRef, ConversationKind};
@@ -177,10 +176,8 @@ async fn edit_patches_the_message_content_and_returns_the_receipt() {
         .await;
     let original = receipt(&["10"]);
 
-    let edited = channel_for(&server)
-        .edit_message_v2(&original, &intent("new text"))
-        .await
-        .unwrap();
+    let channel = channel_for(&server);
+    let edited = channel.edit(&original, intent("new text")).await.unwrap();
 
     assert_eq!(edited, original);
     let sent = requests(&server, "PATCH").await;
@@ -201,7 +198,7 @@ async fn edit_rejects_mismatched_scope_oversize_and_non_text_before_dispatch() {
     other_conversation.conversation_id = "42".into();
     assert!(
         channel
-            .edit_message_v2(&original, &other_conversation)
+            .edit(&original, other_conversation)
             .await
             .unwrap_err()
             .message
@@ -214,27 +211,17 @@ async fn edit_rejects_mismatched_scope_oversize_and_non_text_before_dispatch() {
         kind: ConversationKind::Dm,
         ..Default::default()
     });
-    assert!(
-        channel
-            .edit_message_v2(&original, &other_ref)
-            .await
-            .is_err()
-    );
+    assert!(channel.edit(&original, other_ref).await.is_err());
 
     let mut other_account = intent("x");
     other_account.channel_ref = Some(ChannelRef {
         id: "discord".into(),
         account_id: Some("other".into()),
     });
-    assert!(
-        channel
-            .edit_message_v2(&original, &other_account)
-            .await
-            .is_err()
-    );
+    assert!(channel.edit(&original, other_account).await.is_err());
 
     let too_long = channel
-        .edit_message_v2(&original, &intent(&"a".repeat(2001)))
+        .edit(&original, intent(&"a".repeat(2001)))
         .await
         .unwrap_err();
     assert_eq!(too_long.kind, SendErrorKind::TooLong);
@@ -242,7 +229,7 @@ async fn edit_rejects_mismatched_scope_oversize_and_non_text_before_dispatch() {
     let buttons = parts_intent(vec![content(ContentPart::Buttons { rows: vec![] })]);
     assert!(
         channel
-            .edit_message_v2(&original, &buttons)
+            .edit(&original, buttons)
             .await
             .unwrap_err()
             .message
@@ -251,12 +238,7 @@ async fn edit_rejects_mismatched_scope_oversize_and_non_text_before_dispatch() {
 
     let mut unscoped = receipt(&["10"]);
     unscoped.conversation = None;
-    assert!(
-        channel
-            .edit_message_v2(&unscoped, &intent("x"))
-            .await
-            .is_err()
-    );
+    assert!(channel.edit(&unscoped, intent("x")).await.is_err());
     assert!(requests(&server, "PATCH").await.is_empty());
 }
 
@@ -277,7 +259,7 @@ async fn delete_removes_every_message_of_the_receipt_and_tolerates_missing_ones(
         .await;
 
     channel_for(&server)
-        .delete_message_v2(&receipt(&["10", "11"]))
+        .delete(&receipt(&["10", "11"]))
         .await
         .unwrap();
 
@@ -292,18 +274,11 @@ async fn delete_surfaces_real_failures() {
         .mount(&server)
         .await;
 
-    let error = channel_for(&server)
-        .delete_message_v2(&receipt(&["10"]))
-        .await
-        .unwrap_err();
+    let channel = channel_for(&server);
+    let error = channel.delete(&receipt(&["10"])).await.unwrap_err();
 
     assert_eq!(error.kind, SendErrorKind::Forbidden);
-    assert!(
-        channel_for(&server)
-            .delete_message_v2(&receipt(&[]))
-            .await
-            .is_err()
-    );
+    assert!(channel.delete(&receipt(&[])).await.is_err());
 }
 
 // ── reactions and typing ──────────────────────────────────────
@@ -491,10 +466,8 @@ async fn a_failed_draft_create_is_an_error_not_a_receipt() {
     assert_eq!(error.kind, SendErrorKind::Forbidden);
 }
 
-// ── legacy streaming path ─────────────────────────────────────
-
 #[tokio::test]
-async fn legacy_drafts_create_update_with_throttling_and_finalize_with_overflow() {
+async fn typed_drafts_create_update_and_clip_to_provider_limit() {
     let server = MockServer::start().await;
     mount_message_post(&server, 400).await;
     Mock::given(method("PATCH"))
@@ -503,75 +476,47 @@ async fn legacy_drafts_create_update_with_throttling_and_finalize_with_overflow(
         .await;
     let channel = channel_for(&server);
 
-    let id = channel
-        .send_draft(&SendMessage::new("", CHANNEL))
+    let created = ChannelStreamingDraft::upsert_draft(&channel, None, intent("draft"))
         .await
-        .unwrap()
-        .expect("draft id");
-    assert_eq!(id, "400");
+        .unwrap();
+    assert_eq!(created.primary_platform_message_id.as_deref(), Some("400"));
     assert_eq!(
         body_json(&requests(&server, "POST").await[0])["content"],
-        "..."
+        "draft"
     );
 
-    // The create just marked the channel, so an immediate edit is skipped.
-    channel.update_draft(CHANNEL, &id, "partial").await.unwrap();
-    assert!(requests(&server, "PATCH").await.is_empty());
-    channel.last_draft_edit.lock().clear();
-    channel.update_draft(CHANNEL, &id, "partial").await.unwrap();
-    assert_eq!(requests(&server, "PATCH").await.len(), 1);
-    // Blank text never reaches Discord.
-    channel.last_draft_edit.lock().clear();
-    channel.update_draft(CHANNEL, &id, "  ").await.unwrap();
+    let updated = ChannelStreamingDraft::upsert_draft(&channel, Some(&created), intent("partial"))
+        .await
+        .unwrap();
     assert_eq!(requests(&server, "PATCH").await.len(), 1);
 
-    // Finalize edits the first 2000 characters and posts the remainder.
-    channel
-        .finalize_draft(CHANNEL, &id, &"word ".repeat(700), None)
+    let long = "word ".repeat(700);
+    ChannelStreamingDraft::upsert_draft(&channel, Some(&updated), intent(&long))
         .await
         .unwrap();
     assert_eq!(requests(&server, "PATCH").await.len(), 2);
-    assert_eq!(requests(&server, "POST").await.len(), 2);
-    channel
-        .finalize_draft(CHANNEL, &id, " ", None)
-        .await
-        .unwrap();
-    assert_eq!(requests(&server, "PATCH").await.len(), 2);
+    let patch = body_json(&requests(&server, "PATCH").await[1]);
+    assert!(patch["content"].as_str().unwrap().len() <= 2000);
+    assert_eq!(requests(&server, "POST").await.len(), 1);
+    assert!(
+        ChannelStreamingDraft::upsert_draft(&channel, Some(&created), intent(" "))
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
-async fn legacy_draft_errors_carry_the_typed_discord_error() {
+async fn typed_draft_update_errors_preserve_provider_status() {
     let server = MockServer::start().await;
     Mock::given(method("PATCH"))
         .respond_with(ResponseTemplate::new(404).set_body_json(json!({"code": 10008})))
         .mount(&server)
         .await;
-    Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"nope": 1})))
-        .mount(&server)
-        .await;
     let channel = channel_for(&server);
 
-    let error = channel
-        .finalize_draft(CHANNEL, "1", "x", None)
+    let previous = receipt(&["1"]);
+    let error = ChannelStreamingDraft::upsert_draft(&channel, Some(&previous), intent("x"))
         .await
         .unwrap_err();
-    let typed = error
-        .downcast_ref::<DiscordError>()
-        .expect("typed error survives anyhow");
-    assert_eq!(typed.0.kind, SendErrorKind::NotFound);
-    assert!(
-        channel
-            .send_draft(&SendMessage::new("x", "bad id"))
-            .await
-            .is_err()
-    );
-    assert!(
-        channel
-            .send_draft(&SendMessage::new("x", CHANNEL))
-            .await
-            .is_err()
-    );
-    channel.last_draft_edit.lock().clear();
-    assert!(channel.update_draft(CHANNEL, "1", "x").await.is_err());
+    assert_eq!(error.kind, SendErrorKind::NotFound);
 }

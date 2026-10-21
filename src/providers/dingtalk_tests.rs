@@ -1,9 +1,40 @@
 use super::*;
+use crate::channel::ChannelAdapter;
+use crate::traits::SendMessage;
+
+struct DingTalkInboundRecorder(
+    tokio::sync::mpsc::UnboundedSender<tinychannels_bus::ChannelIngress>,
+);
+
+#[async_trait::async_trait]
+impl crate::channel::ChannelInboundSink for DingTalkInboundRecorder {
+    async fn push(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.0
+            .send(ingress)
+            .map_err(|_| tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "DingTalk test sink is closed".into(),
+                retryable: true,
+                ..Default::default()
+            })
+    }
+}
+
+fn dingtalk_inbound_sink() -> (
+    std::sync::Arc<DingTalkInboundRecorder>,
+    tokio::sync::mpsc::UnboundedReceiver<tinychannels_bus::ChannelIngress>,
+) {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    (std::sync::Arc::new(DingTalkInboundRecorder(tx)), rx)
+}
 
 #[test]
 fn test_name() {
     let ch = DingTalkChannel::new("id".into(), "secret".into(), vec![]);
-    assert_eq!(ch.name(), "dingtalk");
+    assert_eq!(ch.descriptor().id, "dingtalk");
 }
 
 #[test]
@@ -106,14 +137,13 @@ async fn gateway_registration_and_webhook_replies_preserve_payloads_and_errors()
         (gateway.endpoint.as_str(), gateway.ticket.as_str()),
         ("ws://localhost/stream", "ticket")
     );
-    assert!(channel.health_check().await);
+    assert!(crate::provider_test_support::is_healthy(&channel).await);
     assert!(
-        channel
-            .send(&SendMessage::new("reply", "unknown"))
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("reply", "unknown"))
             .await
             .unwrap_err()
             .to_string()
-            .contains("No session webhook")
+            .contains("admitted App Bot conversation")
     );
 
     let webhook = MockServer::start().await;
@@ -126,12 +156,11 @@ async fn gateway_registration_and_webhook_replies_preserve_payloads_and_errors()
         .and(body_json(
             json!({"msgtype": "markdown", "markdown": {"title": "OpenHuman", "text": "reply"}}),
         ))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"errcode": 0})))
         .expect(1)
         .mount(&webhook)
         .await;
-    channel
-        .send(&SendMessage::new("reply", "room"))
+    crate::provider_test_support::send_v1(&channel, &SendMessage::new("reply", "room"))
         .await
         .unwrap();
     let mut reply = SendMessage::new("custom", "room");
@@ -144,21 +173,23 @@ async fn gateway_registration_and_webhook_replies_preserve_payloads_and_errors()
         .expect(1)
         .mount(&webhook)
         .await;
-    assert!(
-        channel
-            .send(&reply)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("denied")
-    );
+    let error = crate::provider_test_support::send_v1(&channel, &reply)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("DingTalk webhook reply was rejected"));
+    assert!(!error.contains("denied"));
     webhook.verify().await;
     channel
         .session_webhooks
         .write()
         .await
         .insert("room".into(), "http://127.0.0.1:0".into());
-    assert!(channel.send(&reply).await.is_err());
+    assert!(
+        crate::provider_test_support::send_v1(&channel, &reply)
+            .await
+            .is_err()
+    );
 
     for (status, body) in [(403, "denied"), (200, "invalid json")] {
         let server = HttpsServer::start(move |_| (status, body.into())).await;
@@ -169,14 +200,14 @@ async fn gateway_registration_and_webhook_replies_preserve_payloads_and_errors()
             server.client.clone(),
         );
         assert!(channel.register_connection().await.is_err());
-        assert!(!channel.health_check().await);
+        assert!(!crate::provider_test_support::is_healthy(&channel).await);
     }
     let client = reqwest::Client::builder()
         .proxy(reqwest::Proxy::all("http://127.0.0.1:0").unwrap())
         .build()
         .unwrap();
     let channel = DingTalkChannel::with_http_client("id".into(), "secret".into(), vec![], client);
-    assert!(!channel.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&channel).await);
 }
 
 #[tokio::test]
@@ -246,7 +277,7 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
             ("EVENT", "2", "group", " first "),
             ("CALLBACK", "1", "private", "second"),
         ] {
-            let data = json!({"senderStaffId": "alice", "conversationType": conversation_type, "conversationId": "group-id", "text": {"content": content}, "sessionWebhook": format!("https://example.test/{id}")});
+            let data = json!({"msgId": id, "senderStaffId": "alice", "conversationType": conversation_type, "conversationId": "group-id", "text": {"content": content}, "sessionWebhook": format!("https://example.test/{id}")});
             let data = if kind == "EVENT" {
                 data
             } else {
@@ -265,15 +296,22 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
             assert_eq!(ack["code"], 200);
         }
         release_rx.await.unwrap();
-        // The next valid message makes the listener observe the closed receiver.
-        ws.send(Message::Text(json!({"type": "CALLBACK", "data": {"senderStaffId": "alice", "text": {"content": "closed"}}}).to_string().into())).await.unwrap();
-        let ack: serde_json::Value =
-            serde_json::from_str(&ws.next().await.unwrap().unwrap().to_string()).unwrap();
-        assert_eq!(ack["headers"]["messageId"], "");
+        // A callback rejected by the supplied sink must not be acknowledged;
+        // DingTalk can retry it after the host has recovered.
+        ws.send(Message::Text(json!({"type": "CALLBACK", "data": {"msgId": "closed", "senderStaffId": "alice", "text": {"content": "closed"}}}).to_string().into())).await.unwrap();
+        let terminal = tokio::time::timeout(std::time::Duration::from_secs(3), ws.next())
+            .await
+            .expect("rejected typed delivery should close the stream");
+        assert!(matches!(
+            terminal,
+            None | Some(Err(_)) | Some(Ok(Message::Close(_)))
+        ));
     });
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let listening_channel = channel.clone();
-    let listening = tokio::spawn(async move { listening_channel.listen(tx).await });
+    let listening = tokio::spawn(async move {
+        crate::provider_test_support::listen_v1(listening_channel.as_ref(), tx).await
+    });
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         let first = rx.recv().await.unwrap();
         let second = rx.recv().await.unwrap();
@@ -286,22 +324,15 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
             ),
             ("alice", "group-id", "first", "dingtalk")
         );
-        assert!(Uuid::parse_str(&first.id).is_ok());
+        assert_eq!(first.id, "group");
         assert!(first.timestamp > 0);
         assert_eq!(
             (second.reply_target.as_str(), second.content.as_str()),
-            ("alice", "second")
+            ("group-id", "second")
         );
         drop(rx);
         release_tx.send(()).unwrap();
-        assert!(
-            listening
-                .await
-                .unwrap()
-                .unwrap_err()
-                .to_string()
-                .contains("stream ended")
-        );
+        assert!(listening.await.unwrap().is_err());
         websocket.await.unwrap();
     })
     .await
@@ -320,7 +351,7 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
 #[tokio::test]
 async fn stream_file_callback_downloads_and_publishes_typed_ingress_once() {
     use super::super::http_test_support::HttpsServer;
-    use crate::providers::native::fixtures::{RecordingEvents, StubMedia};
+    use crate::providers::native::fixtures::StubMedia;
     use serde_json::json;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -354,7 +385,7 @@ async fn stream_file_callback_downloads_and_publishes_typed_ingress_once() {
     )
     .await;
     let media = Arc::new(StubMedia::default());
-    let events = Arc::new(RecordingEvents::delivering());
+    let (sink, mut ingress_rx) = dingtalk_inbound_sink();
     let channel = Arc::new(
         DingTalkChannel::with_http_client(
             "id".into(),
@@ -363,8 +394,7 @@ async fn stream_file_callback_downloads_and_publishes_typed_ingress_once() {
             server.client.clone(),
         )
         .with_attachment_http_client(server.client.clone())
-        .with_media_repository(media.clone())
-        .with_events(events.clone()),
+        .with_media_repository(media.clone()),
     );
     let websocket = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
@@ -410,9 +440,10 @@ async fn stream_file_callback_downloads_and_publishes_typed_ingress_once() {
         assert_eq!(ack["headers"]["messageId"], "stream-frame-17");
         ws.close(None).await.unwrap();
     });
-    let (tx, mut legacy) = tokio::sync::mpsc::channel(1);
     let listening_channel = channel.clone();
-    let listening = tokio::spawn(async move { listening_channel.listen(tx).await });
+    let listening_sink = sink.clone();
+    let listening =
+        tokio::spawn(async move { listening_channel.start(listening_sink.as_ref()).await });
 
     websocket.await.unwrap();
     assert!(
@@ -422,21 +453,23 @@ async fn stream_file_callback_downloads_and_publishes_typed_ingress_once() {
             .unwrap()
             .is_err()
     );
-    let ingress = events.inbound();
-    assert_eq!(ingress.len(), 1);
-    assert_eq!(ingress[0].message_id, "provider-message-42");
-    assert_eq!(ingress[0].conversation.id, "open-conversation-9");
-    assert_eq!(ingress[0].sender.id, "alice");
+    let Some(tinychannels_bus::ChannelIngress::Inbound(ingress)) = ingress_rx.try_recv().ok()
+    else {
+        panic!("typed DingTalk callback should reach the supplied sink");
+    };
+    assert_eq!(ingress.message_id, "provider-message-42");
+    assert_eq!(ingress.conversation.id, "open-conversation-9");
+    assert_eq!(ingress.sender.id, "alice");
     assert!(matches!(
-        &ingress[0].parts[0],
+        &ingress.parts[0],
         tinychannels_bus::ContentPart::File {
             file_name: Some(name),
             ..
         } if name == "report.pdf"
     ));
     assert!(
-        legacy.try_recv().is_err(),
-        "typed acceptance must not duplicate via legacy ingress"
+        ingress_rx.try_recv().is_err(),
+        "one callback yields one typed event"
     );
     let stored = media.stored.lock().unwrap();
     assert_eq!(stored.len(), 1);
@@ -454,7 +487,7 @@ async fn stream_file_callback_downloads_and_publishes_typed_ingress_once() {
 #[tokio::test]
 async fn stream_audio_callback_stores_provider_voice_and_acknowledges_frame() {
     use super::super::http_test_support::HttpsServer;
-    use crate::providers::native::fixtures::{RecordingEvents, StubVoice};
+    use crate::providers::native::fixtures::StubVoice;
     use base64::Engine as _;
     use serde_json::json;
 
@@ -492,7 +525,7 @@ async fn stream_audio_callback_stores_provider_voice_and_acknowledges_frame() {
     )
     .await;
     let voice = Arc::new(StubVoice::default());
-    let events = Arc::new(RecordingEvents::delivering());
+    let (sink, mut ingress_rx) = dingtalk_inbound_sink();
     let channel = Arc::new(
         DingTalkChannel::with_http_client(
             "id".into(),
@@ -501,10 +534,9 @@ async fn stream_audio_callback_stores_provider_voice_and_acknowledges_frame() {
             server.client.clone(),
         )
         .with_attachment_http_client(server.client.clone())
-        .with_voice_media_store(voice.clone())
-        .with_events(events.clone()),
+        .with_voice_media_store(voice.clone()),
     );
-    assert!(channel.capabilities().voice_in.supported);
+    assert!(channel.declared_capabilities().voice_in.supported);
 
     let websocket = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
@@ -562,9 +594,10 @@ async fn stream_audio_callback_stores_provider_voice_and_acknowledges_frame() {
         assert_eq!(duplicate_ack["headers"]["messageId"], "voice-frame-9");
         ws.close(None).await.unwrap();
     });
-    let (tx, mut legacy) = tokio::sync::mpsc::channel(1);
     let listening_channel = channel.clone();
-    let listening = tokio::spawn(async move { listening_channel.listen(tx).await });
+    let listening_sink = sink.clone();
+    let listening =
+        tokio::spawn(async move { listening_channel.start(listening_sink.as_ref()).await });
 
     websocket.await.unwrap();
     assert!(
@@ -574,12 +607,13 @@ async fn stream_audio_callback_stores_provider_voice_and_acknowledges_frame() {
             .unwrap()
             .is_err()
     );
-    let inbound = events.inbound();
-    assert_eq!(inbound.len(), 1);
-    assert_eq!(inbound[0].message_id, "voice-message-8");
-    assert_eq!(inbound[0].conversation.id, "dm-a");
-    let [tinychannels_bus::ContentPart::VoiceNote { voice_note }] = inbound[0].parts.as_slice()
+    let Some(tinychannels_bus::ChannelIngress::Inbound(inbound)) = ingress_rx.try_recv().ok()
     else {
+        panic!("typed DingTalk audio callback should reach the supplied sink");
+    };
+    assert_eq!(inbound.message_id, "voice-message-8");
+    assert_eq!(inbound.conversation.id, "dm-a");
+    let [tinychannels_bus::ContentPart::VoiceNote { voice_note }] = inbound.parts.as_slice() else {
         panic!("DingTalk audio must be accepted as typed voice content");
     };
     assert_eq!(voice_note.transcript.as_ref().unwrap().text, "turn left");
@@ -587,7 +621,7 @@ async fn stream_audio_callback_stores_provider_voice_and_acknowledges_frame() {
         voice_note.transcript.as_ref().unwrap().source,
         tinychannels_bus::VoiceTranscriptSource::Provider
     );
-    assert!(legacy.try_recv().is_err());
+    assert!(ingress_rx.try_recv().is_err());
 
     let stored = voice.stored.lock().unwrap();
     assert_eq!(stored.len(), 1);
@@ -607,7 +641,7 @@ async fn stream_audio_callback_stores_provider_voice_and_acknowledges_frame() {
 #[tokio::test]
 async fn unauthorized_attachment_callback_is_not_downloaded_or_published() {
     use super::super::http_test_support::HttpsServer;
-    use crate::providers::native::fixtures::{RecordingEvents, StubMedia};
+    use crate::providers::native::fixtures::StubMedia;
     use serde_json::json;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -626,7 +660,7 @@ async fn unauthorized_attachment_callback_is_not_downloaded_or_published() {
     )
     .await;
     let media = Arc::new(StubMedia::default());
-    let events = Arc::new(RecordingEvents::delivering());
+    let (sink, mut ingress_rx) = dingtalk_inbound_sink();
     let channel = Arc::new(
         DingTalkChannel::with_http_client(
             "id".into(),
@@ -635,8 +669,7 @@ async fn unauthorized_attachment_callback_is_not_downloaded_or_published() {
             server.client.clone(),
         )
         .with_attachment_http_client(server.client.clone())
-        .with_media_repository(media.clone())
-        .with_events(events.clone()),
+        .with_media_repository(media.clone()),
     );
     let websocket = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
@@ -670,9 +703,10 @@ async fn unauthorized_attachment_callback_is_not_downloaded_or_published() {
         .unwrap();
         ws.close(None).await.unwrap();
     });
-    let (tx, _legacy) = tokio::sync::mpsc::channel(1);
     let listening_channel = channel.clone();
-    let listening = tokio::spawn(async move { listening_channel.listen(tx).await });
+    let listening_sink = sink.clone();
+    let listening =
+        tokio::spawn(async move { listening_channel.start(listening_sink.as_ref()).await });
     websocket.await.unwrap();
     assert!(
         tokio::time::timeout(std::time::Duration::from_secs(3), listening)
@@ -681,7 +715,7 @@ async fn unauthorized_attachment_callback_is_not_downloaded_or_published() {
             .unwrap()
             .is_err()
     );
-    assert!(events.inbound().is_empty());
+    assert!(ingress_rx.try_recv().is_err());
     assert!(media.stored.lock().unwrap().is_empty());
     let requests = server.requests.lock().unwrap();
     assert_eq!(requests.len(), 1, "only gateway registration is expected");

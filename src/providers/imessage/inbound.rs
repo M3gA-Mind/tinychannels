@@ -6,8 +6,11 @@ use super::db::{self, AttachmentRow, InboundRow, ReadRow};
 use super::native::{IMESSAGE_MAX_FILE_BYTES, IMESSAGE_MAX_VOICE_BYTES};
 use crate::providers::native::SeenReservationResult;
 use crate::providers::native::inbound::{
-    InboundFile, Ingest, Ingested, assemble, channel_event, media_of, publish, publish_event,
+    InboundFile, Ingest, Ingested, assemble, channel_event, media_of,
 };
+#[cfg(test)]
+use crate::providers::native::inbound::{publish, publish_event};
+#[cfg(test)]
 use crate::traits::ChannelMessage;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -15,7 +18,9 @@ use tinychannels_bus::{
     ChannelEventKind, ChannelInboundEnvelope, ChannelIngress, ChannelRef, ConversationKind,
     ConversationRef, SenderRef,
 };
-use tokio::sync::{mpsc, watch};
+#[cfg(test)]
+use tokio::sync::mpsc;
+use tokio::sync::watch;
 
 fn imessage_ref() -> ChannelRef {
     ChannelRef {
@@ -184,6 +189,7 @@ impl IMessageChannel {
         }
     }
 
+    #[cfg(test)]
     async fn dispatch_tapback(&self, row: &InboundRow, emoji: &str, removed: bool) {
         let Some(target) = row.associated_guid.as_deref().map(db::target_guid) else {
             return;
@@ -232,6 +238,7 @@ impl IMessageChannel {
 
     /// Handle one inbound row. False when the legacy receiver is gone and the
     /// listener should stop.
+    #[cfg(test)]
     pub(super) async fn dispatch_row(
         &self,
         row: InboundRow,
@@ -515,6 +522,7 @@ impl IMessageChannel {
     }
 
     /// Publish a read receipt for one of our messages.
+    #[cfg(test)]
     pub(super) async fn dispatch_read(&self, row: ReadRow) {
         if !self.is_contact_allowed(&row.recipient) {
             return;

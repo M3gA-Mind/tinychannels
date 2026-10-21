@@ -3,7 +3,7 @@
 //!
 //! Outbound text, attachments and voice clips go through the REST API.
 //! Inbound traffic is a signed webhook: the host forwards each raw POST to
-//! [`Channel::deliver_webhook`], which authenticates the exact bytes, downloads
+//! [`ChannelAdapter::deliver_webhook`](crate::channel::ChannelAdapter::deliver_webhook), which authenticates the exact bytes, downloads
 //! media, stores voice notes and publishes on the ordered ingress path.
 
 mod capabilities;
@@ -12,8 +12,7 @@ mod native;
 
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::native::HostPorts as NativeState;
-use crate::traits::{Channel, ChannelMessage, SendMessage};
-use async_trait::async_trait;
+use crate::traits::ChannelMessage;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -293,160 +292,6 @@ impl LinqChannel {
         });
 
         messages
-    }
-}
-
-#[async_trait]
-impl Channel for LinqChannel {
-    fn name(&self) -> &str {
-        "linq"
-    }
-
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.declared()
-    }
-
-    async fn send_typed_with_receipt(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<crate::channel::ChannelSendOutcome> {
-        crate::providers::native::outbound::send_typed(self, message)
-            .await
-            .map_err(crate::providers::native::to_anyhow)
-    }
-
-    async fn deliver_webhook(
-        &self,
-        signature: Option<&str>,
-        body: &[u8],
-    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
-        self.ingest_webhook(signature, body).await
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        // If reply_target looks like a chat_id, send to existing chat.
-        // Otherwise create a new chat with the recipient phone number.
-        let recipient = &message.recipient;
-
-        let body = serde_json::json!({
-            "message": {
-                "parts": [{
-                    "type": "text",
-                    "value": message.content
-                }]
-            }
-        });
-
-        // Try sending to existing chat (recipient is chat_id)
-        let url = format!("{}/chats/{recipient}/messages", self.api_base);
-
-        let resp = self
-            .http_client()
-            .post(&url)
-            .bearer_auth(&self.api_token)
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
-
-        if resp.status().is_success() {
-            return Ok(());
-        }
-
-        // If the chat_id-based send failed with 404, try creating a new chat
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            let new_chat_body = serde_json::json!({
-                "from": self.from_phone,
-                "to": [recipient],
-                "message": {
-                    "parts": [{
-                        "type": "text",
-                        "value": message.content
-                    }]
-                }
-            });
-
-            let create_resp = self
-                .http_client()
-                .post(format!("{}/chats", self.api_base))
-                .bearer_auth(&self.api_token)
-                .header("Content-Type", "application/json")
-                .json(&new_chat_body)
-                .send()
-                .await?;
-
-            if !create_resp.status().is_success() {
-                let status = create_resp.status();
-                let error_body = create_resp.text().await.unwrap_or_default();
-                tracing::error!("Linq create chat failed: {status} — {error_body}");
-                anyhow::bail!("Linq API error: {status}");
-            }
-
-            return Ok(());
-        }
-
-        let status = resp.status();
-        let error_body = resp.text().await.unwrap_or_default();
-        tracing::error!("Linq send failed: {status} — {error_body}");
-        anyhow::bail!("Linq API error: {status}");
-    }
-
-    async fn listen(&self, _tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        // Linq uses webhooks (push-based), not polling.
-        tracing::info!(
-            "Linq channel active (webhook mode). \
-            Configure Linq to POST webhook events to your deployed HTTPS webhook URL."
-        );
-
-        // Keep the task alive — it will be cancelled when the channel shuts down
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-        }
-    }
-
-    async fn health_check(&self) -> bool {
-        self.health_probe().await
-    }
-
-    async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        let url = format!("{}/chats/{recipient}/typing", self.api_base);
-
-        let resp = self
-            .http_client()
-            .post(&url)
-            .bearer_auth(&self.api_token)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            tracing::debug!("Linq start_typing failed: {}", resp.status());
-        }
-
-        Ok(())
-    }
-
-    async fn stop_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        let url = format!("{}/chats/{recipient}/typing", self.api_base);
-
-        let resp = self
-            .http_client()
-            .delete(&url)
-            .bearer_auth(&self.api_token)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            tracing::debug!("Linq stop_typing failed: {}", resp.status());
-        }
-
-        Ok(())
     }
 }
 

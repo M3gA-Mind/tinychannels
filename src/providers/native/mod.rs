@@ -15,7 +15,7 @@ pub(crate) mod inbound;
 pub(crate) mod outbound;
 
 pub(crate) use edit::{delete, edit, upsert_draft};
-pub(crate) use outbound::{Sent, Step, Target, to_anyhow};
+pub(crate) use outbound::{Sent, Step, Target};
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
@@ -51,14 +51,17 @@ pub(crate) fn pre_dispatch(message: &str) -> ChannelSendError {
 /// A typed send failure carried through `anyhow` so legacy `Channel` callers
 /// can recover the structured error by downcast.
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) struct NativeFailure(pub(crate) ChannelSendError);
 
+#[cfg(test)]
 impl std::fmt::Display for NativeFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.0.message)
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for NativeFailure {}
 
 /// The host ports every native adapter can use, and its inbound dedupe window.
@@ -217,6 +220,37 @@ pub(crate) trait NativeProvider: Send + Sync {
     }
     /// Send one resolved step and report the message ids the platform issued.
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError>;
+
+    /// Begin a provider-specific streaming draft lifecycle. Providers that
+    /// only support the generic edit/upsert lifecycle keep the default
+    /// unsupported result.
+    async fn start_draft(
+        &self,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<Option<String>, ChannelSendError> {
+        Err(unsupported(&format!("{} draft start", self.display())))
+    }
+
+    /// Update a provider-specific draft without publishing it.
+    async fn update_draft(
+        &self,
+        _draft_id: &str,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<(), ChannelSendError> {
+        Err(unsupported(&format!("{} draft update", self.display())))
+    }
+
+    /// Publish or otherwise finalize a provider-specific draft.
+    async fn finalize_draft(
+        &self,
+        _draft_id: &str,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<(), ChannelSendError> {
+        Err(unsupported(&format!(
+            "{} draft finalization",
+            self.display()
+        )))
+    }
 
     /// Optional raw webhook delivery owned by the provider. The default keeps
     /// existing providers on their compatibility ingress until migrated.
@@ -491,6 +525,31 @@ macro_rules! native_v2_adapter {
 
         #[async_trait::async_trait]
         impl $crate::channel::ChannelStreamingDraft for $ty {
+            async fn start_draft(
+                &self,
+                intent: tinychannels_bus::ChannelOutboundIntent,
+            ) -> Result<Option<String>, tinychannels_bus::channel::ChannelSendError> {
+                $crate::providers::native::NativeProvider::start_draft(self, intent).await
+            }
+
+            async fn update_draft(
+                &self,
+                draft_id: &str,
+                intent: tinychannels_bus::ChannelOutboundIntent,
+            ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+                $crate::providers::native::NativeProvider::update_draft(self, draft_id, intent)
+                    .await
+            }
+
+            async fn finalize_draft(
+                &self,
+                draft_id: &str,
+                intent: tinychannels_bus::ChannelOutboundIntent,
+            ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+                $crate::providers::native::NativeProvider::finalize_draft(self, draft_id, intent)
+                    .await
+            }
+
             async fn upsert_draft(
                 &self,
                 previous: Option<&tinychannels_bus::channel::MessageReceipt>,

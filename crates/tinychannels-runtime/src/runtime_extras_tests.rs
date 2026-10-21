@@ -1,16 +1,15 @@
+// Scoped allowance for the one-release v21 wire DTO compatibility surface.
+#![allow(deprecated)]
+
 //! Tests for the session, dispatch and health helpers.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
-
-use crate::traits::{Channel, ChannelMessage, SendMessage};
-use async_trait::async_trait;
 
 use super::*;
 
-fn message(id: &str) -> ChannelMessage {
-    ChannelMessage {
+fn message(id: &str) -> tinychannels_bus::ChannelMessage {
+    tinychannels_bus::ChannelMessage {
         id: id.into(),
         sender: "alice".into(),
         reply_target: "chat".into(),
@@ -105,47 +104,4 @@ fn runtime_message_keeps_envelope_only_when_given() {
     let envelope = crate::channel::inbound_envelope_from_legacy_message(&message("2"));
     let relayed = RuntimeChannelMessage::with_inbound_envelope(message("2"), envelope);
     assert!(relayed.inbound_envelope.is_some());
-}
-
-struct Health(Option<bool>);
-
-#[async_trait]
-impl Channel for Health {
-    fn name(&self) -> &str {
-        match self.0 {
-            Some(true) => "up",
-            Some(false) => "down",
-            None => "hang",
-        }
-    }
-    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn listen(&self, _tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn health_check(&self) -> bool {
-        match self.0 {
-            Some(ok) => ok,
-            None => std::future::pending().await,
-        }
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn health_checks_classify_healthy_unhealthy_and_timeout() {
-    let channels: Vec<Arc<dyn Channel>> = vec![
-        Arc::new(Health(Some(true))),
-        Arc::new(Health(Some(false))),
-        Arc::new(Health(None)),
-    ];
-    let results = check_channels_health(&channels, Duration::from_secs(10)).await;
-    assert_eq!(
-        results,
-        vec![
-            ("up".to_string(), ChannelHealthState::Healthy),
-            ("down".to_string(), ChannelHealthState::Unhealthy),
-            ("hang".to_string(), ChannelHealthState::Timeout),
-        ]
-    );
 }

@@ -549,6 +549,8 @@ fn build_long_tail_channel_inner(
                 dt.allowed_users.clone(),
                 http.client_for("channel.dingtalk"),
             );
+            channel =
+                channel.with_attachment_http_client(http.client_for("channel.dingtalk.media"));
             if let Some(repository) = host.and_then(|host| host.media_repository()) {
                 channel = channel.with_media_repository(repository);
             }

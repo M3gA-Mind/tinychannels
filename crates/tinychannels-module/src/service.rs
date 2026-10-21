@@ -124,7 +124,8 @@ impl WhatsAppNative {
     /// Web learns its account from the linked session; bind the media scope to it.
     fn bind_media_authority(&self, scope: &crate::provider::MediaScope) {
         if let Self::Web(channel) = self {
-            scope.bind_source(channel.clone());
+            let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = channel.clone();
+            scope.bind_source(&adapter);
         }
     }
 
@@ -952,19 +953,17 @@ impl Channels {
                 (intent, legacy_message)
             }
             ChannelMessagePreparation::Typed(message) => {
-                let mut intent = tinychannels::outbound_intent_from_send_message(channel, &message);
-                // Keep the legacy JSON projection and its deterministic key for
-                // existing callers, but do not label a typed SendMessage as
-                // arbitrary provider-native data. V22 providers consume this
-                // compatibility input as canonical text. Subject-bearing
-                // messages keep their legacy payload for mail-style providers.
+                let mut intent =
+                    tinychannels::outbound_intent_from_send_message(&channel, &message);
+                // Keep the legacy JSON projection and deterministic key for
+                // existing callers, but immediately convert the DTO into the
+                // canonical text payload. Only providers that historically
+                // consumed `subject` receive its text convention.
                 let legacy_message =
                     tinychannels::legacy_message_value_from_outbound_intent(&intent);
-                if message.subject.is_none() {
-                    intent.payload = tinychannels_bus::OutboundPayload::Text {
-                        text: message.content,
-                    };
-                }
+                intent.payload = tinychannels_bus::OutboundPayload::Text {
+                    text: super::interaction::compatibility_text(&channel, &message),
+                };
                 (intent, legacy_message)
             }
             ChannelMessagePreparation::Intent(intent) => {
@@ -1058,13 +1057,31 @@ impl Channels {
     /// This v1 wire method is retained for existing callers; adapt it to the
     /// typed outbound contract immediately at the module boundary.
     async fn send_message(&self, name: String, message: SendMessage) -> BusResult<()> {
-        let mut intent = tinychannels::outbound_intent_from_send_message(&name, &message);
-        if message.subject.is_none() {
-            intent.payload = tinychannels_bus::OutboundPayload::Text {
-                text: message.content,
-            };
+        let mut message = message;
+        if message.recipient.trim().is_empty() {
+            let configured_target = self
+                .running
+                .lock()
+                .await
+                .get(&name)
+                .filter(|entry| !entry.is_finished())
+                .and_then(|entry| entry.proactive_target());
+            if let Some(target) = configured_target {
+                message.recipient = target;
+            }
         }
-        self.send_channel_intent(name, intent).await.map(|_| ())
+        let mut intent = tinychannels::outbound_intent_from_send_message(&name, &message);
+        intent.payload = tinychannels_bus::OutboundPayload::Text {
+            text: super::interaction::compatibility_text(&name, &message),
+        };
+        let result = self.send_channel_intent(name, intent).await?;
+        if let Some(error) = result.error {
+            return Err(BusError::MethodFailed {
+                name: SEND_FAILED_ERROR.to_owned(),
+                message: error.message,
+            });
+        }
+        Ok(())
     }
 
     /// Run provider interactions in the same bounded actor queue as sends.

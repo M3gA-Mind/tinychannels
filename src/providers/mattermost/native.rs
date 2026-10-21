@@ -47,6 +47,20 @@ impl NativeProvider for MattermostChannel {
         true
     }
 
+    async fn health_state(&self) -> &'static str {
+        let healthy = self
+            .http_client()
+            .get(format!(
+                "{}/api/v4/users/me",
+                self.base_url.trim_end_matches('/')
+            ))
+            .bearer_auth(&self.bot_token)
+            .send()
+            .await
+            .is_ok_and(|response| response.status().is_success());
+        if healthy { "healthy" } else { "unhealthy" }
+    }
+
     fn declared_capabilities(&self) -> ChannelCapabilities {
         self.declared()
     }
@@ -348,7 +362,7 @@ impl MattermostChannel {
             })?;
         let status = response.status();
         if !status.is_success() {
-            return Err(http_error(status, "post", true));
+            return Err(mattermost_status_error(&response, "post", true));
         }
         response
             .json::<serde_json::Value>()
@@ -429,7 +443,11 @@ fn mattermost_status_error(
         } else {
             SendErrorKind::BadFormat
         },
-        message: format!("Mattermost {operation} failed with HTTP {status}"),
+        message: if server_error {
+            format!("Mattermost {operation} failed")
+        } else {
+            format!("Mattermost {operation} was rejected")
+        },
         retryable: rate_limited || (server_error && !may_have_been_applied),
         sent_before_error: server_error && may_have_been_applied,
         retry_after: if rate_limited { retry_after } else { None },
@@ -450,7 +468,7 @@ fn http_error(status: reqwest::StatusCode, operation: &str, final_post: bool) ->
         message: if final_post && server_error {
             "Mattermost post failed after submission; delivery state is unknown".into()
         } else {
-            format!("Mattermost {operation} failed with HTTP {status}")
+            format!("Mattermost {operation} failed")
         },
         retryable: server_error && !final_post,
         sent_before_error: final_post && server_error,

@@ -18,8 +18,6 @@ use async_imap::extensions::idle::IdleResponse;
 #[cfg(feature = "email")]
 use async_imap::types::Fetch;
 #[cfg(feature = "email")]
-use async_trait::async_trait;
-#[cfg(feature = "email")]
 use futures::TryStreamExt;
 use lettre::message::{Attachment, MultiPart, SinglePart, header::ContentType};
 use lettre::transport::smtp::authentication::Credentials;
@@ -51,7 +49,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 #[cfg(feature = "email")]
 use tokio::sync::Mutex;
-#[cfg(feature = "email")]
+#[cfg(all(feature = "email", test))]
 use tokio::sync::mpsc;
 #[cfg(feature = "email")]
 use tokio::sync::watch;
@@ -79,11 +77,9 @@ pub use crate::config::EmailConfig;
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::mail::{ImapCredentials, MailSecret, SmtpCredentials, SmtpSecurity};
 #[cfg(feature = "email")]
-use crate::providers::mail::{LettreMailSender, MailCredentials, MailSender, OutboundEmail};
-#[cfg(feature = "email")]
 use crate::providers::native::HostPorts as NativeState;
-#[cfg(feature = "email")]
-use crate::traits::{Channel, ChannelMessage, SendMessage};
+#[cfg(all(feature = "email", test))]
+use crate::traits::ChannelMessage;
 
 #[cfg(feature = "email")]
 type ImapSession = Session<TlsStream<TcpStream>>;
@@ -95,7 +91,7 @@ trait ImapStream: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug + Send {}
 #[cfg(feature = "email")]
 impl<S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug + Send> ImapStream for S {}
 
-/// Budget for one [`Channel::health_check`] IMAP login probe.
+/// Budget for one [`EmailChannel::health_check_with`] IMAP login probe.
 #[cfg(feature = "email")]
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -149,6 +145,7 @@ impl Drop for ListenerRegistration {
 
 #[cfg(feature = "email")]
 enum EmailDelivery<'a> {
+    #[cfg(test)]
     Legacy(&'a mpsc::Sender<ChannelMessage>),
     Typed(&'a (dyn ChannelInboundSink + Send + Sync)),
 }
@@ -159,6 +156,12 @@ enum EmailDelivery<'a> {
 struct InboundSinkRejected;
 
 impl EmailChannel {
+    #[cfg(feature = "email")]
+    pub(crate) async fn health_probe(&self) -> bool {
+        self.health_check_with(self.connect_imap(), HEALTH_CHECK_TIMEOUT)
+            .await
+    }
+
     pub fn new(config: EmailConfig) -> Self {
         Self {
             config,
@@ -361,8 +364,11 @@ impl EmailChannel {
                 && let Some(parsed) = MessageParser::default().parse(body)
             {
                 let sender = Self::extract_sender(&parsed);
+                #[cfg(test)]
                 let subject = parsed.subject().unwrap_or("(no subject)").to_string();
+                #[cfg(test)]
                 let body_text = Self::extract_text(&parsed);
+                #[cfg(test)]
                 let content = format!("Subject: {}\n\n{}", subject, body_text);
                 let msg_id = parsed
                     .message_id()
@@ -410,6 +416,7 @@ impl EmailChannel {
                     _uid: uid,
                     msg_id,
                     sender,
+                    #[cfg(test)]
                     content,
                     timestamp: ts,
                     raw: body.to_vec(),
@@ -462,13 +469,6 @@ impl EmailChannel {
         }
     }
 
-    /// Main IDLE-based listen loop with automatic reconnection
-    #[cfg(feature = "email")]
-    async fn listen_with_idle(&self, tx: mpsc::Sender<ChannelMessage>) -> Result<()> {
-        self.listen_with_reconnect(&tx, || self.connect_imap())
-            .await
-    }
-
     #[cfg(feature = "email")]
     async fn listen_typed_with<S, F, Fut>(
         &self,
@@ -519,7 +519,7 @@ impl EmailChannel {
 
     /// The reconnect loop over any session source, so it is testable without
     /// a TLS server.
-    #[cfg(feature = "email")]
+    #[cfg(all(feature = "email", test))]
     async fn listen_with_reconnect<S, F, Fut>(
         &self,
         tx: &mpsc::Sender<ChannelMessage>,
@@ -659,6 +659,7 @@ impl EmailChannel {
             }
 
             let accepted = match delivery {
+                #[cfg(test)]
                 EmailDelivery::Legacy(tx) => self.dispatch_email(email, tx).await,
                 EmailDelivery::Typed(sink) => {
                     self.dispatch_typed_email(&email, *sink).await?;
@@ -705,7 +706,7 @@ impl EmailChannel {
     }
 
     /// This channel's SMTP account as per-call [`SmtpCredentials`], for the
-    /// async [`MailSender`] seam.
+    /// async [`crate::providers::mail::MailSender`] seam.
     ///
     /// `smtp_tls` maps to implicit TLS ([`SmtpSecurity::Ssl`]) and its absence to
     /// a plaintext connection ([`SmtpSecurity::None`]) — the same two transports
@@ -789,6 +790,7 @@ struct ParsedEmail {
     _uid: u32,
     msg_id: String,
     sender: String,
+    #[cfg(test)]
     content: String,
     timestamp: u64,
     /// The RFC 822 bytes, for the typed inbound path.
@@ -816,70 +818,6 @@ impl IdleWaitResult {
 }
 
 #[cfg(feature = "email")]
-#[async_trait]
-impl Channel for EmailChannel {
-    fn name(&self) -> &str {
-        "email"
-    }
-
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.declared()
-    }
-
-    async fn send_typed_with_receipt(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> Result<crate::channel::ChannelSendOutcome> {
-        crate::providers::native::outbound::send_typed(self, message)
-            .await
-            .map_err(crate::providers::native::to_anyhow)
-    }
-
-    async fn send(&self, message: &SendMessage) -> Result<()> {
-        // Use explicit subject if provided, otherwise fall back to legacy parsing or default
-        let (subject, body) = if let Some(ref subj) = message.subject {
-            (subj.as_str(), message.content.as_str())
-        } else if message.content.starts_with("Subject: ") {
-            if let Some(pos) = message.content.find('\n') {
-                (&message.content[9..pos], message.content[pos + 1..].trim())
-            } else {
-                ("OpenHuman Message", message.content.as_str())
-            }
-        } else {
-            ("OpenHuman Message", message.content.as_str())
-        };
-
-        // The async sender, not `send_message`: this runs on a runtime
-        // worker, and the blocking transport would stall it for the whole
-        // SMTP exchange.
-        let email = OutboundEmail {
-            to: message.recipient.clone(),
-            subject: subject.to_string(),
-            body: body.to_string(),
-            attachments: Vec::new(),
-            headers: Default::default(),
-        };
-        LettreMailSender::new()
-            .send(&MailCredentials::Smtp(self.smtp_credentials()), &email)
-            .await?;
-        info!("Email sent to {}", message.recipient);
-        Ok(())
-    }
-
-    async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> Result<()> {
-        info!(
-            "Starting email channel with IDLE support on {}",
-            self.config.imap_folder
-        );
-        self.listen_with_idle(tx).await
-    }
-
-    async fn health_check(&self) -> bool {
-        self.health_check_with(self.connect_imap(), HEALTH_CHECK_TIMEOUT)
-            .await
-    }
-}
-
 #[cfg(feature = "email")]
 impl EmailChannel {
     /// Translate the bounded IMAP probe into the status vocabulary used by

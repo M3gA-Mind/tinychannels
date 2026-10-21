@@ -127,6 +127,166 @@ async fn direct_send_uses_staff_id_and_provider_receipt() {
 }
 
 #[tokio::test]
+async fn v1_subject_is_a_markdown_title_not_part_of_dingtalk_body() {
+    use crate::providers::http_test_support::HttpsServer;
+    use crate::traits::SendMessage;
+
+    let server = HttpsServer::start(|request| {
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.target, "/session-webhook");
+        (200, r#"{"errcode":0}"#.into())
+    })
+    .await;
+    let channel = DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        server.client.clone(),
+    );
+    channel.session_webhooks.write().await.insert(
+        "chat-1".into(),
+        "https://api.dingtalk.com/session-webhook".into(),
+    );
+
+    crate::provider_test_support::send_v1(
+        &channel,
+        &SendMessage::with_subject("deployment complete", "chat-1", "Release status"),
+    )
+    .await
+    .expect("the configured DingTalk webhook accepts the typed projection");
+
+    let requests = server.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].body,
+        json!({
+            "msgtype": "markdown",
+            "markdown": { "title": "Release status", "text": "deployment complete" }
+        })
+    );
+}
+
+#[tokio::test]
+async fn session_webhook_errors_are_sanitized_and_keep_delivery_uncertainty() {
+    use crate::providers::http_test_support::HttpsServer;
+
+    for (status, expected_kind, expected_sent) in [
+        (403, SendErrorKind::BadFormat, false),
+        (503, SendErrorKind::Unknown, true),
+    ] {
+        let server = HttpsServer::start(move |request| {
+            assert_eq!(request.target, "/session-webhook");
+            (
+                status,
+                "sensitive provider response with secret-token".into(),
+            )
+        })
+        .await;
+        let channel = DingTalkChannel::with_http_client(
+            "app-key".into(),
+            "app-secret".into(),
+            vec!["alice".into()],
+            server.client.clone(),
+        );
+        channel.session_webhooks.write().await.insert(
+            "chat-1".into(),
+            "https://api.dingtalk.com/session-webhook".into(),
+        );
+
+        let error = channel
+            .deliver(
+                &target(ConversationKind::Group, "chat-1"),
+                &Step::Text("reply".into()),
+            )
+            .await
+            .err()
+            .expect("non-success webhook status must not produce success");
+
+        assert_eq!(error.kind, expected_kind);
+        assert_eq!(error.sent_before_error, expected_sent);
+        assert!(!error.retryable);
+        assert!(!error.message.contains("sensitive"));
+        assert!(!error.message.contains("secret-token"));
+    }
+}
+
+#[tokio::test]
+async fn session_webhook_rejects_nonzero_application_error_codes() {
+    use crate::providers::http_test_support::HttpsServer;
+
+    let server = HttpsServer::start(|request| {
+        assert_eq!(request.target, "/session-webhook");
+        (
+            200,
+            r#"{"errcode":310000,"errmsg":"secret-token rejected"}"#.into(),
+        )
+    })
+    .await;
+    let channel = DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        server.client.clone(),
+    );
+    channel.session_webhooks.write().await.insert(
+        "chat-1".into(),
+        "https://api.dingtalk.com/session-webhook".into(),
+    );
+
+    let error = channel
+        .deliver(
+            &target(ConversationKind::Group, "chat-1"),
+            &Step::Text("reply".into()),
+        )
+        .await
+        .err()
+        .expect("HTTP 200 does not mean the webhook accepted the message");
+
+    assert_eq!(error.kind, SendErrorKind::BadFormat);
+    assert!(!error.sent_before_error);
+    assert!(!error.retryable);
+    assert!(!error.message.contains("secret-token"));
+}
+
+#[tokio::test]
+async fn session_webhook_unverifiable_success_is_reported_as_uncertain() {
+    use crate::providers::http_test_support::HttpsServer;
+
+    for body in ["not-json", r#"{"errmsg":"secret-token"}"#] {
+        let body = body.to_owned();
+        let server = HttpsServer::start(move |request| {
+            assert_eq!(request.target, "/session-webhook");
+            (200, body.clone())
+        })
+        .await;
+        let channel = DingTalkChannel::with_http_client(
+            "app-key".into(),
+            "app-secret".into(),
+            vec!["alice".into()],
+            server.client.clone(),
+        );
+        channel.session_webhooks.write().await.insert(
+            "chat-1".into(),
+            "https://api.dingtalk.com/session-webhook".into(),
+        );
+
+        let error = channel
+            .deliver(
+                &target(ConversationKind::Group, "chat-1"),
+                &Step::Text("reply".into()),
+            )
+            .await
+            .err()
+            .expect("a success status without a success code is ambiguous");
+
+        assert_eq!(error.kind, SendErrorKind::Unknown);
+        assert!(error.sent_before_error);
+        assert!(!error.retryable);
+        assert!(!error.message.contains("secret-token"));
+    }
+}
+
+#[tokio::test]
 async fn typed_send_rejects_missing_admission_or_robot_context_before_http() {
     use crate::providers::http_test_support::HttpsServer;
     use tinychannels_bus::{ChannelOutboundMessage, ContentPart, OutboundContentPart};
@@ -1721,10 +1881,7 @@ async fn cancelled_listener_does_not_open_gateway_after_registration() {
     let sink = RecordingInboundSink(tx);
     tokio::time::timeout(
         PUBLIC_LISTENER_GUARD,
-        channel.listen_owned(
-            super::super::DingTalkIngress::Typed(&sink),
-            Some(cancellation),
-        ),
+        channel.listen_owned(&sink, Some(cancellation)),
     )
     .await
     .expect("a pre-cancelled DingTalk listener must return promptly")

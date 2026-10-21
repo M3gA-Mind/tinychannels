@@ -3,7 +3,6 @@ use crate::channel::{ChannelAdapter, ChannelTypedSend, ChannelTyping};
 use crate::config::EmailConfig;
 use crate::providers::email_channel::fixtures::*;
 use crate::providers::native::fixtures::stored_media;
-use crate::traits::Channel;
 use tinychannels_bus::channel::{ConversationRef, MessageReceiptPartKind};
 use tinychannels_bus::{
     ChannelOutboundMessage, ChannelRef, ContentPart, ConversationKind, MediaKind, MediaReference,
@@ -94,6 +93,22 @@ async fn an_explicit_subject_line_becomes_the_subject() {
     let sent = only(&smtp);
     assert_eq!(header(&sent, "Subject").as_deref(), Some("Weekly report"));
     assert!(sent.contains("All green") && !sent.contains("Subject: Weekly report\nAll"));
+}
+
+#[tokio::test]
+async fn v1_subject_is_sent_as_mail_header_without_leaking_into_body() {
+    let smtp = smtp(false).await;
+    let channel = EmailChannel::new(config_for(&smtp));
+    let mut legacy = crate::traits::SendMessage::new("All green", PEER);
+    legacy.subject = Some("Weekly report".into());
+    crate::provider_test_support::send_v1(&channel, &legacy)
+        .await
+        .unwrap();
+
+    let sent = only(&smtp);
+    assert_eq!(header(&sent, "Subject").as_deref(), Some("Weekly report"));
+    assert!(sent.contains("All green"));
+    assert!(!sent.contains("Subject: Weekly report\nAll green"));
 }
 
 #[tokio::test]
@@ -283,9 +298,8 @@ async fn unsupported_operations_and_the_descriptor_use_the_native_surface() {
             .unwrap_err()
             .unsupported
     );
-    assert!(channel.capabilities().remote_control);
-    let outcome = channel
-        .send_typed_with_receipt(&message(PEER, vec![text("legacy")]))
+    assert!(ChannelAdapter::declared_capabilities(&channel).remote_control);
+    let outcome = ChannelTypedSend::send_typed(&channel, &message(PEER, vec![text("legacy")]))
         .await
         .unwrap();
     assert!(outcome.receipt.primary_platform_message_id.is_some());

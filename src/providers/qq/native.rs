@@ -61,13 +61,24 @@ impl NativeProvider for QQChannel {
         false
     }
 
+    async fn health_state(&self) -> &'static str {
+        if self.fetch_access_token().await.is_ok() {
+            "healthy"
+        } else {
+            "unhealthy"
+        }
+    }
+
     fn declared_capabilities(&self) -> ChannelCapabilities {
         let mut capabilities = crate::providers::long_tail::text_capabilities(
             crate::providers::long_tail::TextSpec::default(),
         );
         if self.native.media_repository.is_some() {
             let media = |types: &[&str]| ContentCapability {
-                inbound: self.native.events.is_some(),
+                // Inbound delivery is provided by ChannelAdapter::start's
+                // typed sink. A legacy EventSink is not required to receive
+                // attachments through the configured adapter.
+                inbound: true,
                 outbound: true,
                 accepted_types: types.iter().map(|mime| (*mime).to_owned()).collect(),
                 emitted_types: types.iter().map(|mime| (*mime).to_owned()).collect(),
@@ -119,6 +130,11 @@ impl NativeProvider for QQChannel {
                 }
                 _ => {}
             }
+        } else if target.conversation.kind == ConversationKind::Unknown {
+            // The one-release v1 send shape used an unprefixed recipient for
+            // direct messages. Keep that boundary behavior while requiring
+            // typed callers to identify groups explicitly.
+            target.conversation.kind = ConversationKind::Dm;
         }
         Ok(target)
     }
@@ -246,7 +262,7 @@ impl NativeProvider for QQChannel {
             ..Default::default()
         })?;
         let _registration = super::ListenerRegistration { channel: self, id };
-        self.listen_owned(super::QQIngress::Typed(sink), Some(cancellation))
+        self.listen_owned(sink, Some(cancellation))
             .await
             .map_err(|error| {
                 tracing::debug!(%error, "QQ typed listener stopped");
@@ -276,6 +292,7 @@ impl QQChannel {
     /// Build a typed QQ inbound envelope from a gateway message. Attachment
     /// downloads are restricted to HTTPS Tencent hosts, do not follow
     /// redirects, and are bounded before they reach host storage.
+    #[cfg(test)]
     pub(crate) async fn inbound_envelope(
         &self,
         event_type: &str,
@@ -617,6 +634,15 @@ fn status_error(
         unknown("QQ may have accepted the message but returned a server error")
     } else if status.is_server_error() {
         transient(&format!("QQ {operation} failed"), false)
+    } else if matches!(
+        status,
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+    ) {
+        ChannelSendError {
+            kind: SendErrorKind::Forbidden,
+            message: format!("QQ {operation} was rejected with HTTP {status}"),
+            ..Default::default()
+        }
     } else {
         ChannelSendError {
             kind: SendErrorKind::BadFormat,

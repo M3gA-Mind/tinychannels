@@ -4,15 +4,19 @@
 
 use super::native::{EMAIL_MAX_FILE_BYTES, EMAIL_MAX_VOICE_BYTES, bare_id};
 use super::{EmailChannel, ParsedEmail};
+#[cfg(test)]
+use crate::providers::native::inbound::publish;
 use crate::providers::native::inbound::{
-    InboundFile, Ingest, Ingested, assemble, media_of, normalize_mime, publish,
+    InboundFile, Ingest, Ingested, assemble, media_of, normalize_mime,
 };
+#[cfg(test)]
 use crate::traits::ChannelMessage;
 use mail_parser::{HeaderValue, MessageParser, MimeHeaders};
 use serde_json::json;
 use tinychannels_bus::{
     ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef, SenderRef,
 };
+#[cfg(test)]
 use tokio::sync::mpsc;
 
 fn email_ref() -> ChannelRef {
@@ -45,6 +49,7 @@ impl EmailChannel {
 
     /// Hand one fetched, allowed, first-seen email to the host. False when the
     /// legacy receiver is gone and the listener should stop.
+    #[cfg(test)]
     pub(super) async fn dispatch_email(
         &self,
         email: ParsedEmail,
@@ -69,6 +74,7 @@ impl EmailChannel {
     }
 
     /// Publish `email` through the compatibility event sink.
+    #[cfg(test)]
     async fn publish_typed(&self, email: &ParsedEmail) -> bool {
         let Some(envelope) = self.typed_envelope(email).await else {
             return false;

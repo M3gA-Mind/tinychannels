@@ -34,6 +34,13 @@ impl ChannelInboundSink for RecordingInboundSink {
     }
 }
 
+fn typed_inbound(ingress: ChannelIngress) -> tinychannels_bus::ChannelInboundEnvelope {
+    match ingress {
+        ChannelIngress::Inbound(envelope) => envelope,
+        other => panic!("expected inbound message, received {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn qq_inbound_image_downloads_tencent_attachment_and_publishes_typed_ingress() {
     use crate::providers::native::fixtures::RecordingEvents;
@@ -100,7 +107,7 @@ async fn qq_inbound_image_downloads_tencent_attachment_and_publishes_typed_ingre
 }
 
 #[test]
-fn qq_declares_inbound_file_capabilities_only_when_ingress_ports_are_present() {
+fn qq_declares_inbound_file_capabilities_when_media_storage_is_installed() {
     let with_ingress = super::super::QQChannel::new("app-id".into(), "app-secret".into(), vec![])
         .with_media_repository(Arc::new(StubMedia::default()))
         .with_events(Arc::new(
@@ -115,11 +122,16 @@ fn qq_declares_inbound_file_capabilities_only_when_ingress_ports_are_present() {
         .with_media_repository(Arc::new(StubMedia::default()));
     let capabilities =
         crate::providers::native::NativeProvider::declared_capabilities(&outbound_only);
-    assert!(!capabilities.content.image.inbound);
+    assert!(capabilities.content.image.inbound);
     assert!(capabilities.content.image.outbound);
     assert!(!crate::providers::native::NativeProvider::voice_synthesis(
         &outbound_only
     ));
+
+    let no_media = super::super::QQChannel::new("app-id".into(), "app-secret".into(), vec![]);
+    let capabilities = crate::providers::native::NativeProvider::declared_capabilities(&no_media);
+    assert!(!capabilities.content.image.inbound);
+    assert!(!capabilities.content.image.outbound);
 }
 
 #[test]
@@ -290,8 +302,6 @@ async fn qq_inbound_attachment_checks_sender_allowlist_before_network_io() {
 
 #[tokio::test]
 async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fallback() {
-    use crate::providers::native::fixtures::RecordingEvents;
-    use crate::traits::Channel;
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
@@ -370,7 +380,6 @@ async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fa
     });
 
     let media = Arc::new(StubMedia::default());
-    let events = Arc::new(RecordingEvents::delivering());
     let channel = super::super::QQChannel::with_http_client(
         "app-id".into(),
         "app-secret".into(),
@@ -378,35 +387,35 @@ async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fa
         gateway.client.clone(),
     )
     .with_media_repository(media.clone())
-    .with_events(events.clone())
     .with_attachment_http_client(gateway.client.clone());
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let listening = tokio::spawn(async move { channel.listen(tx).await });
-
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            if events.inbound().len() == 2 {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Arc::new(RecordingInboundSink(tx));
+    let listener_sink = sink.clone();
+    let listening = tokio::spawn(async move { channel.start(listener_sink.as_ref()).await });
+    let (first, second) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        (
+            typed_inbound(rx.recv().await.unwrap()),
+            typed_inbound(rx.recv().await.unwrap()),
+        )
     })
     .await
     .expect("QQ listener should publish typed attachment ingress");
     assert!(matches!(
-        &events.inbound()[0].parts[0],
+        &first.parts[0],
         ContentPart::Image { media, .. }
             if media.file_name.as_deref() == Some("listener.png")
     ));
-    assert_eq!(events.inbound()[1].conversation.id, "group:group-1");
+    assert_eq!(first.message_id, "qq-listener-image");
+    assert_eq!(first.conversation.id, "user:alice");
+    assert_eq!(second.conversation.id, "group:group-1");
     assert!(matches!(
-        &events.inbound()[1].parts[0],
+        &second.parts[0],
         ContentPart::Image { media, .. }
             if media.file_name.as_deref() == Some("group-listener.png")
     ));
     assert!(
         rx.try_recv().is_err(),
-        "typed ingress must suppress legacy fallback"
+        "one provider event emits one ingress"
     );
     assert_eq!(
         media
@@ -429,8 +438,6 @@ async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fa
 
 #[tokio::test]
 async fn qq_gateway_listener_publishes_group_attachment_only_message_without_legacy_fallback() {
-    use crate::providers::native::fixtures::RecordingEvents;
-    use crate::traits::Channel;
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
@@ -486,7 +493,6 @@ async fn qq_gateway_listener_publishes_group_attachment_only_message_without_leg
     });
 
     let media = Arc::new(StubMedia::default());
-    let events = Arc::new(RecordingEvents::delivering());
     let channel = super::super::QQChannel::with_http_client(
         "app-id".into(),
         "app-secret".into(),
@@ -494,30 +500,25 @@ async fn qq_gateway_listener_publishes_group_attachment_only_message_without_leg
         gateway.client.clone(),
     )
     .with_media_repository(media.clone())
-    .with_events(events.clone())
     .with_attachment_http_client(gateway.client.clone());
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let listening = tokio::spawn(async move { channel.listen(tx).await });
-
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            if events.inbound().len() == 1 {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Arc::new(RecordingInboundSink(tx));
+    let listener_sink = sink.clone();
+    let listening = tokio::spawn(async move { channel.start(listener_sink.as_ref()).await });
+    let inbound = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        typed_inbound(rx.recv().await.unwrap())
     })
     .await
     .expect("QQ group listener should publish attachment-only typed ingress");
-    assert_eq!(events.inbound()[0].conversation.id, "group:group-1");
+    assert_eq!(inbound.conversation.id, "group:group-1");
     assert!(matches!(
-        &events.inbound()[0].parts[0],
+        &inbound.parts[0],
         ContentPart::Image { media, .. }
             if media.file_name.as_deref() == Some("group-listener.png")
     ));
     assert!(
         rx.try_recv().is_err(),
-        "typed ingress must suppress legacy fallback"
+        "one provider event emits one ingress"
     );
     assert_eq!(media.stored.lock().unwrap()[0].bytes, b"group-image-bytes");
     release_tx.send(()).unwrap();

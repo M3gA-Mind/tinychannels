@@ -21,7 +21,7 @@ fn host() -> Arc<dyn ChannelHost> {
 fn names(config: &ChannelsConfig) -> Vec<String> {
     build_channels(config, &host(), &DefaultHttpClients)
         .iter()
-        .map(|channel| channel.name())
+        .map(|channel| channel.name().to_owned())
         .collect()
 }
 
@@ -426,7 +426,7 @@ async fn the_cloud_builder_carries_the_app_secret_into_the_webhook_authenticator
     let with_secret =
         build_whatsapp_cloud_channel(&cloud_config(Some("s3cret")), &host, &DefaultHttpClients)
             .expect("a complete Cloud config builds");
-    let outcome = crate::Channel::deliver_webhook(
+    let outcome = crate::channel::ChannelAdapter::deliver_webhook(
         with_secret.as_ref(),
         Some(&signed("s3cret", &body)),
         &body,
@@ -438,7 +438,7 @@ async fn the_cloud_builder_carries_the_app_secret_into_the_webhook_authenticator
     let without_secret =
         build_whatsapp_cloud_channel(&cloud_config(None), &host, &DefaultHttpClients).unwrap();
     assert!(
-        crate::Channel::deliver_webhook(
+        crate::channel::ChannelAdapter::deliver_webhook(
             without_secret.as_ref(),
             Some(&signed("s3cret", &body)),
             &body

@@ -1,3 +1,6 @@
+// Scoped allowance for the one-release v21 wire DTO compatibility surface.
+#![allow(deprecated)]
+
 //! Implementation helpers for channel intent.
 use crate::traits::SendMessage;
 use serde_json::Value;

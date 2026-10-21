@@ -1,8 +1,6 @@
 use super::*;
 use crate::channel::SendErrorKind;
-use crate::providers::discord::http::DiscordError;
 use crate::providers::discord::support::*;
-use crate::traits::Channel;
 use parking_lot::Mutex;
 use serde_json::json;
 use std::sync::Arc;
@@ -72,13 +70,28 @@ async fn a_fully_wired_account_declares_media_voice_and_waveforms() {
 }
 
 #[tokio::test]
-async fn the_legacy_channel_reports_the_same_facts() {
+async fn adapter_capabilities_match_the_discord_provider_facts() {
     let server = MockServer::start().await;
     let (channel, ..) = full_channel(&server);
-    assert_eq!(Channel::capabilities(&channel), channel.v2_capabilities());
-    assert!(channel.supports_reactions() && channel.supports_edit());
-    assert!(channel.supports_draft_updates() && channel.supports_progressive_edits());
-    assert!(channel.supports_reply_to_id() && channel.supports_thread_id());
+    let capabilities = ChannelAdapter::declared_capabilities(&channel);
+    assert_eq!(capabilities, channel.v2_capabilities());
+    assert!(capabilities.reactions);
+    assert!(
+        capabilities
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "edit")
+    );
+    assert!(capabilities.progressive_edits);
+    assert!(
+        capabilities
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "draft-update")
+    );
+    assert!(capabilities.addressing.reply_to_id && capabilities.addressing.thread_id);
 }
 
 #[tokio::test]
@@ -266,6 +279,12 @@ async fn typed_gateway_delivers_the_original_rich_ingress_to_its_sink() {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&identify.to_string()).unwrap()["op"],
             2
+        );
+        // The gateway timer emits an immediate heartbeat before dispatches.
+        let initial_heartbeat = ws.next().await.unwrap().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&initial_heartbeat.to_string()).unwrap(),
+            json!({"op": 1, "d": null})
         );
         ws.send(Message::Text(json!({"op": 1, "s": 11}).to_string().into()))
             .await
@@ -598,7 +617,7 @@ async fn other_providers_cannot_drive_the_discord_extensions() {
 }
 
 #[tokio::test]
-async fn the_legacy_trait_methods_delegate_and_keep_the_typed_error() {
+async fn typed_operations_preserve_errors_and_receipts() {
     let server = MockServer::start().await;
     mount_message_post(&server, 800).await;
     Mock::given(method("PATCH"))
@@ -614,23 +633,28 @@ async fn the_legacy_trait_methods_delegate_and_keep_the_typed_error() {
         .mount(&server)
         .await;
     let channel = channel_for(&server);
-    let message = ChannelOutboundMessage::from_intent(&intent("legacy"));
+    let message = ChannelOutboundMessage::from_intent(&intent("typed"));
 
-    Channel::send_typed(&channel, &message).await.unwrap();
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
+    let outcome = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
     let receipt = outcome.receipt;
     let thumbs = tinychannels_bus::ChannelReaction {
         value: "👍".into(),
         custom_emoji_id: None,
     };
-    Channel::send_reaction(&channel, &conversation(), "800", &thumbs, false)
+    ChannelReaction::send_reaction(&channel, &account(), &conversation(), "800", &thumbs, false)
         .await
         .unwrap();
-    channel
-        .edit_message(&receipt, &intent("again"))
+    crate::channel::ChannelEdit::edit(&channel, &receipt, intent("again"))
         .await
         .unwrap();
-    channel.delete_message(&receipt).await.unwrap();
+    crate::channel::ChannelDelete::delete(&channel, &receipt)
+        .await
+        .unwrap();
 
     let bad = ChannelOutboundMessage {
         parts: vec![OutboundContentPart::Content {
@@ -645,25 +669,22 @@ async fn the_legacy_trait_methods_delegate_and_keep_the_typed_error() {
         }],
         ..message
     };
-    let error = channel.send_typed_with_receipt(&bad).await.unwrap_err();
-    assert!(error.downcast_ref::<DiscordError>().unwrap().0.unsupported);
-    let failed = channel
-        .edit_message(&receipt, &intent(&"x".repeat(2001)))
+    let error = crate::channel::ChannelTypedSend::send_typed(&channel, &bad)
         .await
         .unwrap_err();
-    assert_eq!(
-        failed.downcast_ref::<DiscordError>().unwrap().0.kind,
-        SendErrorKind::TooLong
-    );
+    assert!(error.unsupported);
+    let failed = crate::channel::ChannelEdit::edit(&channel, &receipt, intent(&"x".repeat(2001)))
+        .await
+        .unwrap_err();
+    assert_eq!(failed.kind, SendErrorKind::TooLong);
     assert!(
-        channel
-            .delete_message(&MessageReceipt::default())
+        crate::channel::ChannelDelete::delete(&channel, &MessageReceipt::default())
             .await
             .is_err()
     );
     let empty = tinychannels_bus::ChannelReaction::default();
     assert!(
-        Channel::send_reaction(&channel, &conversation(), "x", &empty, false)
+        ChannelReaction::send_reaction(&channel, &account(), &conversation(), "x", &empty, false)
             .await
             .is_err()
     );
@@ -699,7 +720,7 @@ async fn the_factory_wires_every_host_service_into_the_discord_account() {
     assert!(caps.voice_out.normalized_waveform);
     assert!(!caps.voice_out.synthesis, "no synthesizer was supplied");
     assert_eq!(
-        Channel::proactive_target(built.as_ref()).as_deref(),
+        ChannelAdapter::proactive_target(built.as_ref()).as_deref(),
         Some(CHANNEL)
     );
     assert!(

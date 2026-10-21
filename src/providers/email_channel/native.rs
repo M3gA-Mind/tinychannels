@@ -114,8 +114,9 @@ impl EmailChannel {
     /// The subject: an explicit `Subject:` first line, else the thread's, else
     /// the default.
     fn subject_for(&self, target: &Target, body: &mut String) -> String {
-        if let Some(rest) = body.strip_prefix("Subject: ") {
-            let (subject, remainder) = rest.split_once('\n').unwrap_or((rest, ""));
+        if let Some(rest) = body.strip_prefix("Subject: ")
+            && let Some((subject, remainder)) = rest.split_once('\n')
+        {
             let subject = subject.trim().replace(['\r', '\n'], " ");
             *body = remainder.trim().to_owned();
             if !subject.is_empty() {

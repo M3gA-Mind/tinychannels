@@ -1,7 +1,11 @@
-use crate::traits::Channel;
+use crate::channel::{ChannelStreamingDraft, ChannelTyping};
+use crate::traits::SendMessage;
 use std::sync::Arc;
+use tinychannels_bus::channel::{ContentPart, MediaReference, OutboundContentPart};
+use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
 
 use super::*;
+use crate::channel::ChannelAdapter;
 
 fn good_cfg() -> YuanbaoConfig {
     let mut c = YuanbaoConfig::default();
@@ -11,10 +15,19 @@ fn good_cfg() -> YuanbaoConfig {
     c
 }
 
+fn draft_intent(recipient: &str, text: &str) -> ChannelOutboundIntent {
+    ChannelOutboundIntent {
+        channel_id: "yuanbao".into(),
+        conversation_id: recipient.into(),
+        payload: OutboundPayload::Text { text: text.into() },
+        ..Default::default()
+    }
+}
+
 #[test]
 fn channel_construction_validates() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
-    assert_eq!(ch.name(), "yuanbao");
+    assert_eq!(ch.descriptor().id, "yuanbao");
 }
 
 #[test]
@@ -328,9 +341,9 @@ async fn alias_map_clears_when_cap_is_hit() {
 #[test]
 fn supports_draft_updates_is_true() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
-    assert!(ch.supports_draft_updates());
-    assert!(Channel::supports_remote_control(&ch));
-    assert!(Channel::supports_chat_approvals(&ch));
+    assert!(crate::provider_test_support::supports_draft_updates(&ch));
+    assert!(crate::provider_test_support::supports_remote_control(&ch));
+    assert!(crate::provider_test_support::supports_chat_approvals(&ch));
     assert!(
         crate::providers::native::NativeProvider::declared_capabilities(&ch)
             .actions
@@ -338,7 +351,7 @@ fn supports_draft_updates_is_true() {
             .iter()
             .any(|action| action == "typing")
     );
-    let capabilities = ch.capabilities();
+    let capabilities = crate::providers::native::NativeProvider::declared_capabilities(&ch);
     assert!(capabilities.streaming_reply_pipeline);
     assert!(!capabilities.progressive_edits);
     assert!(
@@ -349,7 +362,7 @@ fn supports_draft_updates_is_true() {
             .any(|name| name == "draft-update")
     );
     assert!(
-        !ch.capabilities()
+        !ChannelAdapter::declared_capabilities(&ch)
             .actions
             .supported
             .iter()
@@ -360,21 +373,26 @@ fn supports_draft_updates_is_true() {
 #[test]
 fn supports_reactions_is_false() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
-    assert!(!ch.supports_reactions());
+    assert!(!crate::provider_test_support::supports_reactions(&ch));
 }
 
 #[tokio::test]
 async fn send_draft_returns_marker_id() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
-    let msg = SendMessage::new("ignored", "user-42");
-    let id = ch.send_draft(&msg).await.unwrap();
+    let id = ChannelStreamingDraft::start_draft(&ch, draft_intent("user-42", "ignored"))
+        .await
+        .unwrap();
     assert_eq!(id.as_deref(), Some("yb-draft:user-42"));
 }
 
 #[tokio::test]
 async fn update_draft_is_a_noop_ok() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
-    assert!(ch.update_draft("user-42", "any-id", "text").await.is_ok());
+    assert!(
+        ChannelStreamingDraft::update_draft(&ch, "any-id", draft_intent("user-42", "text"))
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -383,7 +401,7 @@ async fn health_check_is_false_when_socket_not_connected() {
     // disconnected default here. The connected branch is exercised
     // by `connection::tests::set_state_connected_flips_is_connected_flag`.
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
-    assert!(!ch.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&ch).await);
 }
 
 // ─── dispatch_push branches ────────────────────────────────────
@@ -530,17 +548,112 @@ async fn start_heartbeat_task_inserts_and_stop_removes() {
 async fn disconnected_sends_and_typing_return_errors_without_leaving_heartbeat_tasks() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
     ch.register_recipient_alias("alias", "original").await;
-    assert!(ch.send(&SendMessage::new("hello", "alias")).await.is_err());
     assert!(
-        ch.finalize_draft("alias", "draft", "hello", Some("thread"))
+        crate::provider_test_support::send_v1(&ch, &SendMessage::new("hello", "alias"))
             .await
             .is_err()
     );
+    let error = ChannelStreamingDraft::finalize_draft(&ch, "draft", draft_intent("alias", "hello"))
+        .await
+        .unwrap_err();
+    assert!(
+        !error.unsupported,
+        "finalization reached the Yuanbao sender"
+    );
+    assert!(error.retryable, "a disconnected send remains retryable");
     assert!(ch.start_typing("alias").await.is_err());
     assert!(ch.heartbeat_tasks.lock().await.is_empty());
     ch.start_heartbeat_task("original").await;
     assert!(ch.stop_typing("alias").await.is_err());
     assert!(ch.heartbeat_tasks.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn finalizing_canonical_legacy_text_reaches_the_yuanbao_sender() {
+    let ch = YuanbaoChannel::new(good_cfg()).unwrap();
+    let message = SendMessage::new("hello", "alias").in_thread(Some("thread-7".into()));
+    let intent = crate::channel::outbound_intent_from_send_message("yuanbao", &message);
+
+    let error = ChannelStreamingDraft::finalize_draft(&ch, "draft", intent)
+        .await
+        .expect_err("the disconnected provider has no sender");
+
+    assert!(!error.unsupported, "canonical text reaches the sender");
+    assert!(error.retryable, "the disconnected send remains retryable");
+}
+
+#[tokio::test]
+async fn finalizing_media_parts_remains_unsupported_for_yuanbao_drafts() {
+    let ch = YuanbaoChannel::new(good_cfg()).unwrap();
+    let intent = ChannelOutboundIntent {
+        channel_id: "yuanbao".into(),
+        conversation_id: "user-42".into(),
+        payload: OutboundPayload::Parts {
+            parts: vec![OutboundContentPart::Content {
+                part: ContentPart::Image {
+                    media: MediaReference {
+                        url: Some("https://example.invalid/image.png".into()),
+                        content_type: Some("image/png".into()),
+                        kind: tinychannels_bus::MediaKind::Image,
+                        ..Default::default()
+                    },
+                    caption: None,
+                    alt_text: None,
+                },
+            }],
+        },
+        ..Default::default()
+    };
+
+    let error = ChannelStreamingDraft::finalize_draft(&ch, "draft", intent)
+        .await
+        .expect_err("Yuanbao has no verified draft media transport");
+
+    assert!(error.unsupported);
+}
+
+#[tokio::test]
+async fn finalizing_dm_reply_is_rejected_before_the_disconnected_sender() {
+    let ch = YuanbaoChannel::new(good_cfg()).unwrap();
+    let intent = ChannelOutboundIntent {
+        channel_id: "yuanbao".into(),
+        conversation_id: "user:alice".into(),
+        reply_to_id: Some("message-7".into()),
+        payload: OutboundPayload::Text {
+            text: "reply".into(),
+        },
+        ..Default::default()
+    };
+
+    let error = ChannelStreamingDraft::finalize_draft(&ch, "draft", intent)
+        .await
+        .expect_err("DM replies cannot be represented by Yuanbao's protocol");
+
+    assert!(
+        error.unsupported,
+        "address validation runs before sender I/O"
+    );
+}
+
+#[tokio::test]
+async fn finalizing_group_reply_passes_address_validation() {
+    let ch = YuanbaoChannel::new(good_cfg()).unwrap();
+    let intent = ChannelOutboundIntent {
+        channel_id: "yuanbao".into(),
+        conversation_id: "g:group-42".into(),
+        reply_to_id: Some("message-7".into()),
+        payload: OutboundPayload::Text {
+            text: "reply".into(),
+        },
+        ..Default::default()
+    };
+
+    let error = ChannelStreamingDraft::finalize_draft(&ch, "draft", intent)
+        .await
+        .expect_err("the disconnected provider has no sender");
+
+    assert!(!error.unsupported, "group reply addressing is supported");
+    assert!(error.retryable, "the disconnected send remains retryable");
 }
 
 #[tokio::test]
@@ -569,76 +682,124 @@ async fn heartbeat_task_exits_when_disconnected_send_fails() {
 }
 
 #[tokio::test]
-async fn listener_dispatches_push_then_stops_on_kickout_and_second_listen_is_noop() {
+async fn typed_listener_dispatches_push_then_stops_on_kickout() {
+    use crate::channel::ChannelAdapter;
+    use crate::providers::yuanbao::connection::test_support::MockGateway;
+
     let mut config = good_cfg();
-    config.ws_domain = "ws://127.0.0.1:0".into();
+    let gateway = MockGateway::bind().await;
+    config.ws_domain = gateway.url.clone();
     config.dm_access = "open".into();
-    let ch = YuanbaoChannel::new(config).unwrap();
-    let (incoming, rx) = mpsc::unbounded_channel();
-    *ch.inbound_rx.lock().await = Some(rx);
-    incoming
-        .send(InboundEvent::Push(make_push_frame(
-            "inbound_message",
-            serde_json::to_vec(&serde_json::json!({
-                "from_account":"alice", "msg_id":"listener-message",
-                "msg_body":[{"msg_type":"TIMTextElem","msg_content":{"text":"hello"}}],
-            }))
-            .unwrap(),
-        )))
-        .unwrap();
-    incoming
-        .send(InboundEvent::Kickout("signed in elsewhere".into()))
-        .unwrap();
-    let (tx, mut received) = mpsc::channel(4);
-    tokio::time::timeout(Duration::from_secs(3), ch.listen(tx.clone()))
+    let channel = Arc::new(YuanbaoChannel::new(config).unwrap());
+    let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Arc::new(PublicAdapterSink(events));
+    let listener = {
+        let channel = Arc::clone(&channel);
+        let sink = Arc::clone(&sink);
+        tokio::spawn(async move { channel.start(sink.as_ref()).await })
+    };
+    let mut session = tokio::time::timeout(
+        Duration::from_secs(3),
+        gateway.accept_authed("connect-kickout"),
+    )
+    .await
+    .expect("typed listener should connect to the configured gateway");
+    session
+        .send(tokio_tungstenite::tungstenite::Message::Binary(
+            yuanbao_push("listener-message", "alice", "hello").into(),
+        ))
+        .await;
+    expect_yuanbao_push_ack(&mut session, "listener-message").await;
+    let message = next_public_yuanbao_message(&mut received).await;
+    assert_eq!(message.message_id, "listener-message");
+    assert_eq!(message.sender.id, "alice");
+    assert_eq!(message.text, "hello");
+
+    let kickout = crate::providers::yuanbao::connection::test_support::encode_frame(
+        crate::providers::yuanbao::proto_constants::cmd_type::PUSH,
+        crate::providers::yuanbao::proto_constants::cmd::KICKOUT,
+        "kickout-1",
+        "yuanbao_openclaw_proxy",
+        false,
+        0,
+        b"signed in elsewhere",
+    );
+    session
+        .send(tokio_tungstenite::tungstenite::Message::Binary(
+            kickout.into(),
+        ))
+        .await;
+    tokio::time::timeout(Duration::from_secs(3), listener)
         .await
-        .unwrap()
-        .unwrap();
-    let message = received.try_recv().unwrap();
-    assert_eq!(message.id, "listener-message");
-    assert_eq!(message.sender, "alice");
-    assert_eq!(message.content, "hello");
-    assert!(*ch.shutdown_tx.borrow());
-    ch.listen(tx).await.unwrap();
+        .expect("kickout should stop the typed listener")
+        .expect("listener should not panic")
+        .expect("kickout should be a clean stop");
     assert!(received.try_recv().is_err());
+
+    // A second start after kickout is a no-op only while stopped semantics
+    // require explicit stop/restart; the public lifecycle test below proves
+    // a subsequent listener can reconnect and receive events.
+    channel.stop().await.unwrap();
 }
 
 #[tokio::test]
-async fn listener_stops_when_inbound_channel_closes() {
-    let mut config = good_cfg();
-    config.ws_domain = "ws://127.0.0.1:0".into();
-    let ch = YuanbaoChannel::new(config).unwrap();
-    let (incoming, rx) = mpsc::unbounded_channel();
-    *ch.inbound_rx.lock().await = Some(rx);
-    drop(incoming);
-    let (tx, _rx) = mpsc::channel(1);
-    tokio::time::timeout(Duration::from_secs(3), ch.listen(tx))
+async fn listener_reconnects_when_gateway_connection_closes() {
+    use crate::channel::ChannelAdapter;
+    use crate::providers::yuanbao::connection::test_support::{MockGateway, gateway_config};
+
+    let gateway = MockGateway::bind().await;
+    let channel = Arc::new(YuanbaoChannel::new(gateway_config(&gateway.url)).unwrap());
+    let (events, _received) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Arc::new(PublicAdapterSink(events));
+    let listener = {
+        let channel = Arc::clone(&channel);
+        let sink = Arc::clone(&sink);
+        tokio::spawn(async move { channel.start(sink.as_ref()).await })
+    };
+    let mut first_session =
+        tokio::time::timeout(Duration::from_secs(3), gateway.accept_authed("disconnect"))
+            .await
+            .expect("typed listener should connect");
+    first_session
+        .send(tokio_tungstenite::tungstenite::Message::Close(None))
+        .await;
+    let _reconnected =
+        tokio::time::timeout(Duration::from_secs(3), gateway.accept_authed("reconnected"))
+            .await
+            .expect("typed listener should reconnect after a gateway disconnect");
+    channel.stop().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), listener)
         .await
-        .unwrap()
-        .unwrap();
-    assert!(*ch.shutdown_tx.borrow());
+        .expect("typed stop should join the listener")
+        .expect("listener should not panic")
+        .expect("listener should stop cleanly");
+    assert!(!channel.connection.is_connected());
 }
 
 #[tokio::test]
 async fn listener_stops_when_shutdown_is_signaled() {
-    let mut config = good_cfg();
-    config.ws_domain = "ws://127.0.0.1:0".into();
-    let ch = Arc::new(YuanbaoChannel::new(config).unwrap());
-    let (tx, _rx) = mpsc::channel(1);
+    use crate::channel::ChannelAdapter;
+    use crate::providers::yuanbao::connection::test_support::{MockGateway, gateway_config};
+
+    let gateway = MockGateway::bind().await;
+    let channel = Arc::new(YuanbaoChannel::new(gateway_config(&gateway.url)).unwrap());
+    let (events, _received) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Arc::new(PublicAdapterSink(events));
     let listener = {
-        let ch = ch.clone();
-        tokio::spawn(async move { ch.listen(tx).await })
+        let channel = Arc::clone(&channel);
+        let sink = Arc::clone(&sink);
+        tokio::spawn(async move { channel.start(sink.as_ref()).await })
     };
-    tokio::time::timeout(Duration::from_secs(3), async {
-        while ch.inbound_rx.lock().await.is_some() {
-            tokio::task::yield_now().await;
-        }
-        ch.shutdown_tx.send(true).unwrap();
-        listener.await.unwrap().unwrap();
-    })
-    .await
-    .unwrap();
-    assert!(!ch.connection.is_connected());
+    let _session = tokio::time::timeout(Duration::from_secs(3), gateway.accept_authed("shutdown"))
+        .await
+        .expect("typed listener should connect");
+    channel.stop().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), listener)
+        .await
+        .expect("typed shutdown should join the listener")
+        .expect("listener should not panic")
+        .expect("listener should stop cleanly");
+    assert!(!channel.connection.is_connected());
 }
 
 #[derive(Clone)]

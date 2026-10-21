@@ -1,6 +1,144 @@
 use super::*;
 use tinychannels::SendMessage;
 
+#[test]
+fn native_operation_errors_preserve_dispatch_uncertainty() {
+    let before_dispatch = adapter_operation_error(
+        "telegram",
+        RunningSendError::NotDispatched("queue is full".into()),
+    );
+    assert!(before_dispatch.retryable);
+    assert!(!before_dispatch.sent_before_error);
+    assert_eq!(before_dispatch.message, "telegram operation failed");
+
+    let after_dispatch = adapter_operation_error(
+        "telegram",
+        RunningSendError::AfterDispatch("response was lost".into()),
+    );
+    assert!(!after_dispatch.retryable);
+    assert!(after_dispatch.sent_before_error);
+    assert_eq!(after_dispatch.message, "telegram operation failed");
+}
+
+struct BareTestProvider;
+
+#[async_trait::async_trait]
+impl TestProviderBehavior for BareTestProvider {
+    fn test_provider_id(&self) -> &'static str {
+        "bare-fixture"
+    }
+}
+
+struct AcceptTestIngress;
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelInboundSink for AcceptTestIngress {
+    async fn push(
+        &self,
+        _: tinychannels_bus::ChannelIngress,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn typed_test_provider_defaults_remain_explicitly_unsupported_and_stoppable() {
+    use tinychannels::channel::{
+        ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
+        ChannelTypedSend, ChannelTyping,
+    };
+    use tinychannels_bus::{ChannelOutboundIntent, ChannelOutboundMessage, OutboundPayload};
+
+    let provider = Arc::new(BareTestProvider);
+    let adapter = Arc::new(TestNative::new(provider.clone()));
+    assert_eq!(adapter.descriptor().id, "bare-fixture");
+    assert!(adapter.media_account_identity().is_none());
+    assert!(adapter.declared_capabilities().content.text.outbound);
+
+    let start = {
+        let adapter = adapter.clone();
+        tokio::spawn(async move {
+            let sink = AcceptTestIngress;
+            adapter.start(&sink).await
+        })
+    };
+    tokio::task::yield_now().await;
+    adapter.stop().await.unwrap();
+    start.await.unwrap().unwrap();
+
+    let intent = ChannelOutboundIntent {
+        channel_id: "bare-fixture".into(),
+        conversation_id: "room".into(),
+        payload: OutboundPayload::Text {
+            text: "hello".into(),
+        },
+        ..Default::default()
+    };
+    assert!(
+        ChannelAdapter::send(adapter.as_ref(), intent.clone())
+            .await
+            .is_err()
+    );
+    let message = ChannelOutboundMessage::from_intent(&intent);
+    assert!(
+        ChannelTypedSend::send_typed(adapter.as_ref(), &message)
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelTyping::start_typing(adapter.as_ref(), "room")
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelTyping::stop_typing(adapter.as_ref(), "room")
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelStreamingDraft::start_draft(adapter.as_ref(), intent.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelStreamingDraft::update_draft(adapter.as_ref(), "draft", intent.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelStreamingDraft::finalize_draft(adapter.as_ref(), "draft", intent.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelStreamingDraft::upsert_draft(adapter.as_ref(), None, intent.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelReaction::send_reaction(
+            adapter.as_ref(),
+            &Default::default(),
+            &Default::default(),
+            "message",
+            &Default::default(),
+            false,
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        ChannelEdit::edit(adapter.as_ref(), &Default::default(), intent.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelDelete::delete(adapter.as_ref(), &Default::default())
+            .await
+            .is_err()
+    );
+}
+
 #[derive(Clone, Default)]
 struct RecordingDraftIntents(Arc<std::sync::Mutex<Vec<tinychannels_bus::ChannelOutboundIntent>>>);
 
@@ -1565,26 +1703,29 @@ struct SlowChannel {
 }
 
 #[async_trait::async_trait]
-impl Channel for SlowChannel {
-    fn name(&self) -> &str {
+impl crate::provider::TestProviderBehavior for SlowChannel {
+    fn test_provider_id(&self) -> &'static str {
         "fixture"
     }
-
-    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+    async fn test_send(
+        &self,
+        _message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
         if let Some(started) = self.started.lock().unwrap().take() {
             let _ = started.send(());
         }
         if let Some(release) = self.release.lock().await.take() {
-            let _ = release.await;
+            release
+                .await
+                .map_err(|error| tinychannels::channel::ChannelSendError {
+                    message: error.to_string(),
+                    ..Default::default()
+                })?;
         }
-        Ok(())
-    }
-
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        std::future::pending().await
+        Ok(Default::default())
     }
 }
 
@@ -1604,7 +1745,7 @@ async fn canceled_send_waiter_does_not_cancel_owned_send_or_shutdown_join() {
     .await
     .unwrap();
     let host = HostChannels::new(connection);
-    let running = Running::start(channel, Arc::new(Hooks::default()), host);
+    let running = Running::start_test(channel, Arc::new(Hooks::default()), host);
     let send_waiter = tokio::spawn({
         let running = running.clone();
         async move {
@@ -1634,35 +1775,60 @@ async fn canceled_send_waiter_does_not_cancel_owned_send_or_shutdown_join() {
     stop.await.unwrap().unwrap();
 }
 
-#[derive(Default)]
-struct InteractionChannel(StdMutex<Vec<String>>);
+struct InteractionChannel(StdMutex<Vec<String>>, bool);
+impl Default for InteractionChannel {
+    fn default() -> Self {
+        Self(StdMutex::new(Vec::new()), false)
+    }
+}
 #[async_trait::async_trait]
-impl Channel for InteractionChannel {
-    fn name(&self) -> &str {
+impl crate::provider::TestProviderBehavior for InteractionChannel {
+    fn test_provider_id(&self) -> &'static str {
         "interaction-fixture"
     }
-    async fn listen(&self, _: mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
-        std::future::pending().await
+    fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+        capabilities.content.text.outbound = true;
+        capabilities.streaming_reply_pipeline = self.1;
+        capabilities
     }
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        self.0
-            .lock()
-            .unwrap()
-            .push(format!("send:{}", message.content));
-        Ok(())
+    async fn test_send(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        self.0.lock().unwrap().push(format!(
+            "send:{}",
+            crate::provider::test_message_text(message)
+        ));
+        Ok(Default::default())
     }
-    async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
+    async fn test_start_typing(
+        &self,
+        recipient: &str,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         self.0.lock().unwrap().push(format!("typing:{recipient}"));
         Ok(())
     }
-    async fn send_draft(&self, message: &SendMessage) -> anyhow::Result<Option<String>> {
-        self.0
-            .lock()
-            .unwrap()
-            .push(format!("draft:{}", message.content));
+    async fn test_start_draft(
+        &self,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<Option<String>, tinychannels::channel::ChannelSendError> {
+        self.0.lock().unwrap().push(format!(
+            "draft:{}",
+            match intent.payload {
+                tinychannels_bus::OutboundPayload::Text { text } => text,
+                _ => String::new(),
+            }
+        ));
         Ok(Some("module-draft".into()))
     }
-    async fn stop_typing(&self, recipient: &str) -> anyhow::Result<()> {
+    async fn test_stop_typing(
+        &self,
+        recipient: &str,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         self.0.lock().unwrap().push(format!("stop:{recipient}"));
         Ok(())
     }
@@ -1676,8 +1842,8 @@ async fn provider_actor_orders_interactions_with_sends_and_rejects_after_stop() 
     let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    let channel = Arc::new(InteractionChannel::default());
-    let running = Running::start(
+    let channel = Arc::new(InteractionChannel(StdMutex::new(Vec::new()), true));
+    let running = Running::start_test(
         channel.clone(),
         Arc::new(Hooks::default()),
         HostChannels::new(connection),
@@ -1729,7 +1895,7 @@ async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
         .await
         .unwrap();
     let channel = Arc::new(InteractionChannel::default());
-    let running = Running::start(
+    let running = Running::start_test(
         channel.clone(),
         Arc::new(Hooks::default()),
         HostChannels::new(connection.clone()),
@@ -1841,20 +2007,14 @@ struct PendingTypingChannel {
 }
 
 #[async_trait::async_trait]
-impl Channel for PendingTypingChannel {
-    fn name(&self) -> &str {
+impl crate::provider::TestProviderBehavior for PendingTypingChannel {
+    fn test_provider_id(&self) -> &'static str {
         "pending-typing"
     }
-
-    async fn send(&self, _: &SendMessage) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn listen(&self, _: mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
-        std::future::pending().await
-    }
-
-    async fn start_typing(&self, _: &str) -> anyhow::Result<()> {
+    async fn test_start_typing(
+        &self,
+        _: &str,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         struct DropMark(Arc<std::sync::atomic::AtomicUsize>);
         impl Drop for DropMark {
             fn drop(&mut self) {
@@ -1881,7 +2041,7 @@ async fn typing_refresh_stop_and_shutdown_cancel_inflight_provider_calls() {
         entered: Arc::clone(&entered),
         dropped: Arc::clone(&dropped),
     });
-    let running = Running::start(
+    let running = Running::start_test(
         channel,
         Arc::new(Hooks::default()),
         HostChannels::new(connection.clone()),
@@ -1943,7 +2103,7 @@ async fn typing_refresh_capacity_counts_handles_not_recipients() {
         .await
         .unwrap();
     let channel = Arc::new(InteractionChannel::default());
-    let running = Running::start(
+    let running = Running::start_test(
         channel,
         Arc::new(Hooks::default()),
         HostChannels::new(connection.clone()),
@@ -1985,14 +2145,14 @@ struct ReconnectingChannel {
     attempts: StdMutex<Vec<oneshot::Sender<()>>>,
 }
 #[async_trait::async_trait]
-impl Channel for ReconnectingChannel {
-    fn name(&self) -> &str {
+impl crate::provider::TestProviderBehavior for ReconnectingChannel {
+    fn test_provider_id(&self) -> &'static str {
         "reconnect-fixture"
     }
-    async fn send(&self, _: &SendMessage) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn listen(&self, _: mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
+    async fn test_start(
+        &self,
+        _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync),
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         let last = {
             let mut attempts = self.attempts.lock().unwrap();
             let receipt = attempts.remove(0);
@@ -2002,7 +2162,11 @@ impl Channel for ReconnectingChannel {
         if last {
             std::future::pending::<()>().await;
         }
-        anyhow::bail!("fixture disconnected")
+        Err(tinychannels::channel::ChannelSendError {
+            message: "fixture disconnected".into(),
+            retryable: true,
+            ..Default::default()
+        })
     }
 }
 
@@ -2019,7 +2183,7 @@ async fn disconnected_module_provider_reconnects_and_stop_joins_the_new_listener
         .await
         .unwrap();
     let host = HostChannels::new(connection);
-    let running = Running::start_supervised(
+    let running = Running::start_test_supervised(
         channel,
         Arc::new(Hooks::default()),
         host.clone(),
@@ -2056,7 +2220,7 @@ async fn stopping_during_selected_backoff_prevents_another_provider_attempt() {
         .await
         .unwrap();
     let host = HostChannels::new(connection);
-    let running = Running::start_supervised(
+    let running = Running::start_test_supervised(
         channel.clone(),
         Arc::new(Hooks::default()),
         host.clone(),
@@ -2154,14 +2318,16 @@ async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
         let (cancel, _) = watch::channel(false);
         let running = Arc::new(Running {
             media_account_scope: crate::provider::MediaScope::default(),
-            channel: Some(Arc::new(InteractionChannel::default())),
             provider_name: "interaction-fixture".into(),
             configured_instance: "interaction-fixture:account-a".into(),
             send,
             cancel,
             worker: Mutex::new(None),
             finished: Arc::new(AtomicBool::new(false)),
-            native_ports: None,
+            native_ports: NativePorts::test(
+                Arc::new(InteractionChannel::default()),
+                LongTailListenerMode::Webhook,
+            ),
         });
         let waiter = tokio::spawn({
             let running = running.clone();
@@ -2201,14 +2367,16 @@ async fn configured_adapter_rejects_account_scope_mismatch_before_dispatch() {
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
         media_account_scope: crate::provider::MediaScope::default(),
-        channel: Some(Arc::new(InteractionChannel::default())),
         provider_name: "interaction-fixture".into(),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
         cancel,
         worker: Mutex::new(None),
         finished: Arc::new(AtomicBool::new(false)),
-        native_ports: None,
+        native_ports: NativePorts::test(
+            Arc::new(InteractionChannel::default()),
+            LongTailListenerMode::Webhook,
+        ),
     });
     let adapter = running.adapter_handle();
     let error = adapter
@@ -2236,14 +2404,16 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
         media_account_scope: crate::provider::MediaScope::default(),
-        channel: Some(Arc::new(InteractionChannel::default())),
         provider_name: "interaction-fixture".into(),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
         cancel,
         worker: Mutex::new(None),
         finished: Arc::new(AtomicBool::new(false)),
-        native_ports: None,
+        native_ports: NativePorts::test(
+            Arc::new(InteractionChannel::default()),
+            LongTailListenerMode::Webhook,
+        ),
     });
     let adapter = running.adapter_handle();
     let task = tokio::spawn(async move {
@@ -2268,7 +2438,10 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
             })
             .await
     });
-    let command = commands.recv().await.expect("adapter dispatch");
+    let command = tokio::time::timeout(Duration::from_secs(2), commands.recv())
+        .await
+        .expect("adapter send dispatch timed out")
+        .expect("adapter dispatch");
     let outcome = Box::new(tinychannels_bus::channel::ChannelSendOutcome {
         receipt: tinychannels_bus::channel::MessageReceipt {
             primary_platform_message_id: Some("msg-1".into()),
@@ -2305,14 +2478,16 @@ async fn send_configured_outcome(
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
         media_account_scope: crate::provider::MediaScope::default(),
-        channel: Some(Arc::new(InteractionChannel::default())),
         provider_name: "interaction-fixture".into(),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
         cancel,
         worker: Mutex::new(None),
         finished: Arc::new(AtomicBool::new(false)),
-        native_ports: None,
+        native_ports: NativePorts::test(
+            Arc::new(InteractionChannel::default()),
+            LongTailListenerMode::Webhook,
+        ),
     });
     let adapter = running.adapter_handle();
     let task = tokio::spawn(async move {
@@ -2335,7 +2510,10 @@ async fn send_configured_outcome(
             })
             .await
     });
-    let command = commands.recv().await.expect("adapter dispatch");
+    let command = tokio::time::timeout(Duration::from_secs(2), commands.recv())
+        .await
+        .expect("adapter send dispatch timed out")
+        .expect("adapter dispatch");
     command.started.send(()).unwrap();
     command
         .reply
@@ -2502,10 +2680,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
             .with_api_base_for_test(server.uri()),
     );
     let running = Running::start_telegram(channel, hooks, host, None, false);
-    assert!(
-        running.channel.is_none(),
-        "Telegram polling is owned by its typed adapter"
-    );
+
     let handle = running.adapter_handle();
     let repository = provider_host
         .media_repository()
@@ -2724,7 +2899,7 @@ async fn configured_running_telegram_adapter_uploads_media_from_host_storage() {
             .with_api_base_for_test(server.uri())
             .with_media_repository(repository.clone()),
     );
-    let running = Running::start_outbound(channel, hooks, host);
+    let running = Running::start_telegram(channel, hooks, host, None, true);
     let adapter = running.adapter_handle();
     let result = adapter
         .send(tinychannels_bus::ChannelOutboundIntent {
@@ -2845,9 +3020,9 @@ async fn configured_adapter_marks_first_unknown_media_upload_non_retryable() {
             .with_api_base_for_test(server.uri())
             .with_media_repository(repository),
     );
-    let running = Running::start_outbound(channel, hooks, host);
+    let running = Running::start_telegram(channel, hooks, host, None, true);
     let adapter = running.adapter_handle();
-    let error = adapter
+    let outcome = adapter
         .send(tinychannels_bus::ChannelOutboundIntent {
             idempotency_key: "uncertain-media-send".into(),
             channel_id: "telegram".into(),
@@ -2870,7 +3045,10 @@ async fn configured_adapter_marks_first_unknown_media_upload_non_retryable() {
             ..Default::default()
         })
         .await
-        .unwrap_err();
+        .unwrap();
+    let error = outcome
+        .error
+        .expect("uncertain provider result is retained in the typed outcome");
     assert!(error.sent_before_error);
     assert!(!error.retryable);
     assert!(!error.unsupported);
@@ -2908,16 +3086,14 @@ async fn configured_telegram_native_optional_ports_share_ordered_queue_and_rejec
     let instance = "telegram:account-a".to_owned();
     let channel = Arc::new(
         tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
-            .with_api_base_for_test(server.uri()),
+            .with_api_base_for_test(server.uri())
+            .with_streaming(tinychannels_bus::config::StreamMode::Partial, 0, true),
     );
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_telegram(channel, hooks, host, None, true);
-    assert!(
-        running.channel.is_none(),
-        "Telegram polling is owned by its typed adapter"
-    );
+
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::TelegramNativeV2);
 
@@ -3116,10 +3292,6 @@ async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_s
             .with_api_base_for_test(server.uri()),
     );
     let running = Running::start_telegram(channel, hooks, host, None, false);
-    assert!(
-        running.channel.is_none(),
-        "Telegram polling is owned by its typed adapter"
-    );
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -3214,17 +3386,11 @@ async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_s
 struct IdentityChannel(std::sync::Mutex<Option<String>>);
 
 #[async_trait::async_trait]
-impl Channel for IdentityChannel {
-    fn name(&self) -> &str {
+impl crate::provider::TestProviderBehavior for IdentityChannel {
+    fn test_provider_id(&self) -> &'static str {
         "whatsapp"
     }
-    async fn send(&self, _: &SendMessage) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn listen(&self, _: mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
-        std::future::pending().await
-    }
-    fn media_account_identity(&self) -> Option<String> {
+    fn test_media_account_identity(&self) -> Option<String> {
         self.0.lock().unwrap().clone()
     }
 }
@@ -3246,7 +3412,8 @@ fn a_fixed_media_scope_is_returned_as_configured_and_never_printed() {
 fn a_linked_session_binds_the_media_scope_only_once_it_knows_its_account() {
     let channel = Arc::new(IdentityChannel(std::sync::Mutex::new(None)));
     let scope = MediaScope::fixed(None);
-    scope.bind_source(channel.clone());
+    let adapter = crate::provider::test_adapter(channel.clone());
+    scope.bind_source(&adapter);
     // Linking has not happened: media fails closed.
     assert_eq!(scope.current(), None);
     *channel.0.lock().unwrap() = Some("15550001111@s.whatsapp.net".into());
@@ -3256,9 +3423,10 @@ fn a_linked_session_binds_the_media_scope_only_once_it_knows_its_account() {
     // and the same account always gets the same one.
     assert_eq!(scope.current().as_deref(), Some(first.as_str()));
     let other = MediaScope::fixed(None);
-    other.bind_source(Arc::new(IdentityChannel(std::sync::Mutex::new(Some(
-        "15550002222@s.whatsapp.net".into(),
-    )))));
+    let other_adapter = crate::provider::test_adapter(Arc::new(IdentityChannel(
+        std::sync::Mutex::new(Some("15550002222@s.whatsapp.net".into())),
+    )));
+    other.bind_source(&other_adapter);
     assert_ne!(other.current().unwrap(), first);
     // If the provider withdraws the identity (a re-link to another account),
     // every later use fails closed again.
@@ -3269,9 +3437,10 @@ fn a_linked_session_binds_the_media_scope_only_once_it_knows_its_account() {
 #[test]
 fn a_configured_scope_wins_over_any_bound_source() {
     let scope = MediaScope::fixed(Some("fixed".into()));
-    scope.bind_source(Arc::new(IdentityChannel(std::sync::Mutex::new(Some(
-        "someone".into(),
-    )))));
+    let adapter = crate::provider::test_adapter(Arc::new(IdentityChannel(std::sync::Mutex::new(
+        Some("someone".into()),
+    ))));
+    scope.bind_source(&adapter);
     assert_eq!(scope.current().as_deref(), Some("fixed"));
 }
 
@@ -3667,14 +3836,16 @@ async fn legacy_running_adapter_reports_status_and_refuses_second_start() {
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
         media_account_scope: MediaScope::default(),
-        channel: Some(Arc::new(InteractionChannel::default())),
         provider_name: "interaction-fixture".into(),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
         cancel,
         worker: Mutex::new(None),
         finished: Arc::new(AtomicBool::new(false)),
-        native_ports: None,
+        native_ports: NativePorts::test(
+            Arc::new(InteractionChannel::default()),
+            LongTailListenerMode::Webhook,
+        ),
     });
     struct NullSink;
     #[async_trait::async_trait]
@@ -3725,16 +3896,14 @@ async fn configured_telegram_native_adapter_owns_polling_typing_drafts_and_scope
     let instance = "telegram:account-b".to_owned();
     let channel = Arc::new(
         tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
-            .with_api_base_for_test(server.uri()),
+            .with_api_base_for_test(server.uri())
+            .with_streaming(tinychannels_bus::config::StreamMode::Partial, 0, true),
     );
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_telegram(channel, hooks, host, None, true);
-    assert!(
-        running.channel.is_none(),
-        "Telegram polling is owned by its typed adapter"
-    );
+
     let handle = running.adapter_handle();
     let native = handle.native.as_ref().unwrap().clone();
 
@@ -3842,7 +4011,7 @@ async fn legacy_running_routes_reaction_edit_delete_and_refuses_native_drafts() 
     })
     .await
     .unwrap();
-    let running = Running::start(
+    let running = Running::start_test(
         Arc::new(InteractionChannel::default()),
         Arc::new(Hooks::default()),
         HostChannels::new(connection),
@@ -4077,10 +4246,7 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_slack(channel, hooks, host, None, true);
-    assert!(
-        running.channel.is_none(),
-        "Slack listener runs through its typed adapter"
-    );
+
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::SlackNativeV2);
     let descriptor = handle.descriptor();
@@ -4281,7 +4447,6 @@ async fn configured_slack_typed_listener_delivers_socket_mode_ingress_without_le
             .with_api_base(format!("{}/api", api.uri())),
     );
     let running = Running::start_slack(channel, hooks, host, None, false);
-    assert!(running.channel.is_none());
 
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
@@ -4330,8 +4495,7 @@ async fn configured_slack_draft_dispatch_stamps_trusted_account_on_all_lifecycle
     start.thread_ts = Some("parent-9".into());
     start.reply_to_id = Some("reply-8".into());
     let started = dispatch_interaction(
-        None,
-        Some(native.clone()),
+        native.clone(),
         account,
         tinychannels_bus::ChannelInteraction::SendDraft { message: start },
         &mut typing,
@@ -4343,8 +4507,7 @@ async fn configured_slack_draft_dispatch_stamps_trusted_account_on_all_lifecycle
         tinychannels_bus::ChannelInteractionResult::Draft(Some(id)) if id == "configured-draft"
     ));
     dispatch_interaction(
-        None,
-        Some(native.clone()),
+        native.clone(),
         account,
         tinychannels_bus::ChannelInteraction::UpdateDraft {
             recipient: "C1:100.1".into(),
@@ -4356,8 +4519,7 @@ async fn configured_slack_draft_dispatch_stamps_trusted_account_on_all_lifecycle
     .await
     .unwrap();
     dispatch_interaction(
-        None,
-        Some(native),
+        native,
         account,
         tinychannels_bus::ChannelInteraction::FinalizeDraft {
             recipient: "C1:100.1".into(),
@@ -4421,8 +4583,7 @@ async fn configured_telegram_draft_keeps_topic_and_legacy_reply_separate() {
     let mut typing = TypingRefreshes::default();
 
     let result = dispatch_interaction(
-        None,
-        Some(native),
+        native,
         "telegram:configured-account",
         tinychannels_bus::ChannelInteraction::SendDraft { message },
         &mut typing,
@@ -4486,10 +4647,7 @@ async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_
     .expect("the configured Signal account has a native launch");
     let running = launch.start(hooks, host, None, true);
     let handle = running.adapter_handle();
-    assert!(
-        running.channel.is_none(),
-        "the typed Signal launch must not retain a legacy Channel object"
-    );
+
     assert_eq!(handle.mode, AdapterMode::SignalNativeV2);
     let descriptor = handle.descriptor();
     assert_eq!(descriptor.id, "signal");
@@ -4801,10 +4959,7 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         false,
         crate::provider::LongTailListenerMode::Adapter,
     );
-    assert!(
-        running.channel.is_none(),
-        "configured Discord v2 launch must not retain the legacy Channel transport"
-    );
+
     let adapter = running.adapter_handle();
     assert_eq!(adapter.mode, AdapterMode::DiscordNativeV2);
     let descriptor = adapter.descriptor();
@@ -5220,10 +5375,7 @@ async fn a_built_native_launch_starts_on_the_ordered_queue() {
     let _provider_host = hooks.host(host.clone(), "signal".to_owned(), None);
     let running = launch.start(hooks, host.clone(), None, true);
     assert_eq!(running.adapter_handle().mode, AdapterMode::SignalNativeV2);
-    assert!(
-        running.channel.is_none(),
-        "Signal typed launch must not retain the legacy Channel trait object"
-    );
+
     running.stop().await.unwrap();
 }
 
@@ -5246,10 +5398,7 @@ async fn a_built_imessage_launch_starts_as_the_native_imessage_adapter() {
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::IMessageNativeV2);
     assert_eq!(handle.descriptor().id, "imessage");
-    assert!(
-        running.channel.is_none(),
-        "configured iMessage launch must use its typed listener without retaining Channel"
-    );
+
     running.stop().await.unwrap();
 }
 
@@ -5275,10 +5424,7 @@ async fn a_built_linq_launch_starts_as_the_native_linq_adapter() {
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::LinqNativeV2);
     assert_eq!(handle.descriptor().id, "linq");
-    assert!(
-        running.channel.is_none(),
-        "configured Linq launch must not retain the legacy Channel trait object"
-    );
+
     running.stop().await.unwrap();
 }
 
@@ -5314,8 +5460,8 @@ async fn configured_linq_webhook_uses_typed_port_and_stamps_module_account() {
         crate::native::build_native_v2("linq", &config, &provider_host, &DefaultHttpClients)
             .expect("configured Linq factory");
     let running = launch.start(hooks, host, None, false);
-    let ports = running.native_ports.as_ref().expect("native ports");
-    assert!(running.channel.is_none());
+    let ports = &running.native_ports;
+
     assert!(ports.adapter.supports_webhook_delivery());
 
     let body = serde_json::json!({
@@ -5419,8 +5565,6 @@ async fn a_built_email_launch_starts_as_the_native_email_adapter() {
     assert_eq!(
         running
             .native_ports
-            .as_ref()
-            .unwrap()
             .adapter
             .status()
             .await
@@ -5430,16 +5574,10 @@ async fn a_built_email_launch_starts_as_the_native_email_adapter() {
         Some("unhealthy"),
         "the configured Email adapter must expose its failed IMAP probe"
     );
-    assert!(
-        running.channel.is_none(),
-        "typed Email launch must not retain a legacy Channel transport"
-    );
+
     assert_eq!(
-        running
-            .native_ports
-            .as_ref()
-            .map(|ports| ports.listener_mode),
-        Some(crate::provider::LongTailListenerMode::Adapter),
+        running.native_ports.listener_mode,
+        crate::provider::LongTailListenerMode::Adapter,
         "email IMAP ingress must run through its typed adapter listener"
     );
 
@@ -5762,11 +5900,7 @@ async fn configured_qq_factory_selects_the_native_listener_owner() {
     let running = launch.start(hooks, host, None, true);
 
     assert_eq!(
-        running
-            .native_ports
-            .as_ref()
-            .expect("configured QQ uses native adapter ports")
-            .listener_mode,
+        running.native_ports.listener_mode,
         LongTailListenerMode::Adapter,
         "QQ module launch must route through ChannelAdapter::start, not Channel::listen"
     );
@@ -5797,11 +5931,7 @@ async fn configured_yuanbao_factory_selects_the_native_listener_owner() {
     let running = launch.start(Arc::new(Hooks::default()), host, None, true);
 
     assert_eq!(
-        running
-            .native_ports
-            .as_ref()
-            .expect("configured Yuanbao must expose native adapter ports")
-            .listener_mode,
+        running.native_ports.listener_mode,
         LongTailListenerMode::Adapter,
         "Yuanbao must launch through ChannelAdapter::start, not Channel::listen"
     );
@@ -5828,11 +5958,7 @@ async fn configured_dingtalk_factory_selects_the_native_listener_owner() {
     let running = launch.start(Arc::new(Hooks::default()), host, None, true);
 
     assert_eq!(
-        running
-            .native_ports
-            .as_ref()
-            .expect("configured DingTalk uses native adapter ports")
-            .listener_mode,
+        running.native_ports.listener_mode,
         LongTailListenerMode::Adapter,
         "DingTalk module launch must route through ChannelAdapter::start, not Channel::listen"
     );
@@ -5921,7 +6047,7 @@ async fn configured_long_tail_adapter_sends_through_the_ordered_queue_and_refuse
         host,
         None,
         true,
-        crate::provider::LongTailListenerMode::Legacy,
+        crate::provider::LongTailListenerMode::Adapter,
     );
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::LongTailNativeV2);

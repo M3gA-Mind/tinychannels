@@ -21,6 +21,13 @@ pub trait ChannelInboundSink: Send + Sync {
 pub trait ChannelAdapter: Send + Sync {
     fn descriptor(&self) -> ChannelDescriptor;
 
+    /// Stable authenticated account identity learned by this live adapter,
+    /// when the provider exposes one. Hosts use it to scope durable media and
+    /// fail closed while the identity is unknown or changes mid-session.
+    fn media_account_identity(&self) -> Option<String> {
+        None
+    }
+
     /// Capability facts for this configured account, sourced from its provider.
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         tinychannels_bus::ChannelCapabilities::unknown()

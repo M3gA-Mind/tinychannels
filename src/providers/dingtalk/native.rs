@@ -108,20 +108,27 @@ impl NativeProvider for DingTalkChannel {
         false
     }
 
+    async fn health_state(&self) -> &'static str {
+        if self.register_connection().await.is_ok() {
+            "healthy"
+        } else {
+            "unhealthy"
+        }
+    }
+
     fn declared_capabilities(&self) -> ChannelCapabilities {
         let mut caps = crate::providers::long_tail::text_capabilities(
             crate::providers::long_tail::TextSpec::default(),
         );
         if let Some(_repository) = &self.native.media_repository {
-            let inbound = self.native.events.is_some();
             let image = ContentCapability {
-                inbound,
+                inbound: true,
                 accepted_types: vec!["image/jpeg".into(), "image/png".into()],
                 max_size_bytes: Some(MAX_MEDIA_BYTES),
                 ..Default::default()
             };
             let file = ContentCapability {
-                inbound,
+                inbound: true,
                 outbound: true,
                 accepted_types: vec![
                     "application/pdf".into(),
@@ -144,7 +151,7 @@ impl NativeProvider for DingTalkChannel {
             caps.content.image = image;
             caps.content.file = file;
         }
-        if self.native.events.is_some() && self.native.voice_media_store.is_some() {
+        if self.native.voice_media_store.is_some() {
             caps.content.audio = ContentCapability {
                 inbound: true,
                 accepted_types: vec![
@@ -231,6 +238,55 @@ impl NativeProvider for DingTalkChannel {
     }
 
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError> {
+        if let Step::Text(text) = step
+            && let Some(webhook) = self
+                .session_webhooks
+                .read()
+                .await
+                .get(&target.conversation.id)
+                .cloned()
+        {
+            let (title, body) = text
+                .strip_prefix("Subject: ")
+                .and_then(|text| text.split_once('\n'))
+                .filter(|(title, _)| !title.trim().is_empty())
+                .map_or(("OpenHuman", text.as_str()), |(title, body)| {
+                    (title.trim(), body)
+                });
+            let response = self
+                .http_client()
+                .post(webhook)
+                .json(&serde_json::json!({
+                    "msgtype": "markdown",
+                    "markdown": { "title": title, "text": body }
+                }))
+                .send()
+                .await
+                .map_err(|_| unknown_after_send("DingTalk webhook reply outcome is uncertain"))?;
+            if !response.status().is_success() {
+                let status = response.status();
+                return Err(if status.is_server_error() {
+                    unknown_after_send("DingTalk webhook reply outcome is uncertain")
+                } else {
+                    known_unsent("DingTalk webhook reply was rejected")
+                });
+            }
+            let body: serde_json::Value = response.json().await.map_err(|_| {
+                unknown_after_send("DingTalk webhook reply response could not be verified")
+            })?;
+            match body.get("errcode").and_then(serde_json::Value::as_i64) {
+                Some(0) => {}
+                Some(_) => return Err(known_unsent("DingTalk webhook reply was rejected")),
+                None => {
+                    return Err(unknown_after_send(
+                        "DingTalk webhook reply response could not be verified",
+                    ));
+                }
+            }
+            // Session webhooks do not return provider message IDs.
+            return Ok(Vec::new());
+        }
+
         let context = self
             .robot_contexts
             .read()
@@ -365,7 +421,7 @@ impl NativeProvider for DingTalkChannel {
             ..Default::default()
         })?;
         let _registration = super::ListenerRegistration { channel: self, id };
-        self.listen_owned(super::DingTalkIngress::Typed(sink), Some(cancellation))
+        self.listen_owned(sink, Some(cancellation))
             .await
             .map_err(|error| {
                 tracing::debug!(%error, "DingTalk typed listener stopped");
@@ -501,24 +557,16 @@ impl DingTalkChannel {
         Ok(response.media_id)
     }
 
-    pub(super) async fn inbound_envelope(
-        &self,
-        data: &serde_json::Value,
-    ) -> Option<ChannelInboundEnvelope> {
-        self.inbound_envelope_with_mode(data, false).await
-    }
-
     pub(super) async fn inbound_envelope_for_listener(
         &self,
         data: &serde_json::Value,
     ) -> Option<ChannelInboundEnvelope> {
-        self.inbound_envelope_with_mode(data, true).await
+        self.inbound_envelope_with_mode(data).await
     }
 
     async fn inbound_envelope_with_mode(
         &self,
         data: &serde_json::Value,
-        listener: bool,
     ) -> Option<ChannelInboundEnvelope> {
         use crate::providers::native::inbound::{assemble, media_of};
 
@@ -575,12 +623,9 @@ impl DingTalkChannel {
             .to_owned();
         let mut ingested = Ingested::default();
         let voice = message_type == "audio";
-        let can_ingest_file = (listener || self.native.events.is_some())
-            && self.native.media_repository.is_some()
-            && matches!(message_type, "picture" | "file");
-        let can_ingest_voice = (listener || self.native.events.is_some())
-            && self.native.voice_media_store.is_some()
-            && voice;
+        let can_ingest_file =
+            self.native.media_repository.is_some() && matches!(message_type, "picture" | "file");
+        let can_ingest_voice = self.native.voice_media_store.is_some() && voice;
         if can_ingest_file || can_ingest_voice {
             let download_code = if message_type == "picture" {
                 content

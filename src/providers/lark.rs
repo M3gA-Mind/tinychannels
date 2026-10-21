@@ -1,5 +1,5 @@
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceCodec, VoiceMediaStore};
-use crate::traits::{Channel, ChannelMessage, SendMessage};
+use crate::traits::ChannelMessage;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as ProstMessage;
@@ -94,36 +94,6 @@ struct LarkEventHeader {
     event_id: String,
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct MsgReceivePayload {
-    sender: LarkSender,
-    message: LarkMessage,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct LarkSender {
-    sender_id: LarkSenderId,
-    #[serde(default)]
-    sender_type: String,
-}
-
-#[derive(Debug, serde::Deserialize, Default)]
-struct LarkSenderId {
-    open_id: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct LarkMessage {
-    message_id: String,
-    chat_id: String,
-    chat_type: String,
-    message_type: String,
-    #[serde(default)]
-    content: String,
-    #[serde(default)]
-    mentions: Vec<serde_json::Value>,
-}
-
 struct LarkListenerRegistration<'a> {
     channel: &'a LarkChannel,
     id: Uuid,
@@ -135,11 +105,6 @@ impl Drop for LarkListenerRegistration<'_> {
     fn drop(&mut self) {
         self.channel.end_listener(self.id);
     }
-}
-
-enum LarkIngress<'a> {
-    Legacy(tokio::sync::mpsc::Sender<ChannelMessage>),
-    Typed(&'a (dyn crate::channel::ChannelInboundSink + Send + Sync)),
 }
 
 struct TypedWebhookEvent {
@@ -389,7 +354,10 @@ impl LarkChannel {
     /// WS long-connection event loop.  Returns Ok(()) when the connection closes
     /// (the caller reconnects).
     #[allow(clippy::too_many_lines)]
-    async fn listen_ws(&self, ingress: LarkIngress<'_>) -> anyhow::Result<()> {
+    async fn listen_ws(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> anyhow::Result<()> {
         let (wss_url, client_config) = self.get_ws_endpoint().await?;
         let service_id = wss_url
             .split('?')
@@ -546,116 +514,44 @@ impl LarkChannel {
                     };
                     if event.header.event_type != "im.message.receive_v1" { continue; }
 
-                    let event_payload = event.event.clone();
-                    let recv: MsgReceivePayload = match serde_json::from_value(event.event) {
-                        Ok(r) => r,
-                        Err(e) => { tracing::error!("Lark: payload parse: {e}"); continue; }
+                    let event_payload = event.event;
+                    let message_id = event_payload
+                        .pointer("/message/message_id")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|value| !value.is_empty());
+                    let Some(message_id) = message_id else {
+                        tracing::debug!("Lark: event has no message ID");
+                        continue;
                     };
-
-                    if matches!(&ingress, LarkIngress::Typed(_)) {
-                        if !self.is_event_admitted(&event_payload) {
-                            continue;
-                        }
-                    } else {
-                        if recv.sender.sender_type == "app" || recv.sender.sender_type == "bot" {
-                            continue;
-                        }
-                        let sender_open_id = recv.sender.sender_id.open_id.as_deref().unwrap_or("");
-                        if !self.is_user_allowed(sender_open_id) {
-                            tracing::warn!("Lark WS: ignoring {sender_open_id} (not in allowed_users)");
-                            continue;
-                        }
+                    if !self.is_event_admitted(&event_payload) {
+                        continue;
                     }
-
-                    let lark_msg = &recv.message;
 
                     // Check dedup before downloading content. Typed events are
                     // recorded only after publication succeeds so a rejected
                     // sink can receive the provider retry after reconnect.
-                    if self.ws_message_was_seen(&lark_msg.message_id).await {
-                        tracing::debug!("Lark WS: dup {}", lark_msg.message_id);
+                    if self.ws_message_was_seen(message_id).await {
+                        tracing::debug!("Lark WS: dup {message_id}");
                         continue;
                     }
 
-                    if let LarkIngress::Typed(sink) = &ingress {
-                        if let Some(envelope) = self
-                            .inbound_envelope_for_listener(&event_payload, true)
-                            .await
-                            && sink
-                                .push(tinychannels_bus::ChannelIngress::Inbound(envelope))
-                                .await
-                                .is_err()
-                        {
-                            tracing::warn!("Lark WS: typed ingress sink rejected an event");
-                            break;
-                        }
-                        self.mark_ws_message_seen(&lark_msg.message_id).await;
-                        continue;
-                    }
-
-                    self.mark_ws_message_seen(&lark_msg.message_id).await;
-
-                    if let Some(envelope) = self.inbound_envelope(&event_payload).await
-                        && crate::providers::native::inbound::publish(
-                            "lark",
-                            self.native.events.as_ref(),
-                            envelope,
-                        )
+                    let Some(envelope) = self
+                        .inbound_envelope_for_listener(&event_payload, true)
                         .await
+                    else {
+                        continue;
+                    };
+                    if sink
+                        .push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                        .await
+                        .is_err()
                     {
-                        continue;
+                        tracing::warn!("Lark WS: typed ingress sink rejected an event");
+                        break;
                     }
+                    self.mark_ws_message_seen(message_id).await;
+                    continue;
 
-                    // Decode content by type (mirrors clawdbot-feishu parsing)
-                    let text = match lark_msg.message_type.as_str() {
-                        "text" => {
-                            let v: serde_json::Value = match serde_json::from_str(&lark_msg.content) {
-                                Ok(v) => v,
-                                Err(_) => continue,
-                            };
-                            match v.get("text").and_then(|t| t.as_str()).filter(|s| !s.is_empty()) {
-                                Some(t) => t.to_string(),
-                                None => continue,
-                            }
-                        }
-                        "post" => match parse_post_content(&lark_msg.content) {
-                            Some(t) => t,
-                            None => continue,
-                        },
-                        _ => { tracing::debug!("Lark WS: skipping unsupported type '{}'", lark_msg.message_type); continue; }
-                    };
-
-                    // Strip @_user_N placeholders
-                    let text = strip_at_placeholders(&text);
-                    let text = text.trim().to_string();
-                    if text.is_empty() { continue; }
-
-                    // Group-chat: only respond when explicitly @-mentioned
-                    if lark_msg.chat_type == "group" && !should_respond_in_group(&lark_msg.mentions) {
-                        continue;
-                    }
-
-                    let channel_msg = ChannelMessage {
-                        id: Uuid::new_v4().to_string(),
-                        sender: lark_msg.chat_id.clone(),
-                        reply_target: lark_msg.chat_id.clone(),
-                        content: text,
-                        channel: "lark".to_string(),
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                        topic_id: None,
-                        reply_to_id: None,
-                        thread_ts: None,
-                        sender_name: None,
-                    };
-
-                    tracing::debug!("Lark WS: message in {}", lark_msg.chat_id);
-                    let LarkIngress::Legacy(tx) = &ingress else {
-                        unreachable!("typed Lark ingress returned above")
-                    };
-                    if tx.send(channel_msg).await.is_err() { break; }
                 }
             }
         }
@@ -736,10 +632,13 @@ impl LarkChannel {
         Ok(token)
     }
 
-    /// Invalidate cached token (called on 401)
-    async fn invalidate_token(&self) {
+    /// Invalidate only the token that received the explicit auth rejection.
+    /// Another request may already have refreshed the shared cache.
+    async fn invalidate_token_if_current(&self, rejected: &str) {
         let mut cached = self.tenant_token.write().await;
-        *cached = None;
+        if cached.as_deref() == Some(rejected) {
+            *cached = None;
+        }
     }
 
     /// Parse an event callback payload and extract text messages
@@ -867,84 +766,6 @@ impl LarkChannel {
         });
 
         messages
-    }
-}
-
-#[async_trait]
-impl Channel for LarkChannel {
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        crate::providers::long_tail::LongTail::declared(self)
-    }
-
-    fn name(&self) -> &str {
-        "lark"
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        let token = self.get_tenant_access_token().await?;
-        let url = self.send_message_url();
-
-        let content = serde_json::json!({ "text": message.content }).to_string();
-        let body = serde_json::json!({
-            "receive_id": message.recipient,
-            "msg_type": "text",
-            "content": content,
-        });
-
-        let resp = self
-            .http_client()
-            .post(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Content-Type", "application/json; charset=utf-8")
-            .json(&body)
-            .send()
-            .await?;
-
-        if resp.status().as_u16() == 401 {
-            // Token expired, invalidate and retry once
-            self.invalidate_token().await;
-            let new_token = self.get_tenant_access_token().await?;
-            let retry_resp = self
-                .http_client()
-                .post(&url)
-                .header("Authorization", format!("Bearer {new_token}"))
-                .header("Content-Type", "application/json; charset=utf-8")
-                .json(&body)
-                .send()
-                .await?;
-
-            if !retry_resp.status().is_success() {
-                let err = retry_resp.text().await.unwrap_or_default();
-                anyhow::bail!("Lark send failed after token refresh: {err}");
-            }
-            return Ok(());
-        }
-
-        if !resp.status().is_success() {
-            let err = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Lark send failed: {err}");
-        }
-
-        Ok(())
-    }
-
-    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        use crate::config::LarkReceiveMode;
-        match self.receive_mode {
-            LarkReceiveMode::Websocket => self.listen_ws(LarkIngress::Legacy(tx)).await,
-            LarkReceiveMode::Webhook => self.listen_http(tx).await,
-        }
-    }
-
-    async fn health_check(&self) -> bool {
-        self.get_tenant_access_token().await.is_ok()
     }
 }
 
@@ -1294,6 +1115,18 @@ impl crate::providers::long_tail::LongTail for LarkChannel {
         self.native_declared_capabilities(text_capabilities(TextSpec::default()))
     }
 
+    async fn health_state(&self) -> &'static str {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.get_tenant_access_token(),
+        )
+        .await
+        {
+            Ok(Ok(_)) => "healthy",
+            Ok(Err(_)) | Err(_) => "unhealthy",
+        }
+    }
+
     async fn send_typed_message(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
@@ -1315,7 +1148,7 @@ impl crate::providers::long_tail::LongTail for LarkChannel {
                 tokio::select! {
                     biased;
                     _ = cancellation.changed() => Ok(()),
-                    result = self.listen_ws(LarkIngress::Typed(sink)) => result,
+                    result = self.listen_ws(sink) => result,
                 }
             }
             crate::config::LarkReceiveMode::Webhook => {
