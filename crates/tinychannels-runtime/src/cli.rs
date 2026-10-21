@@ -10,11 +10,12 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::channel::{
-    AccessContext, ChannelAccountSnapshot, ChannelAdapter, ChannelCapabilities, ChannelDescriptor,
-    ChannelInboundEnvelope, ChannelInboundSink, ChannelOutboundIntent, ChannelOutboundMessage,
-    ChannelSendError, ChannelSendOutcome, ChannelTypedSend, ContentPart, ConversationKind,
-    ConversationRef, GroupAccessPolicy, MentionGate, SenderDmDecision, SenderRef,
+    AccessContext, ChannelAdapter, ChannelDescriptor, ChannelInboundEnvelope, ChannelInboundSink,
+    ChannelOutboundIntent, ChannelSendError, ChannelSendOutcome, ChannelTypedSend,
+    ConversationKind, ConversationRef, GroupAccessPolicy, MentionGate, SenderDmDecision, SenderRef,
 };
+use crate::controllers::ChannelAccountSnapshot;
+use tinychannels_bus::{ChannelCapabilities, ChannelOutboundMessage, ContentPart};
 
 /// Console channel. `/quit` or `/exit` ends the listen loop.
 #[derive(Debug, Clone)]
