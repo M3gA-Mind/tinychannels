@@ -953,7 +953,8 @@ impl Channels {
                 (intent, legacy_message)
             }
             ChannelMessagePreparation::Typed(message) => {
-                let mut intent = tinychannels::outbound_intent_from_send_message(&channel, &message);
+                let mut intent =
+                    tinychannels::outbound_intent_from_send_message(&channel, &message);
                 // Keep the legacy JSON projection and deterministic key for
                 // existing callers, but immediately convert the DTO into the
                 // canonical text payload. Only providers that historically
