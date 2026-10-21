@@ -14,9 +14,8 @@ mod native;
 
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::native::HostPorts as NativeState;
-use crate::traits::{ChannelMessage, SendMessage};
+use crate::traits::ChannelMessage;
 use anyhow::Context as _;
-use async_trait::async_trait;
 use directories::UserDirs;
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};

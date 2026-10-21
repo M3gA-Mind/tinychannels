@@ -4826,7 +4826,7 @@ async fn whatsapp_cloud_starts_normally_and_serves_webhook_ingress_over_the_bus(
         .start_channel("whatsapp".into(), config.clone())
         .await
         .expect("the module serves the Cloud webhook ingress");
-    let running = service
+    let _running = service
         .running
         .lock()
         .await

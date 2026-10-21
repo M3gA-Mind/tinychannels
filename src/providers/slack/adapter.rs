@@ -1,9 +1,6 @@
 //! `Channel` and v2 adapter trait implementations for Slack.
 
-use super::interact::edit_text_for_legacy;
-use super::outbound::{send_error_to_anyhow, text_message};
 use super::types::SlackChannel;
-use crate::traits::{ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;

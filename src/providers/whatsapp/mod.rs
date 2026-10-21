@@ -5,7 +5,7 @@ mod outbound;
 use crate::providers::whatsapp_shared::capabilities::{CapabilitySpec, capabilities};
 use crate::providers::whatsapp_shared::error::WaFailure;
 use crate::providers::whatsapp_shared::window::{BoundedMap, SeenSet};
-use crate::traits::{ChannelMessage, SendMessage};
+use crate::traits::ChannelMessage;
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use std::sync::Arc;

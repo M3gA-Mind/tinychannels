@@ -12,8 +12,7 @@ mod native;
 
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::native::HostPorts as NativeState;
-use crate::traits::{ChannelMessage, SendMessage};
-use async_trait::async_trait;
+use crate::traits::ChannelMessage;
 use std::sync::Arc;
 use uuid::Uuid;
 

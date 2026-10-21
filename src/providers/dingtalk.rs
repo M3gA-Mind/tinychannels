@@ -1,5 +1,4 @@
 use crate::traits::ChannelMessage;
-use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;

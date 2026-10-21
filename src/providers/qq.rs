@@ -1,5 +1,4 @@
-use crate::traits::{ChannelMessage, SendMessage};
-use async_trait::async_trait;
+use crate::traits::ChannelMessage;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::collections::HashSet;

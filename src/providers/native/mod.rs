@@ -15,7 +15,7 @@ pub(crate) mod inbound;
 pub(crate) mod outbound;
 
 pub(crate) use edit::{delete, edit, upsert_draft};
-pub(crate) use outbound::{Sent, Step, Target, to_anyhow};
+pub(crate) use outbound::{Sent, Step, Target};
 
 use async_trait::async_trait;
 use parking_lot::Mutex;

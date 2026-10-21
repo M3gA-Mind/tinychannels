@@ -1,5 +1,5 @@
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceCodec, VoiceMediaStore};
-use crate::traits::{ChannelMessage, SendMessage};
+use crate::traits::ChannelMessage;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as ProstMessage;

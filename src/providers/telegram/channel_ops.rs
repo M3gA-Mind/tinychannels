@@ -1,6 +1,6 @@
 //! Telegram channel — `Channel` trait implementation: send, listen, draft streaming, typing.
 
-use super::channel_types::{TelegramChannel, TelegramTypingTask};
+use super::channel_types::TelegramChannel;
 use super::text::{TELEGRAM_MAX_MESSAGE_LENGTH, markdown_v2_text, strip_tool_call_tags};
 use crate::config::StreamMode;
 use crate::traits::{ChannelMessage, SendMessage};

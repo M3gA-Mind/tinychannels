@@ -18,8 +18,6 @@ use async_imap::extensions::idle::IdleResponse;
 #[cfg(feature = "email")]
 use async_imap::types::Fetch;
 #[cfg(feature = "email")]
-use async_trait::async_trait;
-#[cfg(feature = "email")]
 use futures::TryStreamExt;
 use lettre::message::{Attachment, MultiPart, SinglePart, header::ContentType};
 use lettre::transport::smtp::authentication::Credentials;
@@ -79,11 +77,11 @@ pub use crate::config::EmailConfig;
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::mail::{ImapCredentials, MailSecret, SmtpCredentials, SmtpSecurity};
 #[cfg(feature = "email")]
-use crate::providers::mail::{LettreMailSender, MailCredentials, MailSender, OutboundEmail};
+use crate::providers::mail::MailSender;
 #[cfg(feature = "email")]
 use crate::providers::native::HostPorts as NativeState;
 #[cfg(feature = "email")]
-use crate::traits::{ChannelMessage, SendMessage};
+use crate::traits::ChannelMessage;
 
 #[cfg(feature = "email")]
 type ImapSession = Session<TlsStream<TcpStream>>;

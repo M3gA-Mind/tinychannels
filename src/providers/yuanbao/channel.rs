@@ -9,14 +9,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tinychannels_runtime::config::YuanbaoConfigExt as _;
 
-use async_trait::async_trait;
 use tokio::sync::{Mutex as TokioMutex, mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::native::HostPorts as NativeState;
-use crate::traits::{ChannelMessage, SendMessage};
+use crate::traits::ChannelMessage;
 
 use super::config::YuanbaoConfig;
 use super::connection::{InboundEvent, YuanbaoConnection};
