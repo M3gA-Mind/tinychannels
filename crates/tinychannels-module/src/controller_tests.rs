@@ -275,6 +275,31 @@ impl NativeControllerFixture {
         }))
     }
 
+    async fn captured_request_since(&self, before: usize) -> anyhow::Result<serde_json::Value> {
+        let requests = self
+            .server
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("failed to read provider mock requests"))?;
+        let request = requests
+            .get(before..)
+            .and_then(|fresh| fresh.last())
+            .ok_or_else(|| anyhow::anyhow!("operation made no fresh provider HTTP request"))?;
+        let body = serde_json::from_slice::<serde_json::Value>(&request.body)
+            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&request.body).into()));
+        let authorization = request
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        Ok(serde_json::json!({
+            "method": request.method.as_str(),
+            "path": request.url.path(),
+            "body": body,
+            "authorization": authorization,
+        }))
+    }
+
     async fn wire_count(&self) -> usize {
         self.server
             .received_requests()
@@ -364,7 +389,7 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
                     return Err(unsupported("native reaction was not accepted".into()));
                 }
                 let request = self
-                    .captured_request()
+                    .captured_request_since(before)
                     .await
                     .map_err(|error| unsupported(error.to_string()))?;
                 self.record(
@@ -386,7 +411,7 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
                         .await
                 );
                 let request = self
-                    .captured_request()
+                    .captured_request_since(before)
                     .await
                     .map_err(|error| unsupported(error.to_string()))?;
                 self.record(
@@ -413,7 +438,7 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
                         .await
                 );
                 let request = self
-                    .captured_request()
+                    .captured_request_since(before)
                     .await
                     .map_err(|error| unsupported(error.to_string()))?;
                 self.record(
@@ -435,7 +460,7 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
                         .await
                 );
                 let request = self
-                    .captured_request()
+                    .captured_request_since(before)
                     .await
                     .map_err(|error| unsupported(error.to_string()))?;
                 let ids = result

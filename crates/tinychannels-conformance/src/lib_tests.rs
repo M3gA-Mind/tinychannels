@@ -876,8 +876,10 @@ impl NativeControllerFixture for NativeControllerFixtureCase {
 
 #[tokio::test]
 async fn native_controller_matrix_requires_declared_wire_and_no_managed_callback() {
-    let mut capabilities = ChannelCapabilities::default();
-    capabilities.reactions = true;
+    let mut capabilities = ChannelCapabilities {
+        reactions: true,
+        ..Default::default()
+    };
     let fixture = NativeControllerFixtureCase {
         capabilities,
         callbacks: std::sync::atomic::AtomicUsize::new(0),
