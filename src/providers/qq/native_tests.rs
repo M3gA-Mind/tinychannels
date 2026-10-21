@@ -51,6 +51,7 @@ async fn qq_inbound_image_downloads_tencent_attachment_and_publishes_typed_ingre
     })
     .await;
     let media = Arc::new(StubMedia::default());
+    let events = Arc::new(RecordingEvents::delivering());
     let channel = super::super::QQChannel::with_http_client(
         "app-id".into(),
         "app-secret".into(),
