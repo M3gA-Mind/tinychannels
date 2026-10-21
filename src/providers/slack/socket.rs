@@ -53,9 +53,10 @@ impl SlackChannel {
     }
 
     /// Run Socket Mode with a bounded queue between the protocol reader and
-    /// typed ingress delivery. Envelopes are acknowledged only after they are
-    /// safely in that queue, so a slow sink cannot block websocket control
-    /// frames or acknowledgements until the bounded queue is full.
+    /// typed ingress delivery. Envelopes are acknowledged only after the sink
+    /// accepts their typed record. The reader continues servicing websocket
+    /// control frames while delivery is pending; a full queue reconnects
+    /// without acknowledging the envelope Slack must redeliver.
     pub(crate) async fn listen_socket_typed(
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),

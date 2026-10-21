@@ -599,6 +599,133 @@ async fn typed_socket_ack_waits_for_sink_acceptance_without_blocking_ping() {
 }
 
 #[tokio::test]
+async fn typed_socket_retries_a_rejected_record_before_acknowledging_it() {
+    use crate::channel::{ChannelAdapter, ChannelInboundSink, ChannelSendError};
+    use tinychannels_bus::ChannelIngress;
+
+    struct RejectThenBlockSink {
+        calls: AtomicUsize,
+        retry_started: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        accepted: tokio::sync::mpsc::UnboundedSender<ChannelIngress>,
+    }
+
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for RejectThenBlockSink {
+        async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+            match self.calls.fetch_add(1, Ordering::SeqCst) {
+                0 => Err(ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                    message: "temporary sink rejection".into(),
+                    retryable: true,
+                    ..Default::default()
+                }),
+                1 => {
+                    self.retry_started.notify_one();
+                    self.release.notified().await;
+                    self.accepted.send(ingress).map_err(|_| ChannelSendError {
+                        kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                        message: "test sink closed".into(),
+                        retryable: true,
+                        ..Default::default()
+                    })
+                }
+                _ => Ok(()),
+            }
+        }
+    }
+
+    let server = mock_api().await;
+    mount_auth(&server, "UBOT").await;
+    let (pong_tx, pong_rx) = tokio::sync::oneshot::channel();
+    let pong_tx = Arc::new(Mutex::new(Some(pong_tx)));
+    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+    let ack_tx = Arc::new(Mutex::new(Some(ack_tx)));
+    let url = serve(move |_, mut socket| {
+        let pong_tx = pong_tx.clone();
+        let ack_tx = ack_tx.clone();
+        Box::pin(async move {
+            socket
+                .send(envelope(
+                    "events_api",
+                    "rejected-before-accepted",
+                    message_event("11.2", "retry rejected record"),
+                ))
+                .await
+                .unwrap();
+            socket
+                .send(Message::Ping(vec![4, 5, 6].into()))
+                .await
+                .unwrap();
+            let frame = tokio::time::timeout(Duration::from_secs(2), socket.next())
+                .await
+                .expect("reader services ping while the record is rejected")
+                .expect("socket remains open")
+                .expect("websocket frame is valid");
+            assert_eq!(frame, Message::Pong(vec![4, 5, 6].into()));
+            if let Some(pong_tx) = pong_tx.lock().unwrap().take() {
+                let _ = pong_tx.send(());
+            }
+            expect_ack(&mut socket, "rejected-before-accepted").await;
+            if let Some(ack_tx) = ack_tx.lock().unwrap().take() {
+                let _ = ack_tx.send(());
+            }
+            let _ = socket.close(None).await;
+        })
+    })
+    .await;
+    open_returns(&server, &url).await;
+
+    let channel = Arc::new(channel_for(&server, &["U1"]).with_app_token(Some("app-token".into())));
+    let (accepted_tx, mut accepted_rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Arc::new(RejectThenBlockSink {
+        calls: AtomicUsize::new(0),
+        retry_started: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+        accepted: accepted_tx,
+    });
+    let listener_channel = channel.clone();
+    let listener_sink = sink.clone();
+    let listener = tokio::spawn(async move {
+        ChannelAdapter::start(listener_channel.as_ref(), listener_sink.as_ref()).await
+    });
+
+    tokio::time::timeout(Duration::from_secs(2), sink.retry_started.notified())
+        .await
+        .expect("rejected sink record is retried");
+    tokio::time::timeout(Duration::from_secs(2), pong_rx)
+        .await
+        .expect("websocket ping is answered before the sink accepts")
+        .expect("test server observed pong");
+    assert!(
+        accepted_rx.try_recv().is_err(),
+        "rejected record is not accepted"
+    );
+    sink.release.notify_one();
+
+    let accepted = tokio::time::timeout(Duration::from_secs(2), accepted_rx.recv())
+        .await
+        .expect("retry is accepted")
+        .expect("sink remains open");
+    let ChannelIngress::Inbound(accepted) = accepted else {
+        panic!("expected an accepted inbound envelope, got {accepted:?}");
+    };
+    assert_eq!(accepted.text, "retry rejected record");
+    tokio::time::timeout(Duration::from_secs(2), ack_rx)
+        .await
+        .expect("Socket Mode acknowledges after sink acceptance")
+        .expect("test server observed ack");
+    assert_eq!(sink.calls.load(Ordering::SeqCst), 2);
+
+    ChannelAdapter::stop(channel.as_ref()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), listener)
+        .await
+        .expect("listener stops")
+        .expect("listener task joins")
+        .expect("stop is successful");
+}
+
+#[tokio::test]
 async fn adapter_start_delivers_socket_mode_messages_to_the_typed_sink() {
     use crate::channel::{ChannelAdapter, ChannelInboundSink, ChannelSendError};
     use tinychannels_bus::ChannelIngress;
