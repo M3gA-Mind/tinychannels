@@ -1374,7 +1374,7 @@ pub(crate) enum LongTailListenerMode {
 impl NativePorts {
     #[cfg(test)]
     fn test<T: TestProviderBehavior + 'static>(channel: Arc<T>, listener_mode: LongTailListenerMode) -> Self {
-        let channel = Arc::new(TestNative(channel));
+        let channel = Arc::new(TestNative::new(channel));
         let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = channel.clone();
         let typed_send: Arc<dyn tinychannels::channel::ChannelTypedSend> = channel.clone();
         let typing: Arc<dyn tinychannels::channel::ChannelTyping> = channel.clone();
