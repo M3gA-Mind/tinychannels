@@ -314,9 +314,7 @@ async fn typed_socket_listener_rejects_duplicates_and_restarts_after_stop() {
     .await;
     open_returns(&server, &url).await;
 
-    let channel = Arc::new(
-        channel_for(&server, &["U1"]).with_app_token(Some("app-token".into())),
-    );
+    let channel = Arc::new(channel_for(&server, &["U1"]).with_app_token(Some("app-token".into())));
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let sink = Arc::new(Sink(tx));
     let first_channel = channel.clone();
@@ -361,7 +359,10 @@ async fn typed_socket_listener_rejects_duplicates_and_restarts_after_stop() {
         panic!("expected second inbound event, got {second_event:?}");
     };
     assert_eq!(second_event.text, "after restart");
-    assert!(rx.try_recv().is_err(), "restart must not duplicate prior ingress");
+    assert!(
+        rx.try_recv().is_err(),
+        "restart must not duplicate prior ingress"
+    );
 
     ChannelAdapter::stop(channel.as_ref()).await.unwrap();
     tokio::time::timeout(Duration::from_secs(2), second)
