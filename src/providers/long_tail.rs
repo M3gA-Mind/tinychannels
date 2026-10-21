@@ -114,6 +114,12 @@ pub(crate) trait LongTail: Send + Sync {
         Vec::new()
     }
 
+    /// Probe the configured provider when it has a bounded native health
+    /// check. Providers without one retain an honest unknown state.
+    async fn health_state(&self) -> &'static str {
+        "unknown"
+    }
+
     /// Whether the typing indicator is implemented.
     fn typing_supported(&self) -> bool {
         false
@@ -296,7 +302,9 @@ macro_rules! impl_long_tail_adapter {
                 tinychannels_bus::controllers::ChannelAccountSnapshot,
                 tinychannels_bus::channel::ChannelSendError,
             > {
-                Ok($crate::providers::long_tail::status::<$ty>())
+                let mut snapshot = $crate::providers::long_tail::status::<$ty>();
+                snapshot.health_state = Some($crate::providers::long_tail::LongTail::health_state(self).await.into());
+                Ok(snapshot)
             }
         }
 
