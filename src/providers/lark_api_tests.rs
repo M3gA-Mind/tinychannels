@@ -803,7 +803,7 @@ async fn send_fetches_a_token_once_and_posts_a_text_message() {
         .send(&SendMessage::new("second", "oc_chat"))
         .await
         .unwrap();
-    assert!(channel.health_check().await, "cached token stays healthy");
+    assert!(crate::provider_test_support::is_healthy(&channel).await, "cached token stays healthy");
 
     let requests = server.requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 3, "the token is fetched once and cached");
@@ -1211,7 +1211,7 @@ async fn token_errors_fail_send_and_health_check() {
     let server =
         HttpsServer::start(|_| (200, r#"{"code":10003,"msg":"invalid app_secret"}"#.into())).await;
     let channel = channel_with(&server, true);
-    assert!(!channel.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&channel).await);
     let error = channel
         .send(&SendMessage::new("x", "oc_chat"))
         .await

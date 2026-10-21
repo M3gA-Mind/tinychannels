@@ -869,7 +869,7 @@ async fn injected_cloud_client_reports_connection_failure_and_listener_stays_idl
             .await
             .is_err()
     );
-    assert!(!channel.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&channel).await);
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(10), channel.listen(tx))
@@ -997,7 +997,7 @@ mod v2 {
             .mount(&server)
             .await;
         let healthy = channel(&server);
-        assert!(healthy.health_check().await);
+        assert!(crate::provider_test_support::is_healthy(&healthy).await);
         assert_eq!(
             tinychannels_runtime::channel::ChannelAdapter::status(&healthy)
                 .await
@@ -1013,7 +1013,7 @@ mod v2 {
             .mount(&server)
             .await;
         let unhealthy = channel(&server);
-        assert!(!unhealthy.health_check().await);
+        assert!(!uncrate::provider_test_support::is_healthy(&healthy).await);
         assert_eq!(
             tinychannels_runtime::channel::ChannelAdapter::status(&unhealthy)
                 .await
@@ -1024,7 +1024,7 @@ mod v2 {
         );
         let insecure = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![])
             .with_api_base_for_test("http://graph.example.invalid");
-        assert!(!insecure.health_check().await);
+        assert!(!crate::provider_test_support::is_healthy(&insecure).await);
     }
 
     #[tokio::test]

@@ -59,18 +59,18 @@ fn whatsapp_web_normalize_phone_preserves_plus() {
 #[cfg(feature = "whatsapp-web")]
 async fn whatsapp_web_health_check_disconnected() {
     let ch = make_channel();
-    assert!(!ch.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&ch).await);
 }
 
 #[tokio::test]
 #[cfg(feature = "whatsapp-web")]
 async fn whatsapp_web_health_check_tracks_connected_flag() {
     let ch = make_channel();
-    assert!(!ch.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&ch).await);
     ch.connected.store(true, Ordering::Release);
-    assert!(ch.health_check().await);
+    assert!(crate::provider_test_support::is_healthy(&ch).await);
     ch.connected.store(false, Ordering::Release);
-    assert!(!ch.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&ch).await);
 }
 
 #[test]

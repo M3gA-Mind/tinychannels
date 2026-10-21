@@ -119,7 +119,7 @@ async fn oauth_cache_gateway_and_send_preserve_auth_and_routing() {
     assert_eq!(server.requests.lock().unwrap().len(), 1);
     *channel.token_cache.write().await = Some(("expired".into(), 0));
     assert_eq!(channel.get_token().await.unwrap(), "token");
-    assert!(channel.health_check().await);
+    assert!(crate::provider_test_support::is_healthy(&channel).await);
     assert_eq!(
         channel.get_gateway_url("token").await.unwrap(),
         "ws://localhost/gateway"
@@ -160,7 +160,7 @@ async fn oauth_and_gateway_reject_invalid_responses_and_network_failures() {
             server.client.clone(),
         );
         assert!(channel.fetch_access_token().await.is_err());
-        assert!(!channel.health_check().await);
+        assert!(!crate::provider_test_support::is_healthy(&channel).await);
         assert!(channel.get_gateway_url("token").await.is_err());
     }
     for (expires, lifetime) in [
@@ -198,7 +198,7 @@ async fn oauth_and_gateway_reject_invalid_responses_and_network_failures() {
         .build()
         .unwrap();
     let channel = QQChannel::with_http_client("id".into(), "secret".into(), vec![], client);
-    assert!(!channel.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&channel).await);
     assert!(channel.get_gateway_url("token").await.is_err());
     assert!(
         channel

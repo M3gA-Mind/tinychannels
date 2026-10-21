@@ -774,7 +774,7 @@ async fn health_check_reflects_the_host_os() {
     let (_dir, db_path) = create_test_db();
     let channel = channel_on(&db_path, &[]);
     assert_eq!(
-        channel.health_check().await,
+        crate::provider_test_support::is_healthy(&channel).await,
         std::env::consts::OS == "macos"
     );
 }

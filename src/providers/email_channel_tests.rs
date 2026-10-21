@@ -1141,7 +1141,7 @@ async fn health_check_over_tls_fails_against_a_plaintext_server() {
     let mut channel = imap_channel(&["*"], 30);
     channel.config.imap_host = "localhost".to_string();
     channel.config.imap_port = port;
-    assert!(!channel.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&channel).await);
 }
 
 /// `listen` keeps reconnecting while the server keeps failing the TLS

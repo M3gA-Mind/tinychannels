@@ -511,7 +511,7 @@ async fn rest_requests_preserve_auth_thread_routing_and_server_errors() {
         channel.get_bot_identity().await,
         ("bot-id".into(), "bot-name".into())
     );
-    assert!(channel.health_check().await);
+    assert!(crate::provider_test_support::is_healthy(&channel).await);
     Mock::given(method("POST"))
         .and(path("/api/v4/posts"))
         .and(header("authorization", "Bearer test-token"))
@@ -551,13 +551,13 @@ async fn rest_requests_preserve_auth_thread_routing_and_server_errors() {
         channel.get_bot_identity().await,
         (String::new(), String::new())
     );
-    assert!(!channel.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&channel).await);
     let unreachable = mock_channel("http://127.0.0.1:0".into());
     assert_eq!(
         unreachable.get_bot_identity().await,
         (String::new(), String::new())
     );
-    assert!(!unreachable.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&unreachable).await);
     assert!(
         unreachable
             .send(&SendMessage::new("hello", "room"))

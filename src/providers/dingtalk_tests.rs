@@ -106,7 +106,7 @@ async fn gateway_registration_and_webhook_replies_preserve_payloads_and_errors()
         (gateway.endpoint.as_str(), gateway.ticket.as_str()),
         ("ws://localhost/stream", "ticket")
     );
-    assert!(channel.health_check().await);
+    assert!(crate::provider_test_support::is_healthy(&channel).await);
     assert!(
         channel
             .send(&SendMessage::new("reply", "unknown"))
@@ -169,14 +169,14 @@ async fn gateway_registration_and_webhook_replies_preserve_payloads_and_errors()
             server.client.clone(),
         );
         assert!(channel.register_connection().await.is_err());
-        assert!(!channel.health_check().await);
+        assert!(!crate::provider_test_support::is_healthy(&channel).await);
     }
     let client = reqwest::Client::builder()
         .proxy(reqwest::Proxy::all("http://127.0.0.1:0").unwrap())
         .build()
         .unwrap();
     let channel = DingTalkChannel::with_http_client("id".into(), "secret".into(), vec![], client);
-    assert!(!channel.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&channel).await);
 }
 
 #[tokio::test]

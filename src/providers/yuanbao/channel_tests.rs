@@ -383,7 +383,7 @@ async fn health_check_is_false_when_socket_not_connected() {
     // disconnected default here. The connected branch is exercised
     // by `connection::tests::set_state_connected_flips_is_connected_flag`.
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
-    assert!(!ch.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&ch).await);
 }
 
 // ─── dispatch_push branches ────────────────────────────────────
