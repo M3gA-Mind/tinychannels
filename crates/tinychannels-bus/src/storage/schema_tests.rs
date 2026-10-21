@@ -6,20 +6,38 @@ fn the_schema_composes_and_declares_every_collection_as_module_scoped() {
     let schema = storage_schema();
     Registry::compose([schema.clone()]).expect("the channels schema composes");
 
-    let declared: Vec<_> = schema
-        .items
-        .iter()
-        .map(|item| {
-            assert_eq!(item.scope(), ScopeClass::Module, "{}", item.name());
-            assert!(
-                matches!(item, Item::Collection { version: 2, .. }),
-                "{}",
-                item.name()
-            );
-            item.name()
-        })
-        .collect();
+    let mut declared = Vec::new();
+    for item in &schema.items {
+        match item {
+            Item::Collection {
+                name,
+                version,
+                scope,
+                ..
+            } => {
+                assert_eq!(*scope, ScopeClass::Module, "{name}");
+                let expected_version = if name == MEDIA_METADATA {
+                    MEDIA_METADATA_VERSION
+                } else {
+                    2
+                };
+                assert_eq!(*version, expected_version, "{name}");
+                declared.push(name.as_str());
+            }
+            Item::Blobs { prefix, scope } => {
+                assert_eq!(prefix, MEDIA_BLOB_PREFIX);
+                assert_eq!(*scope, ScopeClass::Module);
+            }
+            other => panic!("unexpected channel storage item: {}", other.name()),
+        }
+    }
     assert_eq!(declared, COLLECTIONS);
+    assert!(
+        schema
+            .items
+            .iter()
+            .any(|item| item.name() == MEDIA_BLOB_PREFIX)
+    );
 }
 
 #[test]
