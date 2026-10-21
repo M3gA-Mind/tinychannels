@@ -516,13 +516,13 @@ impl crate::provider::TestProviderBehavior for CaptureChannel {
     }
 }
 
-struct CaptureTypedChannel {
+struct CaptureWireProvider {
     id: &'static str,
     sent: tokio::sync::mpsc::Sender<tinychannels_bus::ChannelOutboundMessage>,
 }
 
 #[async_trait::async_trait]
-impl crate::provider::TestProviderBehavior for CaptureTypedChannel {
+impl crate::provider::TestProviderBehavior for CaptureWireProvider {
     fn test_provider_id(&self) -> &'static str {
         self.id
     }
@@ -4295,7 +4295,7 @@ async fn v1_subjects_are_normalized_only_for_providers_that_consume_them() {
         let (sent, mut received) = tokio::sync::mpsc::channel(1);
         let (service, _callbacks, _server) = channels_with_store_named(
             provider,
-            Arc::new(CaptureTypedChannel { id: provider, sent }),
+            Arc::new(CaptureWireProvider { id: provider, sent }),
         )
         .await;
         let mut message = SendMessage::new(content, "recipient");

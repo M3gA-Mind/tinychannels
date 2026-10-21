@@ -251,10 +251,9 @@ fn incoming_context_in_mention_only_group_needs_source_and_known_bot_name() {
         "unknown bot username cannot be matched"
     );
     *ch.bot_username.lock() = Some("bot".into());
-    assert!(
-        ch.parse_incoming_message_context(&message, Some("hi"))
-            .is_none()
-    );
+    assert!(ch
+        .parse_incoming_message_context(&message, Some("hi"))
+        .is_none());
     let ctx = ch
         .parse_incoming_message_context(&message, Some("@bot hi"))
         .unwrap();
@@ -277,10 +276,9 @@ fn incoming_context_falls_back_to_numeric_id_and_requires_chat() {
         .unwrap();
     assert_eq!(ctx.sender_identity, "42");
     assert_eq!(ctx.sender_name.as_deref(), Some("Lovelace"));
-    assert!(
-        ch.parse_incoming_message_context(&serde_json::json!({ "from": { "id": 42 } }), Some("x"))
-            .is_none()
-    );
+    assert!(ch
+        .parse_incoming_message_context(&serde_json::json!({ "from": { "id": 42 } }), Some("x"))
+        .is_none());
     assert_eq!(TelegramChannel::sender_display_name(None), None);
     assert_eq!(
         TelegramChannel::sender_display_name(Some(&serde_json::json!({ "username": "u" }))),
@@ -298,16 +296,12 @@ fn parse_update_message_drops_whitespace_only_text() {
 #[test]
 fn parse_update_reaction_requires_chat_message_and_emoji() {
     let ch = TelegramChannel::new("tok".into(), vec!["*".into()], false);
-    assert!(
-        ch.parse_update_reaction(&serde_json::json!({ "message_reaction": { "message_id": 1 } }))
-            .is_none()
-    );
-    assert!(
-        ch.parse_update_reaction(
-            &serde_json::json!({ "message_reaction": { "chat": { "id": 1 } } })
-        )
-        .is_none()
-    );
+    assert!(ch
+        .parse_update_reaction(&serde_json::json!({ "message_reaction": { "message_id": 1 } }))
+        .is_none());
+    assert!(ch
+        .parse_update_reaction(&serde_json::json!({ "message_reaction": { "chat": { "id": 1 } } }))
+        .is_none());
     let anonymous = ch
         .parse_update_reaction(&serde_json::json!({ "message_reaction": {
             "chat": { "id": 1 }, "message_id": 2,
@@ -562,11 +556,9 @@ async fn bind_with_wrong_code_reports_invalid_then_lockout() {
     let texts = sent_texts(&server).await;
     let max = usize::try_from(crate::security::MAX_PAIR_ATTEMPTS).unwrap();
     assert_eq!(texts.len(), max + 1);
-    assert!(
-        texts[..max]
-            .iter()
-            .all(|t| t.contains("Invalid binding code"))
-    );
+    assert!(texts[..max]
+        .iter()
+        .all(|t| t.contains("Invalid binding code")));
     assert!(
         texts[max].contains("Too many invalid attempts"),
         "{texts:?}"
@@ -897,13 +889,11 @@ async fn telegram_media_only_update_persists_into_scoped_blobs() {
         panic!("media-only update should emit its typed image part");
     };
     assert!(envelope.text.is_empty());
-    assert!(
-        media
-            .opaque_id
-            .as_deref()
-            .unwrap()
-            .starts_with("tinychannels_media_v1_")
-    );
+    assert!(media
+        .opaque_id
+        .as_deref()
+        .unwrap()
+        .starts_with("tinychannels_media_v1_"));
     assert_eq!(envelope.media.as_slice(), std::slice::from_ref(media));
     assert_eq!(media.path, None);
     assert_eq!(media.url, None);
@@ -966,11 +956,9 @@ async fn telegram_document_download_infers_type_and_name_from_getfile_path() {
         .await
         .unwrap();
     let envelope = TelegramChannel::inbound_envelope_with_media(&update, &message, None, parts);
-    let [
-        tinychannels_bus::ContentPart::File {
-            media, file_name, ..
-        },
-    ] = envelope.parts.as_slice()
+    let [tinychannels_bus::ContentPart::File {
+        media, file_name, ..
+    }] = envelope.parts.as_slice()
     else {
         panic!("downloaded Telegram document should be retained as a typed file");
     };

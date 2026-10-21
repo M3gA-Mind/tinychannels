@@ -4893,31 +4893,46 @@ async fn listen_backs_off_when_webhook_delete_fails_and_on_transport_error() {
 
     let mut ch = fast_backoff(channel_for(&server, &["alice"]));
     ch.mention_only = true;
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let ch = Arc::new(ch);
+    let events = Arc::new(TelegramConformanceEvents::default());
     let listener = tokio::spawn({
         let ch = ch.clone();
-        async move { crate::provider_test_support::listen_v1(ch.as_ref(), tx).await }
+        let events = events.clone();
+        async move { ChannelAdapter::start(ch.as_ref(), events.as_ref()).await }
     });
 
-    let msg = tokio::time::timeout(GUARD, rx.recv())
-        .await
-        .expect("message dispatched")
-        .expect("channel open");
-    assert_eq!(
-        msg.content, "hey ping",
-        "mention stripped in mention-only group"
-    );
+    tokio::time::timeout(GUARD, async {
+        loop {
+            if !events.inbounds.lock().unwrap().is_empty() {
+                break;
+            }
+            events.notified.notified().await;
+        }
+    })
+    .await
+    .expect("typed message dispatched");
+    let msg = events.inbounds.lock().unwrap()[0].clone();
+    assert!(msg.parts.iter().any(|part| matches!(
+        part,
+        tinychannels_bus::ContentPart::Text { text, .. } if text == "hey ping"
+    )), "mention stripped in mention-only group: {:?}", msg.parts);
     assert_eq!(json_bodies(&server, "deleteWebhook").await.len(), 1);
-    listener.abort();
+    ChannelAdapter::stop(ch.as_ref())
+        .await
+        .expect("typed listener stops");
+    tokio::time::timeout(GUARD, listener)
+        .await
+        .expect("typed listener exits")
+        .unwrap()
+        .unwrap();
 
     // Transport failures back off and retry rather than ending the loop.
     let mut dead = fast_backoff(TelegramChannel::new("tok".into(), vec!["*".into()], true));
     dead.api_base = dead_base();
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let sink = TelegramConformanceEvents::default();
     let outcome = tokio::time::timeout(
         Duration::from_millis(300),
-        crate::provider_test_support::listen_v1(&dead, tx),
+        ChannelAdapter::start(&dead, &sink),
     )
     .await;
     assert!(
