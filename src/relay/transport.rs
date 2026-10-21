@@ -256,13 +256,7 @@ impl RelayTransport {
             {
                 return Err(error);
             }
-            tokio::time::timeout_at(
-                deadline.max(
-                    tokio::time::Instant::now()
-                        + Duration::from_millis(self.timeouts.handshake_ms),
-                ),
-                notified,
-            )
+            tokio::time::timeout_at(deadline, notified)
                 .await
                 .map_err(|_| RelayTransportError::Timeout {
                     operation: "handshake_v2",
