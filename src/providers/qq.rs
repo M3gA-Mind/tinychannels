@@ -69,11 +69,6 @@ impl Drop for ListenerRegistration<'_> {
     }
 }
 
-enum QQIngress<'a> {
-    Legacy(tokio::sync::mpsc::Sender<ChannelMessage>),
-    Typed(&'a (dyn crate::channel::ChannelInboundSink + Send + Sync)),
-}
-
 async fn listener_cancelled(cancellation: &mut Option<tokio::sync::watch::Receiver<bool>>) {
     match cancellation {
         Some(receiver) => {
@@ -329,13 +324,9 @@ impl QQChannel {
     #[allow(clippy::too_many_lines)]
     async fn listen_owned(
         &self,
-        ingress: QQIngress<'_>,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
         mut cancellation: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> anyhow::Result<()> {
-        let legacy_tx = match &ingress {
-            QQIngress::Legacy(tx) => Some(tx),
-            QQIngress::Typed(_) => None,
-        };
         tracing::info!("QQ: authenticating...");
         let Some(token) = until_listener_cancelled(&mut cancellation, self.get_token()).await
         else {
@@ -484,188 +475,73 @@ impl QQChannel {
                     match event_type {
                         "C2C_MESSAGE_CREATE" => {
                             let msg_id = d.get("id").and_then(|i| i.as_str()).unwrap_or("");
-                            if let QQIngress::Typed(sink) = &ingress {
-                                if self.has_duplicate(msg_id).await {
-                                    continue;
+                            if self.has_duplicate(msg_id).await {
+                                continue;
+                            }
+                            let envelope = tokio::select! {
+                                biased;
+                                () = listener_cancelled(&mut cancellation) => {
+                                    let _ = tokio::time::timeout(
+                                        std::time::Duration::from_secs(1),
+                                        write.send(Message::Close(None)),
+                                    ).await;
+                                    stopped = true;
+                                    break 'gateway;
                                 }
-                                let envelope = tokio::select! {
-                                    biased;
-                                    () = listener_cancelled(&mut cancellation) => {
-                                        let _ = tokio::time::timeout(
-                                            std::time::Duration::from_secs(1),
-                                            write.send(Message::Close(None)),
-                                        ).await;
-                                        stopped = true;
-                                        break 'gateway;
-                                    }
-                                    envelope = self.inbound_envelope_for_listener("C2C_MESSAGE_CREATE", d) => envelope,
-                                };
-                                let Some(envelope) = envelope else {
-                                    continue;
-                                };
-                                let published = tokio::select! {
-                                    biased;
-                                    () = listener_cancelled(&mut cancellation) => {
-                                        let _ = tokio::time::timeout(
-                                            std::time::Duration::from_secs(1),
-                                            write.send(Message::Close(None)),
-                                        ).await;
-                                        stopped = true;
-                                        break 'gateway;
-                                    }
-                                    result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
-                                };
-                                published.map_err(|error| anyhow::anyhow!(error.message))?;
-                                self.mark_duplicate(msg_id).await;
-                                continue;
-                            }
-                            if self.is_duplicate(msg_id).await {
-                                continue;
-                            }
-
-                            let content = d.get("content").and_then(|c| c.as_str()).unwrap_or("").trim();
-
-                            let author_id = d.get("author").and_then(|a| a.get("id")).and_then(|i| i.as_str()).unwrap_or("unknown");
-                            // For QQ, user_openid is the identifier
-                            let user_openid = d.get("author").and_then(|a| a.get("user_openid")).and_then(|u| u.as_str()).unwrap_or(author_id);
-
-                            if !self.is_user_allowed(user_openid) {
-                                tracing::warn!("QQ: ignoring C2C message from unauthorized user: {user_openid}");
-                                continue;
-                            }
-
-                            let chat_id = format!("user:{user_openid}");
-
-                            if let Some(envelope) = self
-                                .inbound_envelope("C2C_MESSAGE_CREATE", d)
-                                .await
-                                && crate::providers::native::inbound::publish(
-                                    "qq",
-                                    self.native.events.as_ref(),
-                                    envelope,
-                                )
-                                .await
-                            {
-                                continue;
-                            }
-                            if content.is_empty() {
-                                continue;
-                            }
-
-                            let channel_msg = ChannelMessage {
-                                id: Uuid::new_v4().to_string(),
-                                sender: user_openid.to_string(),
-                                reply_target: chat_id,
-                                content: content.to_string(),
-                                channel: "qq".to_string(),
-                                timestamp: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs(),
-                                topic_id: None,
-                                reply_to_id: None,
-                                thread_ts: None,
-                                sender_name: None,
+                                envelope = self.inbound_envelope_for_listener("C2C_MESSAGE_CREATE", d) => envelope,
                             };
-
-                            if let Some(tx) = legacy_tx
-                                && tx.send(channel_msg).await.is_err()
-                            {
-                                tracing::warn!("QQ: message channel closed");
-                                break;
-                            }
+                            let Some(envelope) = envelope else {
+                                continue;
+                            };
+                            let published = tokio::select! {
+                                biased;
+                                () = listener_cancelled(&mut cancellation) => {
+                                    let _ = tokio::time::timeout(
+                                        std::time::Duration::from_secs(1),
+                                        write.send(Message::Close(None)),
+                                    ).await;
+                                    stopped = true;
+                                    break 'gateway;
+                                }
+                                result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
+                            };
+                            published.map_err(|error| anyhow::anyhow!(error.message))?;
+                            self.mark_duplicate(msg_id).await;
                         }
                         "GROUP_AT_MESSAGE_CREATE" => {
                             let msg_id = d.get("id").and_then(|i| i.as_str()).unwrap_or("");
-                            if let QQIngress::Typed(sink) = &ingress {
-                                if self.has_duplicate(msg_id).await {
-                                    continue;
+                            if self.has_duplicate(msg_id).await {
+                                continue;
+                            }
+                            let envelope = tokio::select! {
+                                biased;
+                                () = listener_cancelled(&mut cancellation) => {
+                                    let _ = tokio::time::timeout(
+                                        std::time::Duration::from_secs(1),
+                                        write.send(Message::Close(None)),
+                                    ).await;
+                                    stopped = true;
+                                    break 'gateway;
                                 }
-                                let envelope = tokio::select! {
-                                    biased;
-                                    () = listener_cancelled(&mut cancellation) => {
-                                        let _ = tokio::time::timeout(
-                                            std::time::Duration::from_secs(1),
-                                            write.send(Message::Close(None)),
-                                        ).await;
-                                        stopped = true;
-                                        break 'gateway;
-                                    }
-                                    envelope = self.inbound_envelope_for_listener("GROUP_AT_MESSAGE_CREATE", d) => envelope,
-                                };
-                                let Some(envelope) = envelope else {
-                                    continue;
-                                };
-                                let published = tokio::select! {
-                                    biased;
-                                    () = listener_cancelled(&mut cancellation) => {
-                                        let _ = tokio::time::timeout(
-                                            std::time::Duration::from_secs(1),
-                                            write.send(Message::Close(None)),
-                                        ).await;
-                                        stopped = true;
-                                        break 'gateway;
-                                    }
-                                    result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
-                                };
-                                published.map_err(|error| anyhow::anyhow!(error.message))?;
-                                self.mark_duplicate(msg_id).await;
-                                continue;
-                            }
-                            if self.is_duplicate(msg_id).await {
-                                continue;
-                            }
-
-                            let content = d.get("content").and_then(|c| c.as_str()).unwrap_or("").trim();
-
-                            let author_id = d.get("author").and_then(|a| a.get("member_openid")).and_then(|m| m.as_str()).unwrap_or("unknown");
-
-                            if !self.is_user_allowed(author_id) {
-                                tracing::warn!("QQ: ignoring group message from unauthorized user: {author_id}");
-                                continue;
-                            }
-
-                            let group_openid = d.get("group_openid").and_then(|g| g.as_str()).unwrap_or("unknown");
-                            let chat_id = format!("group:{group_openid}");
-
-                            if let Some(envelope) = self
-                                .inbound_envelope("GROUP_AT_MESSAGE_CREATE", d)
-                                .await
-                                && crate::providers::native::inbound::publish(
-                                    "qq",
-                                    self.native.events.as_ref(),
-                                    envelope,
-                                )
-                                .await
-                            {
-                                continue;
-                            }
-                            if content.is_empty() {
-                                continue;
-                            }
-
-                            let channel_msg = ChannelMessage {
-                                id: Uuid::new_v4().to_string(),
-                                sender: author_id.to_string(),
-                                reply_target: chat_id,
-                                content: content.to_string(),
-                                channel: "qq".to_string(),
-                                timestamp: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs(),
-                                topic_id: None,
-                                reply_to_id: None,
-                                thread_ts: None,
-                                sender_name: None,
+                                envelope = self.inbound_envelope_for_listener("GROUP_AT_MESSAGE_CREATE", d) => envelope,
                             };
-
-                            if let Some(tx) = legacy_tx
-                                && tx.send(channel_msg).await.is_err()
-                            {
-                                tracing::warn!("QQ: message channel closed");
-                                break;
-                            }
+                            let Some(envelope) = envelope else {
+                                continue;
+                            };
+                            let published = tokio::select! {
+                                biased;
+                                () = listener_cancelled(&mut cancellation) => {
+                                    let _ = tokio::time::timeout(
+                                        std::time::Duration::from_secs(1),
+                                        write.send(Message::Close(None)),
+                                    ).await;
+                                    stopped = true;
+                                    break 'gateway;
+                                }
+                                result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
+                            };
+                            published.map_err(|error| anyhow::anyhow!(error.message))?;
+                            self.mark_duplicate(msg_id).await;
                         }
                         _ => {}
                     }
