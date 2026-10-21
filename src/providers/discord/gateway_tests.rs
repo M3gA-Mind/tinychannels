@@ -97,27 +97,30 @@ async fn dispatch_routes_each_gateway_event_to_its_handler() {
             .await
     );
 
-    assert_eq!(events.inbound().len(), 1);
+    let mut ingress = Vec::new();
+    while let Ok(item) = rx.try_recv() {
+        ingress.push(item);
+    }
+    assert_eq!(ingress.len(), 5);
     assert!(matches!(
-        rx.try_recv(),
-        Ok(tinychannels_bus::ChannelIngress::Inbound(_))
+        ingress[0],
+        tinychannels_bus::ChannelIngress::Inbound(_)
     ));
-    let kinds: Vec<_> = events
-        .events()
+    let kinds: Vec<_> = ingress
         .into_iter()
-        .map(|e| match e.event {
-            tinychannels_bus::ChannelEventKind::MessageUpdated { .. } => "updated",
-            tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "deleted",
-            tinychannels_bus::ChannelEventKind::ReactionAdded { .. } => "added",
-            tinychannels_bus::ChannelEventKind::ReactionRemoved { .. } => "removed",
-            _ => "other",
+        .filter_map(|item| match item {
+            tinychannels_bus::ChannelIngress::Event(e) => Some(match e.event {
+                tinychannels_bus::ChannelEventKind::MessageUpdated { .. } => "updated",
+                tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "deleted",
+                tinychannels_bus::ChannelEventKind::ReactionAdded { .. } => "added",
+                tinychannels_bus::ChannelEventKind::ReactionRemoved { .. } => "removed",
+                _ => "other",
+            }),
+            _ => None,
         })
         .collect();
     assert_eq!(kinds, vec!["updated", "deleted", "added", "removed"]);
-    assert!(
-        rx.try_recv().is_err(),
-        "exactly one typed message was delivered"
-    );
+    assert!(events.inbound().is_empty());
 }
 
 #[tokio::test]
@@ -153,7 +156,7 @@ async fn dispatch_reports_a_gone_receiver_only_for_messages() {
 async fn thread_events_prime_the_cache_so_no_lookup_is_needed() {
     let server = MockServer::start().await;
     let channel = channel_for(&server);
-    let (tx, _rx) = mpsc::channel(1);
+    let (tx, mut rx) = mpsc::channel(1);
 
     channel
         .handle_dispatch_to(
@@ -224,5 +227,10 @@ async fn button_interactions_dispatch_to_the_interaction_handler() {
         )
         .await;
 
-    assert_eq!(events.events().len(), 1);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(tinychannels_bus::ChannelIngress::Event(_))
+    ));
+    assert!(rx.try_recv().is_err());
+    assert!(events.events().is_empty());
 }
