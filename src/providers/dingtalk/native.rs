@@ -238,6 +238,45 @@ impl NativeProvider for DingTalkChannel {
     }
 
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError> {
+        if let Step::Text(text) = step
+            && let Some(webhook) = self
+                .session_webhooks
+                .read()
+                .await
+                .get(&target.conversation.id)
+                .cloned()
+        {
+            let (title, body) = text
+                .strip_prefix("Subject: ")
+                .and_then(|text| text.split_once('\n'))
+                .filter(|(title, _)| !title.trim().is_empty())
+                .map_or(("OpenHuman", text.as_str()), |(title, body)| {
+                    (title.trim(), body)
+                });
+            let response = self
+                .http_client()
+                .post(webhook)
+                .json(&serde_json::json!({
+                    "msgtype": "markdown",
+                    "markdown": { "title": title, "text": body }
+                }))
+                .send()
+                .await
+                .map_err(|_| unknown_after_send("DingTalk webhook reply outcome is uncertain"))?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                let message = format!("DingTalk webhook reply failed ({status}): {body}");
+                return Err(if status.is_server_error() {
+                    unknown_after_send(message)
+                } else {
+                    known_unsent(message)
+                });
+            }
+            // Session webhooks do not return provider message IDs.
+            return Ok(Vec::new());
+        }
+
         let context = self
             .robot_contexts
             .read()

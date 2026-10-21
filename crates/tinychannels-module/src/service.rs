@@ -1058,11 +1058,9 @@ impl Channels {
     /// typed outbound contract immediately at the module boundary.
     async fn send_message(&self, name: String, message: SendMessage) -> BusResult<()> {
         let mut intent = tinychannels::outbound_intent_from_send_message(&name, &message);
-        if message.subject.is_none() {
-            intent.payload = tinychannels_bus::OutboundPayload::Text {
-                text: message.content,
-            };
-        }
+        intent.payload = tinychannels_bus::OutboundPayload::Text {
+            text: super::interaction::compatibility_text(&message),
+        };
         let result = self.send_channel_intent(name, intent).await?;
         if let Some(error) = result.error {
             return Err(BusError::MethodFailed {
