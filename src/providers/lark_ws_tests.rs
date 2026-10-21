@@ -681,9 +681,7 @@ async fn ws_listener_acks_reassembles_filters_and_forwards_messages() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
     let channel = gw.channel;
     let listen =
-        tokio::spawn(
-            async move { crate::provider_test_support::listen_v1(&channel, tx).await },
-        );
+        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
     let mut ws = accept(&gw.listener).await;
 
     let initial = next_frame(&mut ws).await;
@@ -875,9 +873,7 @@ async fn ws_listener_stops_when_the_receiver_is_dropped() {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let channel = gw.channel;
     let listen =
-        tokio::spawn(
-            async move { crate::provider_test_support::listen_v1(&channel, tx).await },
-        );
+        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
     let mut ws = accept(&gw.listener).await;
     next_frame(&mut ws).await;
 
@@ -901,9 +897,7 @@ async fn ws_listener_returns_after_an_abrupt_disconnect() {
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     let channel = gw.channel;
     let listen =
-        tokio::spawn(
-            async move { crate::provider_test_support::listen_v1(&channel, tx).await },
-        );
+        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
     let mut ws = accept(&gw.listener).await;
     next_frame(&mut ws).await;
 

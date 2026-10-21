@@ -1055,7 +1055,7 @@ mod v2 {
         let error = crate::channel::ChannelTyping::start_typing(&channel, "+15550001111")
             .await
             .unwrap_err();
-        assert!(error.downcast_ref::<WaFailure>().is_some());
+        assert!(error.message.contains("anchor"));
         assert!(matches!(
             crate::channel::ChannelTyping::start_typing(&channel, "+15550001111").await,
             Err(error) if !error.unsupported && !error.sent_before_error
@@ -1145,8 +1145,7 @@ mod v2 {
             )
             .await
             .unwrap_err();
-            let failure = error.downcast_ref::<WaFailure>().unwrap();
-            assert_eq!(matches!(failure, WaFailure::Unsupported(_)), unsupported);
+            assert_eq!(error.unsupported, unsupported);
         }
         assert!(
             crate::channel::ChannelReaction::send_reaction(

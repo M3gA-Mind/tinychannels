@@ -4,9 +4,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
+use tinychannels_bus::ChannelIngress;
 use tokio::io::ReadBuf;
 use tokio::sync::Notify;
-use tinychannels_bus::ChannelIngress;
 
 struct MpscSink(tokio::sync::mpsc::Sender<tinychannels_bus::ChannelIngress>);
 

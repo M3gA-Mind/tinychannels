@@ -5,8 +5,8 @@ use crate::channel::{
     outbound_intent_from_send_message,
 };
 use async_trait::async_trait;
-use std::fmt::{Display, Formatter};
 use std::error::Error;
+use std::fmt::{Display, Formatter};
 use tinychannels_bus::{ChannelIngress, ChannelMessage};
 
 #[derive(Debug)]
@@ -47,8 +47,11 @@ impl ChannelInboundSink for LegacyMessageSink {
 pub(crate) async fn listen_v1<C: ChannelAdapter + ?Sized>(
     channel: &C,
     tx: tokio::sync::mpsc::Sender<ChannelMessage>,
-) -> Result<(), crate::channel::ChannelSendError> {
-    channel.start(&LegacyMessageSink(tx)).await
+) -> anyhow::Result<()> {
+    channel
+        .start(&LegacyMessageSink(tx))
+        .await
+        .map_err(|error| anyhow::Error::new(TypedSendTestError(error)))
 }
 
 /// Exercise a typed adapter with a one-release wire DTO converted at its edge.

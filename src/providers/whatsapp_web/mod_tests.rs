@@ -666,12 +666,12 @@ async fn unparseable_recipients_are_rejected() {
     assert!(empty.to_string().contains("cannot be empty"), "{empty}");
     let no_digits = ch.start_typing("+abc").await.unwrap_err();
     assert!(
-        no_digits.to_string().contains("valid phone number"),
+        no_digits.message.contains("valid phone number"),
         "{no_digits}"
     );
     let bad_jid = ch.stop_typing("@@").await.unwrap_err();
     assert!(
-        bad_jid.to_string().contains("Invalid WhatsApp JID"),
+        bad_jid.message.contains("Invalid WhatsApp JID"),
         "{bad_jid}"
     );
     assert!(fake.calls().is_empty());
@@ -698,12 +698,12 @@ async fn client_failures_surface_with_their_operation() {
     assert_eq!(send.to_string(), "send boom");
     let composing = ch.start_typing("+1234567890").await.unwrap_err();
     assert_eq!(
-        composing.to_string(),
+        composing.message,
         "Failed to send typing state (composing): composing boom"
     );
     let paused = ch.stop_typing("+1234567890").await.unwrap_err();
     assert_eq!(
-        paused.to_string(),
+        paused.message,
         "Failed to send typing state (paused): paused boom"
     );
 }
@@ -1155,7 +1155,7 @@ mod v2 {
         let edited = crate::channel::ChannelEdit::edit(
             &channel,
             &receipt,
-        tinychannels_bus::ChannelOutboundIntent {
+            tinychannels_bus::ChannelOutboundIntent {
                 conversation_id: "+15550001111".into(),
                 channel_id: "whatsapp".into(),
                 payload: tinychannels_bus::OutboundPayload::Text {

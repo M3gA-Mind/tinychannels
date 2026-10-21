@@ -349,7 +349,7 @@ fn supports_draft_updates_is_true() {
             .iter()
             .any(|action| action == "typing")
     );
-    let capabilities = ch.declared_capabilities();
+    let capabilities = crate::providers::native::NativeProvider::declared_capabilities(&ch);
     assert!(capabilities.streaming_reply_pipeline);
     assert!(!capabilities.progressive_edits);
     assert!(
