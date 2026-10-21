@@ -191,6 +191,20 @@ fn split_only_newlines() {
     assert_eq!(chunks, vec![""]);
 }
 
+#[test]
+fn split_zero_byte_limit_joins_nonempty_lines_without_losing_crlf_normalization() {
+    assert_eq!(
+        split_message("first\r\n\r\nsecond\n", 0),
+        vec!["first second"]
+    );
+    assert_eq!(split_message("\r\n\n", 0), vec![""]);
+}
+
+#[test]
+fn split_unicode_when_limit_is_shorter_than_one_character() {
+    assert_eq!(split_message("éx", 1), vec!["é", "x"]);
+}
+
 // ── Allowlist ───────────────────────────────────────────
 
 #[test]
