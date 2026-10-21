@@ -1,7 +1,7 @@
 //! Runtime mechanics shared by TinyChannels hosts.
 //!
 //! This crate owns shared provider seams and algorithms, without concrete
-//! provider transports or host policy. Hosts observe listener lifecycle through [`ListenerObserver`].
+//! provider transports or host policy. Hosts observe lifecycle through typed adapters.
 
 use rand::RngExt as _;
 

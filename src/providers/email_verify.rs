@@ -16,7 +16,7 @@ pub const EMAIL_VERIFY_TIMEOUT: Duration = Duration::from_secs(20);
 /// restart. Returns a user-facing error message on failure.
 pub async fn verify_email_credentials(cfg: &EmailConfig) -> Result<(), String> {
     let probe = EmailChannel::new(cfg.clone());
-    verify_with_probe(probe.health_probe(), &cfg.imap_host, EMAIL_VERIFY_TIMEOUT).await
+    verify_with_probe(Box::pin(probe.health_probe()), &cfg.imap_host, EMAIL_VERIFY_TIMEOUT).await
 }
 
 /// Maps a login probe's outcome, bounded by `limit`, to the user-facing result.
