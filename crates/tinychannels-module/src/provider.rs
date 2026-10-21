@@ -1891,6 +1891,7 @@ impl Running {
                                                                 ..Default::default()
                                                             }
                                                         }),
+                                                ),
                                                 thread_id: message.thread_id.clone(),
                                                 reply_to_id: message.reply_to_id.clone(),
                                                 ..Default::default()
