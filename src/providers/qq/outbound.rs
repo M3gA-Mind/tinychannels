@@ -3,7 +3,9 @@
 use super::media::{DIRECT_UPLOAD_LIMIT, file_type};
 use super::{QQ_API_BASE, QQChannel};
 use crate::host::{MediaRepository, VoiceMediaStore};
-use crate::providers::native::{Limits, NativeProvider, Sent, Step, Target, pre_dispatch, unsupported};
+use crate::providers::native::{
+    Limits, NativeProvider, Sent, Step, Target, pre_dispatch, unsupported,
+};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tinychannels_bus::channel::{ChannelSendError, MessageReceiptPartKind, SendErrorKind};
