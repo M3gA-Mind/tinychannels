@@ -68,13 +68,17 @@ pub(crate) async fn send_v1<C: ChannelAdapter>(
     message: &SendMessage,
 ) -> anyhow::Result<ChannelSendOutcome> {
     let mut intent = outbound_intent_from_send_message(&channel.descriptor().id, message);
-    // Mirror the public v1 module shim: ordinary SendMessage content is typed
-    // text, while subject-bearing mail keeps the provider-native payload.
-    if message.subject.is_none() {
-        intent.payload = OutboundPayload::Text {
-            text: message.content.clone(),
-        };
-    }
+    // Mirror the module's immediate v1-to-v2 conversion: preserve a legacy
+    // subject through the text convention consumed by mail-style providers.
+    let text = match message.subject.as_deref() {
+        Some(subject) => format!(
+            "Subject: {}\n{}",
+            subject.trim().replace(['\r', '\n'], " "),
+            message.content
+        ),
+        None => message.content.clone(),
+    };
+    intent.payload = OutboundPayload::Text { text };
     let outcome = channel
         .send(intent)
         .await

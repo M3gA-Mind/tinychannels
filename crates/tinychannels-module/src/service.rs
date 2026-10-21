@@ -954,18 +954,16 @@ impl Channels {
             }
             ChannelMessagePreparation::Typed(message) => {
                 let mut intent = tinychannels::outbound_intent_from_send_message(channel, &message);
-                // Keep the legacy JSON projection and its deterministic key for
-                // existing callers, but do not label a typed SendMessage as
-                // arbitrary provider-native data. V22 providers consume this
-                // compatibility input as canonical text. Subject-bearing
-                // messages keep their legacy payload for mail-style providers.
+                // Keep the legacy JSON projection and deterministic key for
+                // existing callers, but immediately convert the DTO into the
+                // canonical text payload. A subject is represented as the
+                // established first-line convention consumed by mail and
+                // webhook providers.
                 let legacy_message =
                     tinychannels::legacy_message_value_from_outbound_intent(&intent);
-                if message.subject.is_none() {
-                    intent.payload = tinychannels_bus::OutboundPayload::Text {
-                        text: message.content,
-                    };
-                }
+                intent.payload = tinychannels_bus::OutboundPayload::Text {
+                    text: super::interaction::compatibility_text(&message),
+                };
                 (intent, legacy_message)
             }
             ChannelMessagePreparation::Intent(intent) => {
