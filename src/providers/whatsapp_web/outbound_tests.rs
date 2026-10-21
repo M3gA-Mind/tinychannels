@@ -2,7 +2,7 @@ use super::*;
 use crate::providers::whatsapp_shared::fakes::{MemoryMedia, MemoryVoices, ogg_bytes, png_bytes};
 use crate::providers::whatsapp_shared::vcard::ContactCard;
 use crate::providers::whatsapp_web::fakes::{Call, RecordingClient};
-use crate::traits::Channel as _;
+use crate::channel::ChannelAdapter;
 use tinychannels_bus::{
     ChannelRef, ContactMethod, ContentPart, ConversationRef, MediaKind, MediaReference,
     OutboundContentPart, OutboundVoice,
@@ -207,12 +207,12 @@ fn a_disconnected_or_re_linked_session_refuses_operations() {
     let (channel, client) = channel(&[]);
     assert!(channel.live_client().is_ok());
     assert_eq!(
-        channel.media_account_identity().as_deref(),
+        ChannelAdapter::media_account_identity(&channel).as_deref(),
         Some("15559998888@s.whatsapp.net")
     );
     *client.account.lock() = Some("15557776666@s.whatsapp.net".parse().unwrap());
     assert!(matches!(channel.live_client(), Err(WaFailure::Rejected(_))));
-    assert_eq!(channel.media_account_identity(), None);
+    assert_eq!(ChannelAdapter::media_account_identity(&channel), None);
 }
 
 // --- delivery ------------------------------------------------------------------

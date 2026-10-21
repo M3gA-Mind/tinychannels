@@ -1127,12 +1127,14 @@ mod v2 {
     #[tokio::test]
     async fn typed_sends_edits_deletes_reactions_and_read_receipts_run_on_the_session() {
         let (channel, client) = linked();
-        Channel::send_typed(&channel, &typed("one")).await.unwrap();
-        let outcome = Channel::send_typed_with_receipt(&channel, &typed("two"))
+        crate::channel::ChannelTypedSend::send_typed(&channel, &typed("one"))
+            .await
+            .unwrap();
+        let outcome = crate::channel::ChannelTypedSend::send_typed(&channel, &typed("two"))
             .await
             .unwrap();
         let receipt = outcome.receipt;
-        let edited = Channel::edit_message(
+        let edited = crate::channel::ChannelEdit::edit(
             &channel,
             &receipt,
             &tinychannels_bus::ChannelOutboundIntent {
@@ -1147,15 +1149,22 @@ mod v2 {
         .await
         .unwrap();
         assert_eq!(edited.platform_message_ids, receipt.platform_message_ids);
-        Channel::delete_message(&channel, &receipt).await.unwrap();
+        crate::channel::ChannelDelete::delete(&channel, &receipt).await.unwrap();
         let thumbs = tinychannels_bus::ChannelReaction {
             value: "👍".into(),
             custom_emoji_id: None,
         };
-        Channel::send_reaction(&channel, &conversation(), "3EB0X", &thumbs, false)
+        crate::channel::ChannelReaction::send_reaction(
+            &channel,
+            &ChannelRef { id: "whatsapp".into(), account_id: None },
+            &conversation(),
+            "3EB0X",
+            &thumbs,
+            false,
+        )
             .await
             .unwrap();
-        Channel::mark_read(&channel, &conversation(), "3EB0X")
+        crate::channel::ChannelAdapter::mark_read(&channel, &conversation(), "3EB0X")
             .await
             .unwrap();
         let kinds: Vec<_> = client
