@@ -41,7 +41,7 @@
 //!
 //! [`whatsapp-rust`]: https://docs.rs/whatsapp-rust/0.7
 
-use crate::traits::{Channel, ChannelMessage, SendMessage};
+use crate::traits::{ChannelMessage, SendMessage};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;

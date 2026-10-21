@@ -2,7 +2,7 @@ use super::api::DISCORD_API_BASE;
 use super::http::{DiscordError, Payload};
 use crate::channel::LengthUnit;
 use crate::text::{ChunkMode, TextChunkOptions, chunk_text_with_options};
-use crate::traits::{Channel, ChannelMessage, SendMessage};
+use crate::traits::{ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use serde_json::json;

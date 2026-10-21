@@ -1,5 +1,5 @@
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
-use crate::traits::{Channel, ChannelMessage, SendMessage};
+use crate::traits::{ChannelMessage, SendMessage};
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use parking_lot::Mutex;

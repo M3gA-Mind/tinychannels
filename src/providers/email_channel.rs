@@ -83,7 +83,7 @@ use crate::providers::mail::{LettreMailSender, MailCredentials, MailSender, Outb
 #[cfg(feature = "email")]
 use crate::providers::native::HostPorts as NativeState;
 #[cfg(feature = "email")]
-use crate::traits::{Channel, ChannelMessage, SendMessage};
+use crate::traits::{ChannelMessage, SendMessage};
 
 #[cfg(feature = "email")]
 type ImapSession = Session<TlsStream<TcpStream>>;
@@ -159,6 +159,11 @@ enum EmailDelivery<'a> {
 struct InboundSinkRejected;
 
 impl EmailChannel {
+    pub(crate) async fn health_probe(&self) -> bool {
+        self.health_check_with(self.connect_imap(), HEALTH_CHECK_TIMEOUT)
+            .await
+    }
+
     pub fn new(config: EmailConfig) -> Self {
         Self {
             config,

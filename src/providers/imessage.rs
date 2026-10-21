@@ -14,7 +14,7 @@ mod native;
 
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::native::HostPorts as NativeState;
-use crate::traits::{Channel, ChannelMessage, SendMessage};
+use crate::traits::{ChannelMessage, SendMessage};
 use anyhow::Context as _;
 use async_trait::async_trait;
 use directories::UserDirs;
