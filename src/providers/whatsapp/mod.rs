@@ -640,7 +640,7 @@ impl crate::channel::ChannelTyping for WhatsAppChannel {
 
     async fn stop_typing(
         &self,
-        conversation_id: &str,
+        _conversation_id: &str,
     ) -> Result<(), crate::channel::ChannelSendError> {
         self.stop_typing_provider()
             .await
