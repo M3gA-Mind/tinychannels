@@ -5345,8 +5345,6 @@ async fn a_built_email_launch_starts_as_the_native_email_adapter() {
     assert_eq!(
         running
             .native_ports
-            .as_ref()
-            .unwrap()
             .adapter
             .status()
             .await
@@ -5359,9 +5357,7 @@ async fn a_built_email_launch_starts_as_the_native_email_adapter() {
 
     assert_eq!(
         running
-            .native_ports
-            .as_ref()
-            .map(|ports| ports.listener_mode),
+            .native_ports.listener_mode,
         Some(crate::provider::LongTailListenerMode::Adapter),
         "email IMAP ingress must run through its typed adapter listener"
     );
