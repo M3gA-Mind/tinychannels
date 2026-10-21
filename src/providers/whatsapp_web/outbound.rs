@@ -190,8 +190,8 @@ impl WhatsAppWebChannel {
     ) -> (Vec<(String, MessageReceiptPartKind)>, Option<WaFailure>) {
         let mut sent = Vec::new();
         let outcome: Result<(), WaFailure> = async {
-            let uncertain = |error: anyhow::Error| {
-                WaFailure::uncertain(format!("WhatsApp Web send outcome is uncertain: {error}"))
+            let uncertain = |_error: anyhow::Error| {
+                WaFailure::uncertain("WhatsApp Web send outcome is uncertain")
             };
             match part {
                 PlannedPart::Text(text) => {
