@@ -1,8 +1,8 @@
 #![allow(deprecated)]
 
 use super::*;
-use tinychannels_bus::SendMessage;
 use crate::channel::ChannelAdapter;
+use tinychannels_bus::SendMessage;
 use tokio::sync::Notify;
 
 #[test]

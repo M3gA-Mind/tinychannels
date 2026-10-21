@@ -890,9 +890,7 @@ async fn injected_cloud_client_reports_connection_failure_and_webhook_start_is_i
 
 mod v2 {
     use super::*;
-    use crate::channel::{
-        ChannelDelete as _, ChannelEdit as _, ChannelStreamingDraft as _,
-    };
+    use crate::channel::{ChannelDelete as _, ChannelEdit as _, ChannelStreamingDraft as _};
     use crate::providers::whatsapp::api::GRAPH_VERSION;
     use crate::providers::whatsapp_shared::fakes::{CollectingSink, MemoryMedia, MemoryVoices};
     use hmac::{Hmac, KeyInit, Mac};

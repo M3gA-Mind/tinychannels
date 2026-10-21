@@ -1,12 +1,14 @@
 //! Discord Gateway session: connect, identify, heartbeat and dispatch routing.
 
 use super::channel::DiscordChannel;
+#[cfg(test)]
 use crate::traits::ChannelMessage;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
 pub(super) enum GatewaySink {
+    #[cfg(test)]
     Legacy(tokio::sync::mpsc::Sender<ChannelMessage>),
     Typed(tokio::sync::mpsc::Sender<tinychannels_bus::ChannelIngress>),
 }
@@ -18,6 +20,7 @@ pub(super) const GATEWAY_INTENTS: u64 =
 
 impl DiscordChannel {
     /// Run one gateway session until the socket closes or the receiver drops.
+    #[cfg(test)]
     pub(super) async fn run_gateway(
         &self,
         tx: tokio::sync::mpsc::Sender<ChannelMessage>,
@@ -190,6 +193,7 @@ impl DiscordChannel {
     ) -> bool {
         match event_type {
             "MESSAGE_CREATE" => match sink {
+                #[cfg(test)]
                 GatewaySink::Legacy(tx) => self.handle_message_create(d, bot_user_id, tx).await,
                 GatewaySink::Typed(tx) => {
                     self.handle_message_create_typed(d, bot_user_id, tx).await
@@ -201,6 +205,7 @@ impl DiscordChannel {
                     bot_user_id,
                     match sink {
                         GatewaySink::Typed(tx) => Some(tx),
+                        #[cfg(test)]
                         GatewaySink::Legacy(_) => None,
                     },
                 )
@@ -212,6 +217,7 @@ impl DiscordChannel {
                     d,
                     match sink {
                         GatewaySink::Typed(tx) => Some(tx),
+                        #[cfg(test)]
                         GatewaySink::Legacy(_) => None,
                     },
                 )
@@ -225,6 +231,7 @@ impl DiscordChannel {
                     true,
                     match sink {
                         GatewaySink::Typed(tx) => Some(tx),
+                        #[cfg(test)]
                         GatewaySink::Legacy(_) => None,
                     },
                 )
@@ -238,6 +245,7 @@ impl DiscordChannel {
                     false,
                     match sink {
                         GatewaySink::Typed(tx) => Some(tx),
+                        #[cfg(test)]
                         GatewaySink::Legacy(_) => None,
                     },
                 )
@@ -264,6 +272,7 @@ impl DiscordChannel {
                     d,
                     match sink {
                         GatewaySink::Typed(tx) => Some(tx),
+                        #[cfg(test)]
                         GatewaySink::Legacy(_) => None,
                     },
                 )

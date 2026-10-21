@@ -613,10 +613,9 @@ impl DingTalkChannel {
             .to_owned();
         let mut ingested = Ingested::default();
         let voice = message_type == "audio";
-        let can_ingest_file = self.native.media_repository.is_some()
-            && matches!(message_type, "picture" | "file");
-        let can_ingest_voice = self.native.voice_media_store.is_some()
-            && voice;
+        let can_ingest_file =
+            self.native.media_repository.is_some() && matches!(message_type, "picture" | "file");
+        let can_ingest_voice = self.native.voice_media_store.is_some() && voice;
         if can_ingest_file || can_ingest_voice {
             let download_code = if message_type == "picture" {
                 content

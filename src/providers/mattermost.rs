@@ -464,7 +464,6 @@ impl MattermostChannel {
             last_create_at = next_cursor;
         }
     }
-
 }
 
 fn valid_file_id(file_id: &str) -> bool {
