@@ -352,10 +352,14 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
                     }
                 };
                 let before = self.wire_count().await;
-                let result = operation_or_error!(feature, "reaction", before, self
-                    .backend
-                    .send_reaction(&self.config, &self.provider, reaction)
-                    .await);
+                let result = operation_or_error!(
+                    feature,
+                    "reaction",
+                    before,
+                    self.backend
+                        .send_reaction(&self.config, &self.provider, reaction)
+                        .await
+                );
                 if !result.success {
                     return Err(unsupported("native reaction was not accepted".into()));
                 }
@@ -373,10 +377,14 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
             }
             Feature::ThreadCreate => {
                 let before = self.wire_count().await;
-                let result = operation_or_error!(feature, "thread_create", before, self
-                    .backend
-                    .create_thread(&self.config, &self.provider, "conformance thread")
-                    .await);
+                let result = operation_or_error!(
+                    feature,
+                    "thread_create",
+                    before,
+                    self.backend
+                        .create_thread(&self.config, &self.provider, "conformance thread")
+                        .await
+                );
                 let request = self
                     .captured_request()
                     .await
@@ -396,10 +404,14 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
                     "archive"
                 };
                 let before = self.wire_count().await;
-                let result = operation_or_error!(feature, "thread_update", before, self
-                    .backend
-                    .update_thread(&self.config, &self.provider, "77", action)
-                    .await);
+                let result = operation_or_error!(
+                    feature,
+                    "thread_update",
+                    before,
+                    self.backend
+                        .update_thread(&self.config, &self.provider, "77", action)
+                        .await
+                );
                 let request = self
                     .captured_request()
                     .await
@@ -414,10 +426,14 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
             }
             Feature::ThreadList => {
                 let before = self.wire_count().await;
-                let result = operation_or_error!(feature, "thread_list", before, self
-                    .backend
-                    .list_threads(&self.config, &self.provider, None)
-                    .await);
+                let result = operation_or_error!(
+                    feature,
+                    "thread_list",
+                    before,
+                    self.backend
+                        .list_threads(&self.config, &self.provider, None)
+                        .await
+                );
                 let request = self
                     .captured_request()
                     .await
@@ -2470,7 +2486,7 @@ async fn native_controller_conformance_uses_mattermost_wire_and_rejects_unsuppor
         provider: "mattermost".into(),
         capabilities,
         backend_fixture,
-        server,
+        server: Arc::new(server),
         observations: std::sync::Mutex::new(Vec::new()),
     };
 
@@ -2480,9 +2496,172 @@ async fn native_controller_conformance_uses_mattermost_wire_and_rejects_unsuppor
     check_native_controller_feature(&fixture, Feature::ThreadCreate)
         .await
         .unwrap();
+    check_native_controller_feature(&fixture, Feature::ThreadUpdate)
+        .await
+        .unwrap();
     check_native_controller_feature(&fixture, Feature::ThreadList)
         .await
         .unwrap();
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn native_controller_conformance_covers_telegram_discord_and_slack() {
+    use tinychannels_conformance::{
+        NativeControllerFeature as Feature, check_native_controller_feature,
+    };
+    use wiremock::matchers::{method, path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let (host, backend_fixture, _bus_server) = connected_host().await;
+
+    let telegram_server = Arc::new(MockServer::start().await);
+    for (name, body) in [
+        (
+            "setMessageReaction",
+            serde_json::json!({"ok": true, "result": true}),
+        ),
+        (
+            "createForumTopic",
+            serde_json::json!({"ok": true, "result": {"message_thread_id": 77, "name": "conformance thread"}}),
+        ),
+        (
+            "closeForumTopic",
+            serde_json::json!({"ok": true, "result": true}),
+        ),
+    ] {
+        Mock::given(method("POST"))
+            .and(path(format!("/bottok/{name}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&telegram_server)
+            .await;
+    }
+    let telegram_config = telegram_config(Some("-100"));
+    let mut telegram_backend = HostBackend::new(
+        host.clone(),
+        Arc::new(FakeDiscordApi::default()),
+        Arc::new(NativeEmailVerifier),
+        None,
+    );
+    telegram_backend.telegram_api_base = Some(telegram_server.uri());
+    let telegram = NativeControllerFixture {
+        capabilities: NativeControllerFixture::configured_capabilities(
+            "telegram",
+            &telegram_config,
+        ),
+        backend: telegram_backend,
+        config: telegram_config,
+        provider: "telegram".into(),
+        backend_fixture: backend_fixture.clone(),
+        server: telegram_server,
+        observations: std::sync::Mutex::new(Vec::new()),
+    };
+    for feature in [
+        Feature::Reaction,
+        Feature::ThreadCreate,
+        Feature::ThreadUpdate,
+        Feature::ThreadList,
+    ] {
+        check_native_controller_feature(&telegram, feature)
+            .await
+            .unwrap_or_else(|error| panic!("Telegram {feature:?}: {error}"));
+    }
+
+    let discord_server = Arc::new(MockServer::start().await);
+    Mock::given(method("PUT"))
+        .and(path_regex(r"^/channels/55/messages/66/reactions/.+/@me$"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&discord_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/channels/55/threads"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "id": "77", "name": "conformance thread"
+        })))
+        .mount(&discord_server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path("/channels/77"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "77"})))
+        .mount(&discord_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/guilds/900/threads/active"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "threads": [{"id": "77", "name": "conformance thread", "parent_id": "55", "thread_metadata": {"archived": false}}]
+        })))
+        .mount(&discord_server)
+        .await;
+    let discord_config = discord_config(Some("55"));
+    let mut discord_backend = HostBackend::new(
+        host.clone(),
+        Arc::new(FakeDiscordApi::default()),
+        Arc::new(NativeEmailVerifier),
+        None,
+    );
+    discord_backend.discord_api_base = Some(discord_server.uri());
+    let discord = NativeControllerFixture {
+        capabilities: NativeControllerFixture::configured_capabilities("discord", &discord_config),
+        backend: discord_backend,
+        config: discord_config,
+        provider: "discord".into(),
+        backend_fixture: backend_fixture.clone(),
+        server: discord_server,
+        observations: std::sync::Mutex::new(Vec::new()),
+    };
+    for feature in [
+        Feature::Reaction,
+        Feature::ThreadCreate,
+        Feature::ThreadUpdate,
+        Feature::ThreadList,
+    ] {
+        check_native_controller_feature(&discord, feature)
+            .await
+            .unwrap_or_else(|error| panic!("Discord {feature:?}: {error}"));
+    }
+
+    let slack_server = Arc::new(MockServer::start().await);
+    Mock::given(method("POST"))
+        .and(path("/reactions.add"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .mount(&slack_server)
+        .await;
+    let slack_config = ChannelsConfig {
+        slack: Some(tinychannels::config::SlackConfig {
+            bot_token: "slack-token".into(),
+            app_token: None,
+            channel_id: Some("C1".into()),
+            allowed_users: vec![],
+        }),
+        ..Default::default()
+    };
+    let mut slack_backend = HostBackend::new(
+        host.clone(),
+        Arc::new(FakeDiscordApi::default()),
+        Arc::new(NativeEmailVerifier),
+        None,
+    );
+    slack_backend.slack_api_base = Some(slack_server.uri());
+    let slack = NativeControllerFixture {
+        capabilities: NativeControllerFixture::configured_capabilities("slack", &slack_config),
+        backend: slack_backend,
+        config: slack_config,
+        provider: "slack".into(),
+        backend_fixture,
+        server: slack_server,
+        observations: std::sync::Mutex::new(Vec::new()),
+    };
+    for feature in [
+        Feature::Reaction,
+        Feature::ThreadCreate,
+        Feature::ThreadUpdate,
+        Feature::ThreadList,
+    ] {
+        check_native_controller_feature(&slack, feature)
+            .await
+            .unwrap_or_else(|error| panic!("Slack {feature:?}: {error}"));
+    }
+
     host.shutdown().await.unwrap();
 }
 
