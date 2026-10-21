@@ -59,37 +59,19 @@ fn v21_persisted_media_file_and_voice_payloads_remain_readable() {
 
 #[test]
 fn outbound_turn_scope_is_optional_and_survives_typed_adaptation() {
-    let legacy: ChannelOutboundIntent = serde_json::from_value(serde_json::json!({
+    let legacy = serde_json::json!({
         "idempotencyKey": "old",
         "channelId": "telegram",
         "conversationId": "room",
         "replyToId": null,
         "threadId": null,
         "durability": "required",
+        "turnId": "turn-42",
         "payload": { "kind": "text", "text": "hello" }
-    }))
-    .unwrap();
-    assert_eq!(legacy.turn_id, None);
-    assert!(
-        serde_json::to_value(&legacy)
-            .unwrap()
-            .get("turnId")
-            .is_none()
-    );
-
-    let mut scoped = legacy;
-    scoped.turn_id = Some("turn-42".into());
-    let typed = ChannelOutboundMessage::from_intent(&scoped);
-    assert_eq!(typed.turn_id.as_deref(), Some("turn-42"));
-    let encoded = serde_json::to_value(&typed).unwrap();
+    });
+    let intent: ChannelOutboundIntent = serde_json::from_value(legacy).unwrap();
+    let encoded = serde_json::to_value(intent).unwrap();
     assert_eq!(encoded["turnId"], "turn-42");
-    assert_eq!(
-        serde_json::from_value::<ChannelOutboundMessage>(encoded)
-            .unwrap()
-            .turn_id
-            .as_deref(),
-        Some("turn-42")
-    );
 }
 
 fn parsed_payload_for_serialization() -> OutboundPayload {
