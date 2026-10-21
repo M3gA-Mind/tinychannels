@@ -4078,8 +4078,8 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_slack(channel, hooks, host, None, true);
     assert!(
-        running.channel.is_some(),
-        "Slack keeps its socket/polling listener"
+        running.channel.is_none(),
+        "Slack listener runs through its typed adapter"
     );
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::SlackNativeV2);
