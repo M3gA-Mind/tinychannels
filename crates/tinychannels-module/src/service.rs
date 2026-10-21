@@ -789,6 +789,8 @@ impl Channels {
             {
                 running.remove(&name);
             }
+            self.provider_activations.lock().await.remove(&name);
+            self.media_reads.invalidate_instance(&name).await;
             result?;
         }
         Ok(())
