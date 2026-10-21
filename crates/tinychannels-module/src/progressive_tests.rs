@@ -23,7 +23,7 @@ impl Callback {
             return Err(Error::failed("unexpected callback"));
         };
         self.requests.lock().await.push(request.clone());
-        if let ProgressiveTransportRequest::Send { message, .. } = request {
+        if let ProgressiveTransportRequest::Send { message, .. } = *request {
             self.sends.lock().await.push(message);
             if self.block {
                 self.entered.notify_one();

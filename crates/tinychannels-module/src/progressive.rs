@@ -37,7 +37,9 @@ impl Sender {
     ) -> std::result::Result<Value, ProgressiveSendError> {
         let result = self
             .0
-            .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(request))
+            .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(
+                request,
+            )))
             .await
             .map_err(|_| ProgressiveSendError::Unavailable)?;
         match result {
