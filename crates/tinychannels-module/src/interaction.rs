@@ -1,3 +1,7 @@
+// This module retains the one-release v1 wire DTO boundary and converts it
+// immediately to typed provider intents.
+#![allow(deprecated)]
+
 //! Module-owned provider interaction execution.
 
 /// Return Describe information from the exact configured native adapter.
