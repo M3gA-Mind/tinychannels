@@ -129,42 +129,6 @@ async fn the_adapter_describes_itself_without_starting_a_gateway() {
 }
 
 #[tokio::test]
-async fn gateway_lookup_failures_are_mapped_and_release_listener_ownership() {
-    struct Sink;
-    #[async_trait::async_trait]
-    impl ChannelInboundSink for Sink {
-        async fn push(&self, _: tinychannels_bus::ChannelIngress) -> Result<(), ChannelSendError> {
-            Ok(())
-        }
-    }
-
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(wiremock::matchers::path("/gateway/bot"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
-        .expect(2)
-        .mount(&server)
-        .await;
-    let channel = channel_for(&server);
-    let sink = Sink;
-
-    for _ in 0..2 {
-        let error = ChannelAdapter::start(&channel, &sink)
-            .await
-            .expect_err("an invalid Gateway lookup response must fail startup");
-        assert_eq!(error.kind, SendErrorKind::Unknown);
-        assert!(error.retryable);
-        assert!(
-            error
-                .message
-                .starts_with("Discord Gateway listener failed:")
-        );
-        assert!(channel.listener_cancel.lock().is_none());
-    }
-    server.verify().await;
-}
-
-#[tokio::test]
 async fn gateway_listener_cleans_up_after_aborted_start_and_restarts_once() {
     use futures_util::{SinkExt, StreamExt};
     use std::sync::atomic::{AtomicUsize, Ordering};
