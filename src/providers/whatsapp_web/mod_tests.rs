@@ -1,5 +1,8 @@
+#![allow(deprecated)]
+
 use super::*;
 use crate::channel::{ChannelAdapter, ChannelTyping};
+use tinychannels_bus::SendMessage;
 
 #[cfg(feature = "whatsapp-web")]
 fn make_channel() -> WhatsAppWebChannel {

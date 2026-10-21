@@ -1,6 +1,7 @@
 use super::*;
 use crate::channel::ChannelAdapter;
 use futures_util::{SinkExt, StreamExt};
+use serde_json::json;
 use tinychannels_bus::{ChannelInboundEnvelope, ChannelIngress};
 use tokio_tungstenite::tungstenite::Message;
 

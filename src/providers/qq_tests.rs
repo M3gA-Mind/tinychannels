@@ -1,5 +1,8 @@
+#![allow(deprecated)]
+
 use super::*;
 use crate::channel::ChannelAdapter;
+use tinychannels_bus::SendMessage;
 
 #[test]
 fn test_name() {

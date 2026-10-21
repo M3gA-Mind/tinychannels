@@ -1,4 +1,7 @@
+#![allow(deprecated)]
+
 use super::*;
+use tinychannels_bus::SendMessage;
 use crate::channel::ChannelAdapter;
 use tokio::sync::Notify;
 

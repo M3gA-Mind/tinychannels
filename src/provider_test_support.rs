@@ -1,5 +1,7 @@
 //! Test-only helpers for exercising providers through their typed ports.
 
+#![allow(deprecated)]
+
 use crate::channel::{
     ChannelAdapter, ChannelInboundSink, ChannelSendOutcome, OutboundPayload, SendMessage,
     outbound_intent_from_send_message,

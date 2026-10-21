@@ -1,8 +1,11 @@
 //! REST and webhook tests for the Lark channel. A local TLS fixture answers
 //! the Feishu/Lark API hosts; the webhook receiver is served on loopback.
 
+#![allow(deprecated)]
+
 use super::*;
 use base64::Engine as _;
+use tinychannels_bus::SendMessage;
 
 pub(super) struct FixtureVoiceCodec;
 
