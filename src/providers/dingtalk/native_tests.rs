@@ -127,6 +127,47 @@ async fn direct_send_uses_staff_id_and_provider_receipt() {
 }
 
 #[tokio::test]
+async fn v1_subject_is_a_markdown_title_not_part_of_dingtalk_body() {
+    use crate::providers::http_test_support::HttpsServer;
+    use crate::traits::SendMessage;
+
+    let server = HttpsServer::start(|request| {
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.target, "/session-webhook");
+        (200, r#"{"errcode":0}"#.into())
+    })
+    .await;
+    let channel = DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        server.client.clone(),
+    );
+    channel
+        .session_webhooks
+        .write()
+        .await
+        .insert("chat-1".into(), "https://api.dingtalk.com/session-webhook".into());
+
+    crate::provider_test_support::send_v1(
+        &channel,
+        &SendMessage::with_subject("deployment complete", "chat-1", "Release status"),
+    )
+    .await
+    .expect("the configured DingTalk webhook accepts the typed projection");
+
+    let requests = server.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].body,
+        json!({
+            "msgtype": "markdown",
+            "markdown": { "title": "Release status", "text": "deployment complete" }
+        })
+    );
+}
+
+#[tokio::test]
 async fn typed_send_rejects_missing_admission_or_robot_context_before_http() {
     use crate::providers::http_test_support::HttpsServer;
     use tinychannels_bus::{ChannelOutboundMessage, ContentPart, OutboundContentPart};
