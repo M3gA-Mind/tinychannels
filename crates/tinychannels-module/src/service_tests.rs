@@ -1585,6 +1585,33 @@ async fn changed_intent_cannot_reuse_a_terminal_result_key() {
 async fn stop_channel_keeps_provider_running_when_queue_recovery_fails() {
     let (sent, _received) = tokio::sync::mpsc::channel(1);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
+    let media_request = |instance: &str| tinychannels_bus::MediaUploadBegin {
+        instance: instance.into(),
+        scope: tinychannels_bus::HostVoiceScope {
+            conversation: tinychannels_bus::ConversationRef {
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "turn".into(),
+            ..Default::default()
+        },
+        kind: tinychannels_bus::MediaKind::Document,
+        content_type: "text/plain".into(),
+        file_name: None,
+        duration_ms: None,
+        codec: None,
+        byte_count: 1,
+    };
+    let fixture_upload = channels
+        .media_uploads
+        .begin(media_request("fixture"), "fixture-generation".into())
+        .await
+        .unwrap();
+    let second_fixture_upload = channels
+        .media_uploads
+        .begin(media_request("fixture"), "fixture-generation".into())
+        .await
+        .unwrap();
     callbacks
         .storage
         .faults
@@ -1593,6 +1620,13 @@ async fn stop_channel_keeps_provider_running_when_queue_recovery_fails() {
 
     assert!(channels.stop_channel("fixture".into()).await.is_err());
     assert!(channels.running.lock().await.contains_key("fixture"));
+    assert!(
+        channels
+            .media_uploads
+            .binding(&tinychannels_bus::MediaUploadFinish(fixture_upload))
+            .await
+            .is_ok()
+    );
 
     callbacks
         .storage
@@ -1601,6 +1635,20 @@ async fn stop_channel_keeps_provider_running_when_queue_recovery_fails() {
         .store(false, Ordering::SeqCst);
     channels.stop_channel("fixture".into()).await.unwrap();
     assert!(!channels.running.lock().await.contains_key("fixture"));
+    assert!(
+        channels
+            .media_uploads
+            .binding(&tinychannels_bus::MediaUploadFinish(second_fixture_upload))
+            .await
+            .is_err()
+    );
+    assert!(
+        channels
+            .media_uploads
+            .begin(media_request("other"), "other-generation".into())
+            .await
+            .is_ok()
+    );
     channels.shutdown().await.unwrap();
 }
 
