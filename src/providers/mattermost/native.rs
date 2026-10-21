@@ -362,7 +362,7 @@ impl MattermostChannel {
             })?;
         let status = response.status();
         if !status.is_success() {
-            return Err(http_error(status, "post", true));
+            return Err(mattermost_status_error(&response, "post", true));
         }
         response
             .json::<serde_json::Value>()
