@@ -59,19 +59,40 @@ fn draft_intent(
         text: compatibility_text(&descriptor.id, message),
     };
     if is_telegram {
-        // The frozen Telegram DTO uses `recipient` for chat/topic routing and
-        // `thread_ts` for the parent message. The generic converter cannot
-        // distinguish those provider-specific meanings, so normalize them at
-        // this compatibility boundary before the typed adapter sees them.
-        if intent.reply_to_id.is_none() {
-            intent.reply_to_id = message.thread_ts.clone();
-        }
-        intent.thread_id = None;
-        if let Some(conversation) = intent.conversation_ref.as_mut() {
-            conversation.thread_id = None;
-        }
+        normalize_telegram_v1_address(&mut intent, message);
     }
     intent
+}
+
+/// Restore the frozen Telegram v1 address convention before a legacy DTO is
+/// handed to typed provider operations. `recipient` may encode
+/// `chat_id:topic_id`, while `thread_ts` identifies a reply parent rather than
+/// a conversation thread. Canonical typed intents do not pass through here.
+pub(crate) fn normalize_telegram_v1_address(
+    intent: &mut tinychannels_bus::ChannelOutboundIntent,
+    message: &tinychannels::SendMessage,
+) {
+    if let Some((chat_id, topic_id)) = message.recipient.split_once(':') {
+        intent.conversation_id = chat_id.to_owned();
+        let conversation =
+            intent
+                .conversation_ref
+                .get_or_insert_with(|| tinychannels_bus::ConversationRef {
+                    id: chat_id.to_owned(),
+                    ..Default::default()
+                });
+        conversation.id = chat_id.to_owned();
+        if conversation.topic_id.is_none() {
+            conversation.topic_id = Some(topic_id.to_owned());
+        }
+    }
+    if intent.reply_to_id.is_none() {
+        intent.reply_to_id = message.thread_ts.clone();
+    }
+    intent.thread_id = None;
+    if let Some(conversation) = intent.conversation_ref.as_mut() {
+        conversation.thread_id = None;
+    }
 }
 
 pub(crate) fn compatibility_text(provider: &str, message: &tinychannels::SendMessage) -> String {

@@ -2706,7 +2706,7 @@ async fn preparation_preserves_explicit_keys_and_typed_thread_before_provider_io
         .await
         .unwrap();
     assert_eq!(prepared.intent.idempotency_key, expected.idempotency_key);
-    assert_eq!(prepared.intent.thread_id.as_deref(), Some("topic"));
+    assert_eq!(prepared.intent.thread_id, None);
     assert_eq!(prepared.intent.channel_id, "telegram");
     assert_eq!(prepared.intent.conversation_id, "recipient");
     assert_eq!(
@@ -2857,6 +2857,79 @@ async fn preparation_preserves_explicit_keys_and_typed_thread_before_provider_io
     );
     assert!(channels.running.lock().await.is_empty());
     channels.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn telegram_v1_preparation_splits_topic_address_and_preserves_parent_reply() {
+    use tinychannels_bus::module_runtime::ChannelMessagePreparation;
+
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(connection);
+    let channels = Channels::new(host, None);
+    let mut message = SendMessage::new("reply body", "-200:42");
+    message.thread_ts = Some("100".into());
+
+    let prepared = channels
+        .prepare_outbound_intent("telegram".into(), ChannelMessagePreparation::Typed(message))
+        .await
+        .unwrap();
+
+    assert_eq!(prepared.intent.conversation_id, "-200");
+    assert_eq!(
+        prepared
+            .intent
+            .conversation_ref
+            .as_ref()
+            .and_then(|value| value.topic_id.as_deref()),
+        Some("42")
+    );
+    assert_eq!(prepared.intent.reply_to_id.as_deref(), Some("100"));
+    assert_eq!(prepared.intent.thread_id, None);
+
+    let topic_only = channels
+        .prepare_outbound_intent(
+            "telegram".into(),
+            ChannelMessagePreparation::Typed(SendMessage::new("topic body", "-200:42")),
+        )
+        .await
+        .unwrap();
+    assert_eq!(topic_only.intent.conversation_id, "-200");
+    assert_eq!(
+        topic_only
+            .intent
+            .conversation_ref
+            .as_ref()
+            .and_then(|value| value.topic_id.as_deref()),
+        Some("42")
+    );
+    assert_eq!(topic_only.intent.reply_to_id, None);
+
+    let canonical = tinychannels_bus::ChannelOutboundIntent {
+        channel_id: "telegram".into(),
+        conversation_id: "-200:42".into(),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            id: "-200:42".into(),
+            topic_id: Some("explicit-topic".into()),
+            ..Default::default()
+        }),
+        reply_to_id: None,
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: "canonical body".into(),
+        },
+        ..Default::default()
+    };
+    let canonical_prepared = channels
+        .prepare_outbound_intent(
+            "telegram".into(),
+            ChannelMessagePreparation::Intent(canonical.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(canonical_prepared.intent, canonical);
 }
 
 struct OutboundOnlyFixture(tokio::sync::mpsc::Sender<SendMessage>);

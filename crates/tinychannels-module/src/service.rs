@@ -961,6 +961,13 @@ impl Channels {
                 // consumed `subject` receive its text convention.
                 let legacy_message =
                     tinychannels::legacy_message_value_from_outbound_intent(&intent);
+                if channel
+                    .split_once(':')
+                    .map_or(channel.as_str(), |(provider, _)| provider)
+                    == "telegram"
+                {
+                    super::interaction::normalize_telegram_v1_address(&mut intent, &message);
+                }
                 intent.payload = tinychannels_bus::OutboundPayload::Text {
                     text: super::interaction::compatibility_text(&channel, &message),
                 };
@@ -1071,6 +1078,13 @@ impl Channels {
             }
         }
         let mut intent = tinychannels::outbound_intent_from_send_message(&name, &message);
+        if name
+            .split_once(':')
+            .map_or(name.as_str(), |(provider, _)| provider)
+            == "telegram"
+        {
+            super::interaction::normalize_telegram_v1_address(&mut intent, &message);
+        }
         intent.payload = tinychannels_bus::OutboundPayload::Text {
             text: super::interaction::compatibility_text(&name, &message),
         };
