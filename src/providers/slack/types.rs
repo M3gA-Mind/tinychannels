@@ -4,6 +4,7 @@ use crate::host::{EventSink, MediaRepository, VoiceMediaStore};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tinychannels_bus::channel::ChannelSendError;
 
@@ -50,6 +51,8 @@ pub struct SlackChannel {
     pub(crate) seen: Mutex<VecDeque<String>>,
     pub(crate) reconnect_backoff: Duration,
     pub(crate) poll_interval: Duration,
+    pub(crate) listener_cancel: tokio::sync::watch::Sender<bool>,
+    pub(crate) listener_running: AtomicBool,
 }
 
 impl SlackChannel {
@@ -63,6 +66,7 @@ impl SlackChannel {
         allowed_users: Vec<String>,
         http_client: reqwest::Client,
     ) -> Self {
+        let (listener_cancel, _) = tokio::sync::watch::channel(false);
         Self {
             bot_token,
             app_token: None,
@@ -79,6 +83,8 @@ impl SlackChannel {
             seen: Mutex::new(VecDeque::new()),
             reconnect_backoff: Duration::from_secs(2),
             poll_interval: Duration::from_secs(3),
+            listener_cancel,
+            listener_running: AtomicBool::new(false),
         }
     }
 

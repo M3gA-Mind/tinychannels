@@ -1377,7 +1377,7 @@ impl NativePorts {
 
     fn slack(channel: Arc<tinychannels::SlackChannel>) -> Self {
         let mut ports = Self::native(channel, "Slack");
-        ports.listener_mode = LongTailListenerMode::Legacy;
+        ports.listener_mode = LongTailListenerMode::Adapter;
         ports
     }
 }
@@ -1872,7 +1872,7 @@ impl Running {
     ) -> Arc<Self> {
         let provider_name = channel.descriptor().id;
         Self::start_inner(
-            Some(channel.clone()),
+            None,
             provider_name,
             hooks,
             host,
