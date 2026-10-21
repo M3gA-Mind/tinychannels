@@ -18,7 +18,7 @@ Never use triple backtick code fences. Use a single blank line to separate block
 Be terse and concise. \
 Use short lines. Avoid walls of text.]\n";
 
-struct ListenerRegistration<'a>(&'a IrcChannel);
+pub(super) struct ListenerRegistration<'a>(&'a IrcChannel);
 
 impl Drop for ListenerRegistration<'_> {
     fn drop(&mut self) {
@@ -237,7 +237,7 @@ impl IrcChannel {
         self.writer.lock().await.take();
     }
 
-    async fn stop_writer(&self) -> anyhow::Result<()> {
+    pub(super) async fn stop_writer(&self) -> anyhow::Result<()> {
         let Some(mut writer) = self.writer.lock().await.take() else {
             return Ok(());
         };

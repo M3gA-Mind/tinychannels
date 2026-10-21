@@ -6,6 +6,7 @@ use std::time::Duration;
 use tinychannels_conformance::{
     AdapterFixture, ConformanceFeature, ExpectedScope, WireObservation, check_all_features,
 };
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio_rustls::TlsAcceptor;
@@ -17,8 +18,8 @@ const GUARD: Duration = Duration::from_secs(10);
 
 fn acceptor(tls12_only: bool) -> TlsAcceptor {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let cert = include_bytes!("../../tests/fixtures/tls/cert.der");
-    let key = include_bytes!("../../tests/fixtures/tls/key.der");
+    let cert = include_bytes!("../../../tests/fixtures/tls/cert.der");
+    let key = include_bytes!("../../../tests/fixtures/tls/key.der");
     let builder = if tls12_only {
         rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS12])
     } else {
