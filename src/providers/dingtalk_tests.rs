@@ -329,7 +329,7 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
         assert!(first.timestamp > 0);
         assert_eq!(
             (second.reply_target.as_str(), second.content.as_str()),
-            ("alice", "second")
+            ("group-id", "second")
         );
         drop(rx);
         release_tx.send(()).unwrap();
