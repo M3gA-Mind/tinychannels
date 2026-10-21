@@ -108,8 +108,6 @@ pub mod methods {
     pub const READ_MEDIA_CHUNK: &str = "ReadMediaChunk";
     /// Abort a media read and release its temporary bytes.
     pub const ABORT_MEDIA_READ: &str = "AbortMediaRead";
-    /// Release an upload or read handle.
-    pub const FINISH_MEDIA_HANDLE: &str = "FinishMediaHandle";
 }
 
 /// One constant per method name on [`HOST_BUS_NAME`].
@@ -135,7 +133,7 @@ pub mod host_methods {
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 45] = [
+pub const METHODS: [&str; 44] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -180,7 +178,6 @@ pub const METHODS: [&str; 45] = [
     methods::BEGIN_MEDIA_READ,
     methods::READ_MEDIA_CHUNK,
     methods::ABORT_MEDIA_READ,
-    methods::FINISH_MEDIA_HANDLE,
 ];
 
 /// All host-callback method names in declaration order.
