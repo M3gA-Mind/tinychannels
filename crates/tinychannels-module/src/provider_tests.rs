@@ -2241,7 +2241,7 @@ async fn configured_adapter_rejects_account_scope_mismatch_before_dispatch() {
         ),
     });
     let adapter = running.adapter_handle();
-    let outcome = adapter
+    let error = adapter
         .send(tinychannels_bus::ChannelOutboundIntent {
             channel_id: "interaction-fixture".into(),
             channel_ref: Some(tinychannels_bus::ChannelRef {
@@ -2255,10 +2255,7 @@ async fn configured_adapter_rejects_account_scope_mismatch_before_dispatch() {
             ..Default::default()
         })
         .await
-        .unwrap();
-    let error = outcome
-        .error
-        .expect("uncertain provider response is preserved in the typed outcome");
+        .unwrap_err();
     assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Forbidden);
     assert!(commands.try_recv().is_err());
 }
@@ -2887,7 +2884,7 @@ async fn configured_adapter_marks_first_unknown_media_upload_non_retryable() {
     );
     let running = Running::start_telegram(channel, hooks, host, None, true);
     let adapter = running.adapter_handle();
-    let error = adapter
+    let outcome = adapter
         .send(tinychannels_bus::ChannelOutboundIntent {
             idempotency_key: "uncertain-media-send".into(),
             channel_id: "telegram".into(),
@@ -2910,7 +2907,10 @@ async fn configured_adapter_marks_first_unknown_media_upload_non_retryable() {
             ..Default::default()
         })
         .await
-        .unwrap_err();
+        .unwrap();
+    let error = outcome
+        .error
+        .expect("uncertain provider result is retained in the typed outcome");
     assert!(error.sent_before_error);
     assert!(!error.retryable);
     assert!(!error.unsupported);
@@ -2948,7 +2948,8 @@ async fn configured_telegram_native_optional_ports_share_ordered_queue_and_rejec
     let instance = "telegram:account-a".to_owned();
     let channel = Arc::new(
         tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
-            .with_api_base_for_test(server.uri()),
+            .with_api_base_for_test(server.uri())
+            .with_streaming(tinychannels_bus::config::StreamMode::Partial, 0, true),
     );
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
