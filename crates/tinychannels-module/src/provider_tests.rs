@@ -2467,10 +2467,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
             .with_api_base_for_test(server.uri()),
     );
     let running = Running::start_telegram(channel, hooks, host, None, false);
-    assert!(
-        running.channel.is_none(),
-        "Telegram polling is owned by its typed adapter"
-    );
+
     let handle = running.adapter_handle();
     let repository = provider_host
         .media_repository()
@@ -2879,10 +2876,7 @@ async fn configured_telegram_native_optional_ports_share_ordered_queue_and_rejec
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_telegram(channel, hooks, host, None, true);
-    assert!(
-        running.channel.is_none(),
-        "Telegram polling is owned by its typed adapter"
-    );
+
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::TelegramNativeV2);
 
@@ -3081,10 +3075,7 @@ async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_s
             .with_api_base_for_test(server.uri()),
     );
     let running = Running::start_telegram(channel, hooks, host, None, false);
-    assert!(
-        running.channel.is_none(),
-        "Telegram polling is owned by its typed adapter"
-    );
+
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -3687,10 +3678,7 @@ async fn configured_telegram_native_adapter_owns_polling_typing_drafts_and_scope
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_telegram(channel, hooks, host, None, true);
-    assert!(
-        running.channel.is_none(),
-        "Telegram polling is owned by its typed adapter"
-    );
+
     let handle = running.adapter_handle();
     let native = handle.native.as_ref().unwrap().clone();
 
@@ -4033,10 +4021,7 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_slack(channel, hooks, host, None, true);
-    assert!(
-        running.channel.is_none(),
-        "Slack listener runs through its typed adapter"
-    );
+
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::SlackNativeV2);
     let descriptor = handle.descriptor();
@@ -4237,7 +4222,7 @@ async fn configured_slack_typed_listener_delivers_socket_mode_ingress_without_le
             .with_api_base(format!("{}/api", api.uri())),
     );
     let running = Running::start_slack(channel, hooks, host, None, false);
-    assert!(running.channel.is_none());
+     
 
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
@@ -4442,10 +4427,7 @@ async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_
     .expect("the configured Signal account has a native launch");
     let running = launch.start(hooks, host, None, true);
     let handle = running.adapter_handle();
-    assert!(
-        running.channel.is_none(),
-        "the typed Signal launch must not retain a legacy Channel object"
-    );
+
     assert_eq!(handle.mode, AdapterMode::SignalNativeV2);
     let descriptor = handle.descriptor();
     assert_eq!(descriptor.id, "signal");
@@ -4757,10 +4739,7 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         false,
         crate::provider::LongTailListenerMode::Adapter,
     );
-    assert!(
-        running.channel.is_none(),
-        "configured Discord v2 launch must not retain the legacy Channel transport"
-    );
+
     let adapter = running.adapter_handle();
     assert_eq!(adapter.mode, AdapterMode::DiscordNativeV2);
     let descriptor = adapter.descriptor();
@@ -5176,10 +5155,7 @@ async fn a_built_native_launch_starts_on_the_ordered_queue() {
     let _provider_host = hooks.host(host.clone(), "signal".to_owned(), None);
     let running = launch.start(hooks, host.clone(), None, true);
     assert_eq!(running.adapter_handle().mode, AdapterMode::SignalNativeV2);
-    assert!(
-        running.channel.is_none(),
-        "Signal typed launch must not retain the legacy Channel trait object"
-    );
+
     running.stop().await.unwrap();
 }
 
@@ -5202,10 +5178,7 @@ async fn a_built_imessage_launch_starts_as_the_native_imessage_adapter() {
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::IMessageNativeV2);
     assert_eq!(handle.descriptor().id, "imessage");
-    assert!(
-        running.channel.is_none(),
-        "configured iMessage launch must use its typed listener without retaining Channel"
-    );
+
     running.stop().await.unwrap();
 }
 
@@ -5231,10 +5204,7 @@ async fn a_built_linq_launch_starts_as_the_native_linq_adapter() {
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::LinqNativeV2);
     assert_eq!(handle.descriptor().id, "linq");
-    assert!(
-        running.channel.is_none(),
-        "configured Linq launch must not retain the legacy Channel trait object"
-    );
+
     running.stop().await.unwrap();
 }
 
@@ -5270,8 +5240,8 @@ async fn configured_linq_webhook_uses_typed_port_and_stamps_module_account() {
         crate::native::build_native_v2("linq", &config, &provider_host, &DefaultHttpClients)
             .expect("configured Linq factory");
     let running = launch.start(hooks, host, None, false);
-    let ports = running.native_ports.as_ref().expect("native ports");
-    assert!(running.channel.is_none());
+    let ports = &running.native_ports;
+     
     assert!(ports.adapter.supports_webhook_delivery());
 
     let body = serde_json::json!({
@@ -5386,10 +5356,7 @@ async fn a_built_email_launch_starts_as_the_native_email_adapter() {
         Some("unhealthy"),
         "the configured Email adapter must expose its failed IMAP probe"
     );
-    assert!(
-        running.channel.is_none(),
-        "typed Email launch must not retain a legacy Channel transport"
-    );
+
     assert_eq!(
         running
             .native_ports
@@ -5877,7 +5844,7 @@ async fn configured_long_tail_adapter_sends_through_the_ordered_queue_and_refuse
         host,
         None,
         true,
-        crate::provider::LongTailListenerMode::Legacy,
+        crate::provider::LongTailListenerMode::Adapter,
     );
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::LongTailNativeV2);

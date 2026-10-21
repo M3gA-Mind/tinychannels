@@ -4355,10 +4355,7 @@ async fn whatsapp_cloud_starts_normally_and_serves_webhook_ingress_over_the_bus(
         .get("whatsapp")
         .cloned()
         .expect("configured WhatsApp provider is running");
-    assert!(
-        running.channel.is_none(),
-        "Cloud webhook launch must not retain the legacy Channel trait"
-    );
+
     let foreign_receipt = service
         .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
             channel: "whatsapp".into(),
@@ -4510,10 +4507,7 @@ async fn whatsapp_selection_follows_the_stanza_shape_and_web_binds_its_media_aut
     // An outbound-only start is network-free and still yields the native adapter.
     let service = inbound_preparation_service().await;
     let running = web.start(Arc::new(Hooks::default()), service.host.clone(), None, true);
-    assert!(
-        running.channel.is_none(),
-        "Web native launch must not retain the legacy Channel trait"
-    );
+
     assert_eq!(
         running
             .adapter_handle()
