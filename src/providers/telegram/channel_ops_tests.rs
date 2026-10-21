@@ -2724,23 +2724,19 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
 
     let mut no_account = scoped_typed_media_message("stored-photo-1");
     no_account.channel_ref.as_mut().unwrap().account_id = None;
-    assert!(
-        ChannelTypedSend::send_typed(&channel, &no_account)
-            .await
-            .unwrap_err()
-            .message
-            .contains("before provider dispatch")
-    );
+    let error = ChannelTypedSend::send_typed(&channel, &no_account)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!error.sent_before_error);
 
     let mut no_turn = scoped_typed_media_message("stored-photo-1");
     no_turn.turn_id = None;
-    assert!(
-        ChannelTypedSend::send_typed(&channel, &no_turn)
-            .await
-            .unwrap_err()
-            .message
-            .contains("before provider dispatch")
-    );
+    let error = ChannelTypedSend::send_typed(&channel, &no_turn)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!error.sent_before_error);
     assert!(server.received_requests().await.unwrap().is_empty());
 
     let mut no_reply = scoped_typed_media_message("stored-photo-1");
@@ -3652,9 +3648,9 @@ async fn typed_send_rejects_non_numeric_reply_reference_before_provider_io() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.kind, crate::channel::SendErrorKind::Forbidden);
+    assert_eq!(error.kind, crate::channel::SendErrorKind::BadFormat);
     assert!(!error.sent_before_error);
-    assert!(error.message.contains("rejected before provider dispatch"));
+    assert!(error.message.contains("invalid address"));
     assert!(json_bodies(&server, "sendMessage").await.is_empty());
 }
 
