@@ -801,7 +801,10 @@ async fn send_fetches_a_token_once_and_posts_a_text_message() {
     crate::provider_test_support::send_v1(&channel, &SendMessage::new("second", "oc_chat"))
         .await
         .unwrap();
-    assert!(crate::provider_test_support::is_healthy(&channel).await, "cached token stays healthy");
+    assert!(
+        crate::provider_test_support::is_healthy(&channel).await,
+        "cached token stays healthy"
+    );
 
     let requests = server.requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 3, "the token is fetched once and cached");
@@ -1180,10 +1183,7 @@ async fn send_reports_failures_with_and_without_a_token_refresh() {
     })
     .await;
     let channel = channel_with(&server, true);
-    let error = crate::provider_test_support::send_v1(
-        &channel,
-        &SendMessage::new("x", "oc_chat"),
-    )
+    let error = crate::provider_test_support::send_v1(&channel, &SendMessage::new("x", "oc_chat"))
         .await
         .unwrap_err();
     assert_eq!(
@@ -1200,10 +1200,7 @@ async fn send_reports_failures_with_and_without_a_token_refresh() {
     })
     .await;
     let channel = channel_with(&server, true);
-    let error = crate::provider_test_support::send_v1(
-        &channel,
-        &SendMessage::new("x", "oc_chat"),
-    )
+    let error = crate::provider_test_support::send_v1(&channel, &SendMessage::new("x", "oc_chat"))
         .await
         .unwrap_err();
     assert_eq!(error.to_string(), "Lark send failed: upstream exploded");
@@ -1300,7 +1297,9 @@ async fn webhook_mode_requires_a_port() {
     let mut channel = LarkChannel::new("a".into(), "s".into(), "verify-token".into(), None, vec![]);
     channel.receive_mode = crate::config::LarkReceiveMode::Webhook;
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let error = crate::provider_test_support::listen_v1(&channel, tx).await.unwrap_err();
+    let error = crate::provider_test_support::listen_v1(&channel, tx)
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("requires `port`"), "{error}");
 }
 
@@ -1320,7 +1319,8 @@ async fn webhook_server_forwards_verified_events() {
     );
     channel.receive_mode = crate::config::LarkReceiveMode::Webhook;
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    let server = tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
+    let server =
+        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
 
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let url = format!("http://127.0.0.1:{port}/lark");

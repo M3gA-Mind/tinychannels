@@ -692,9 +692,12 @@ async fn send_runs_the_escaped_script_through_the_runner() {
     let mut channel = IMessageChannel::new(vec![]);
     channel.script_command = fake_runner(&out, 0);
 
-    crate::provider_test_support::send_v1(&channel, &SendMessage::new("say \"hi\"", "+15555550123"))
-        .await
-        .unwrap();
+    crate::provider_test_support::send_v1(
+        &channel,
+        &SendMessage::new("say \"hi\"", "+15555550123"),
+    )
+    .await
+    .unwrap();
 
     let script = std::fs::read_to_string(&out).unwrap();
     assert!(script.contains("tell application \"Messages\""), "{script}");
@@ -711,10 +714,13 @@ async fn send_reports_the_runner_stderr_on_failure() {
     let mut channel = IMessageChannel::new(vec![]);
     channel.script_command = fake_runner(&dir.path().join("script.txt"), 1);
 
-    let error = crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "user@example.com"))
-        .await
-        .unwrap_err()
-        .to_string();
+    let error = crate::provider_test_support::send_v1(
+        &channel,
+        &SendMessage::new("hello", "user@example.com"),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("iMessage send failed"), "{error}");
     assert!(error.contains("runner said no"), "{error}");
 }
@@ -726,10 +732,11 @@ async fn send_rejects_an_invalid_target_before_running_anything() {
     let mut channel = IMessageChannel::new(vec![]);
     channel.script_command = fake_runner(&out, 0);
 
-    let error = crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "not a target"))
-        .await
-        .unwrap_err()
-        .to_string();
+    let error =
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "not a target"))
+            .await
+            .unwrap_err()
+            .to_string();
     assert!(error.contains("Invalid iMessage target"), "{error}");
     assert!(!out.exists(), "the runner must not be invoked");
 }
@@ -780,7 +787,10 @@ async fn listen_fails_when_the_database_is_missing() {
     let dir = tempfile::tempdir().unwrap();
     let channel = channel_on(&dir.path().join("chat.db"), &["*"]);
     let (tx, _rx) = mpsc::channel(1);
-    let error = crate::provider_test_support::listen_v1(&channel, tx).await.unwrap_err().to_string();
+    let error = crate::provider_test_support::listen_v1(&channel, tx)
+        .await
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("Messages database not found"), "{error}");
 }
 
@@ -829,7 +839,8 @@ async fn listen_delivers_only_allowed_non_blank_messages() {
 
     let channel = channel_on(&db_path, &["+15555550123"]);
     let (tx, mut rx) = mpsc::channel(8);
-    let listen = tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
+    let listen =
+        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
 
     let first = next_delivery(&writer, &mut rowid, &mut rx).await;
     assert_eq!(first.sender, "+15555550123");
@@ -872,7 +883,8 @@ async fn listen_survives_failing_polls() {
 
     let channel = channel_on(&db_path, &["*"]);
     let (tx, mut rx) = mpsc::channel(8);
-    let listen = tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
+    let listen =
+        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
 
     // Give the listener time to fail a few polls; the assertions below hold
     // whether or not it did.

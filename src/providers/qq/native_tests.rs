@@ -380,9 +380,10 @@ async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fa
     .with_events(events.clone())
     .with_attachment_http_client(gateway.client.clone());
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let listening = tokio::spawn(async move {
-        crate::provider_test_support::listen_v1(channel.as_ref(), tx).await
-    });
+    let listening =
+        tokio::spawn(
+            async move { crate::provider_test_support::listen_v1(channel.as_ref(), tx).await },
+        );
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -497,9 +498,10 @@ async fn qq_gateway_listener_publishes_group_attachment_only_message_without_leg
     .with_events(events.clone())
     .with_attachment_http_client(gateway.client.clone());
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let listening = tokio::spawn(async move {
-        crate::provider_test_support::listen_v1(channel.as_ref(), tx).await
-    });
+    let listening =
+        tokio::spawn(
+            async move { crate::provider_test_support::listen_v1(channel.as_ref(), tx).await },
+        );
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {

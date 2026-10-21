@@ -1,8 +1,8 @@
 use super::*;
+use crate::channel::ChannelAdapter;
 use crate::providers::whatsapp_shared::fakes::{MemoryMedia, MemoryVoices, ogg_bytes, png_bytes};
 use crate::providers::whatsapp_shared::vcard::ContactCard;
 use crate::providers::whatsapp_web::fakes::{Call, RecordingClient};
-use crate::channel::ChannelAdapter;
 use tinychannels_bus::{
     ChannelRef, ContactMethod, ContentPart, ConversationRef, MediaKind, MediaReference,
     OutboundContentPart, OutboundVoice,

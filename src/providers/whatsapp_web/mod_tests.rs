@@ -604,7 +604,9 @@ fn message(recipient: &str, content: &str) -> SendMessage {
 async fn outbound_calls_fail_before_the_bot_is_built() {
     let ch = make_channel();
     for err in [
-        crate::provider_test_support::send_v1(&ch, &message("+1234567890", "hi")).await.unwrap_err(),
+        crate::provider_test_support::send_v1(&ch, &message("+1234567890", "hi"))
+            .await
+            .unwrap_err(),
         ch.start_typing("+1234567890").await.unwrap_err(),
         ch.stop_typing("+1234567890").await.unwrap_err(),
     ] {
@@ -615,7 +617,9 @@ async fn outbound_calls_fail_before_the_bot_is_built() {
 #[tokio::test]
 async fn send_delivers_text_to_an_allowed_number_as_a_phone_jid() {
     let (ch, fake) = connected_channel(false);
-    crate::provider_test_support::send_v1(&ch, &message("+1234567890", "hello")).await.unwrap();
+    crate::provider_test_support::send_v1(&ch, &message("+1234567890", "hello"))
+        .await
+        .unwrap();
     assert_eq!(
         fake.texts(),
         [("1234567890@s.whatsapp.net".to_owned(), "hello".to_owned())]
@@ -638,8 +642,12 @@ async fn send_into_a_provenanced_group_uses_the_group_jid() {
 #[tokio::test]
 async fn blocked_recipients_are_skipped_silently() {
     let (ch, fake) = connected_channel(false);
-    crate::provider_test_support::send_v1(&ch, &message("+9999999999", "nope")).await.unwrap();
-    crate::provider_test_support::send_v1(&ch, &message("11111@g.us", "nope")).await.unwrap();
+    crate::provider_test_support::send_v1(&ch, &message("+9999999999", "nope"))
+        .await
+        .unwrap();
+    crate::provider_test_support::send_v1(&ch, &message("11111@g.us", "nope"))
+        .await
+        .unwrap();
     ch.start_typing("+9999999999").await.unwrap();
     ch.stop_typing("+9999999999").await.unwrap();
     assert!(fake.calls().is_empty());
@@ -651,7 +659,9 @@ async fn unparseable_recipients_are_rejected() {
     let fake = Arc::new(RecordingClient::default());
     *ch.client.lock() = Some(fake.clone() as Arc<dyn OutboundClient>);
 
-    let empty = crate::provider_test_support::send_v1(&ch, &message("   ", "x")).await.unwrap_err();
+    let empty = crate::provider_test_support::send_v1(&ch, &message("   ", "x"))
+        .await
+        .unwrap_err();
     assert!(empty.to_string().contains("cannot be empty"), "{empty}");
     let no_digits = ch.start_typing("+abc").await.unwrap_err();
     assert!(
@@ -681,7 +691,9 @@ async fn typing_states_go_to_the_recipient_jid() {
 #[tokio::test]
 async fn client_failures_surface_with_their_operation() {
     let (ch, _fake) = connected_channel(true);
-    let send = crate::provider_test_support::send_v1(&ch, &message("+1234567890", "x")).await.unwrap_err();
+    let send = crate::provider_test_support::send_v1(&ch, &message("+1234567890", "x"))
+        .await
+        .unwrap_err();
     assert_eq!(send.to_string(), "send boom");
     let composing = ch.start_typing("+1234567890").await.unwrap_err();
     assert_eq!(
@@ -918,9 +930,12 @@ async fn the_real_client_refuses_outbound_while_logged_out() {
     };
     wait_for_client(&ch).await;
 
-    let send = tokio::time::timeout(HANG_GUARD, crate::provider_test_support::send_v1(&ch, &message("+1234567890", "hi")))
-        .await
-        .expect("send hung");
+    let send = tokio::time::timeout(
+        HANG_GUARD,
+        crate::provider_test_support::send_v1(&ch, &message("+1234567890", "hi")),
+    )
+    .await
+    .expect("send hung");
     assert!(send.is_err());
     let composing = tokio::time::timeout(HANG_GUARD, ch.start_typing("+1234567890"))
         .await
@@ -1108,7 +1123,9 @@ mod v2 {
         assert!(crate::provider_test_support::supports_reactions(&bare));
         assert!(crate::provider_test_support::supports_edit(&bare));
         assert!(crate::provider_test_support::supports_reply_to_id(&bare));
-        assert!(crate::provider_test_support::history_key_ignores_thread(&bare));
+        assert!(crate::provider_test_support::history_key_ignores_thread(
+            &bare
+        ));
         let wired = WhatsAppWebChannel::new("/tmp/t.db".into(), None, None, vec![])
             .with_media_repository(Arc::new(MemoryMedia::default()))
             .with_voice_media_store(Arc::new(MemoryVoices::default()))
@@ -1149,21 +1166,26 @@ mod v2 {
         .await
         .unwrap();
         assert_eq!(edited.platform_message_ids, receipt.platform_message_ids);
-        crate::channel::ChannelDelete::delete(&channel, &receipt).await.unwrap();
+        crate::channel::ChannelDelete::delete(&channel, &receipt)
+            .await
+            .unwrap();
         let thumbs = tinychannels_bus::ChannelReaction {
             value: "👍".into(),
             custom_emoji_id: None,
         };
         crate::channel::ChannelReaction::send_reaction(
             &channel,
-            &ChannelRef { id: "whatsapp".into(), account_id: None },
+            &ChannelRef {
+                id: "whatsapp".into(),
+                account_id: None,
+            },
             &conversation(),
             "3EB0X",
             &thumbs,
             false,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         crate::channel::ChannelAdapter::mark_read(&channel, &conversation(), "3EB0X")
             .await
             .unwrap();

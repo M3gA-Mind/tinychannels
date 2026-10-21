@@ -10,8 +10,7 @@ async fn deliver(
     channel: &LinqChannel,
     body: &str,
 ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
-    ChannelAdapter::deliver_webhook(channel, Some(&signed(body)), body.as_bytes())
-        .await
+    ChannelAdapter::deliver_webhook(channel, Some(&signed(body)), body.as_bytes()).await
 }
 
 fn is_rejection(error: &anyhow::Error) -> bool {

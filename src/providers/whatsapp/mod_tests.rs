@@ -871,9 +871,12 @@ async fn injected_cloud_client_reports_connection_failure_and_listener_stays_idl
     assert!(!crate::provider_test_support::is_healthy(&channel).await);
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(10), crate::provider_test_support::listen_v1(&channel, tx))
-            .await
-            .is_err()
+        tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            crate::provider_test_support::listen_v1(&channel, tx)
+        )
+        .await
+        .is_err()
     );
     assert!(rx.try_recv().is_err());
 }
@@ -934,7 +937,9 @@ mod v2 {
         assert!(crate::provider_test_support::supports_reply_to_id(&bare));
         assert!(crate::provider_test_support::supports_remote_control(&bare));
         assert!(crate::provider_test_support::supports_chat_approvals(&bare));
-        assert!(crate::provider_test_support::history_key_ignores_thread(&bare));
+        assert!(crate::provider_test_support::history_key_ignores_thread(
+            &bare
+        ));
         assert!(!crate::provider_test_support::supports_edit(&bare));
         assert!(!crate::provider_test_support::supports_draft_updates(&bare));
 
@@ -988,8 +993,8 @@ mod v2 {
             &channel(&server),
             &SendMessage::new("hi", "+15551234567"),
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -1064,9 +1069,11 @@ mod v2 {
         crate::channel::ChannelTyping::stop_typing(&channel, "+15550001111")
             .await
             .unwrap();
-        assert!(crate::channel::ChannelTyping::start_typing(&channel, "no digits")
-            .await
-            .is_err());
+        assert!(
+            crate::channel::ChannelTyping::start_typing(&channel, "no digits")
+                .await
+                .is_err()
+        );
         crate::channel::ChannelTyping::stop_typing(&channel, "+15550001111")
             .await
             .unwrap();
@@ -1083,24 +1090,30 @@ mod v2 {
         };
         crate::channel::ChannelReaction::send_reaction(
             &channel,
-            &ChannelRef { id: "whatsapp".into(), account_id: None },
+            &ChannelRef {
+                id: "whatsapp".into(),
+                account_id: None,
+            },
             &conversation(),
             "wamid.t",
             &thumbs,
             false,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         crate::channel::ChannelReaction::send_reaction(
             &channel,
-            &ChannelRef { id: "whatsapp".into(), account_id: None },
+            &ChannelRef {
+                id: "whatsapp".into(),
+                account_id: None,
+            },
             &conversation(),
             "wamid.t",
             &thumbs,
             true,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         let bodies: Vec<serde_json::Value> = server
             .received_requests()
             .await
@@ -1118,24 +1131,29 @@ mod v2 {
         };
         let blank = tinychannels_bus::ChannelReaction::default();
         for (reaction, unsupported) in [(&custom, true), (&blank, false)] {
-            let error =
-                crate::channel::ChannelReaction::send_reaction(
-                    &channel,
-                    &ChannelRef { id: "whatsapp".into(), account_id: None },
-                    &conversation(),
-                    "wamid.t",
-                    reaction,
-                    false,
-                )
-                    .await
-                    .unwrap_err();
+            let error = crate::channel::ChannelReaction::send_reaction(
+                &channel,
+                &ChannelRef {
+                    id: "whatsapp".into(),
+                    account_id: None,
+                },
+                &conversation(),
+                "wamid.t",
+                reaction,
+                false,
+            )
+            .await
+            .unwrap_err();
             let failure = error.downcast_ref::<WaFailure>().unwrap();
             assert_eq!(matches!(failure, WaFailure::Unsupported(_)), unsupported);
         }
         assert!(
             crate::channel::ChannelReaction::send_reaction(
                 &channel,
-                &ChannelRef { id: "whatsapp".into(), account_id: None },
+                &ChannelRef {
+                    id: "whatsapp".into(),
+                    account_id: None
+                },
                 &ConversationRef {
                     id: "name".into(),
                     ..Default::default()
@@ -1322,13 +1340,15 @@ mod v2 {
         let mut mac = Hmac::<Sha256>::new_from_slice(b"secret").unwrap();
         mac.update(&body);
         let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
-        let outcome = crate::channel::ChannelAdapter::deliver_webhook(&channel, Some(&signature), &body)
-            .await
-            .unwrap();
+        let outcome =
+            crate::channel::ChannelAdapter::deliver_webhook(&channel, Some(&signature), &body)
+                .await
+                .unwrap();
         assert_eq!(outcome.messages, 1);
-        let refused = crate::channel::ChannelAdapter::deliver_webhook(&channel, Some("sha256=00"), &body)
-            .await
-            .unwrap_err();
+        let refused =
+            crate::channel::ChannelAdapter::deliver_webhook(&channel, Some("sha256=00"), &body)
+                .await
+                .unwrap_err();
         assert!(
             refused
                 .downcast_ref::<tinychannels_runtime::WebhookRejected>()
@@ -1341,16 +1361,23 @@ mod v2 {
                 fail: true,
                 ..CollectingSink::new()
             }));
-        let error = crate::channel::ChannelAdapter::deliver_webhook(&failing, Some(&signature), &body)
-            .await
-            .unwrap_err();
+        let error =
+            crate::channel::ChannelAdapter::deliver_webhook(&failing, Some(&signature), &body)
+                .await
+                .unwrap_err();
         assert!(
             error
                 .downcast_ref::<tinychannels_runtime::WebhookRejected>()
                 .is_none()
         );
         assert_eq!(
-            crate::channel::ChannelAdapter::verify_webhook(&channel, "subscribe", "verify-me", "c1").as_deref(),
+            crate::channel::ChannelAdapter::verify_webhook(
+                &channel,
+                "subscribe",
+                "verify-me",
+                "c1"
+            )
+            .as_deref(),
             Some("c1")
         );
         assert_eq!(

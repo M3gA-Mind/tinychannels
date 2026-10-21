@@ -103,4 +103,3 @@ fn runtime_message_keeps_envelope_only_when_given() {
     let relayed = RuntimeChannelMessage::with_inbound_envelope(message("2"), envelope);
     assert!(relayed.inbound_envelope.is_some());
 }
-

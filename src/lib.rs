@@ -51,13 +51,13 @@ pub mod delivery;
 pub mod factory;
 pub mod harness;
 pub mod host;
+#[cfg(test)]
+mod provider_test_support;
 #[allow(
     deprecated,
     reason = "provider implementations migrate to typed sends in issue #103"
 )]
 pub mod providers;
-#[cfg(test)]
-mod provider_test_support;
 pub mod relay;
 pub mod remote;
 pub mod routes;

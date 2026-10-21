@@ -102,22 +102,28 @@ fn receipt_targets_reject_foreign_unaddressed_and_non_numeric_receipts() {
         id: "slack".into(),
         account_id: None,
     });
-    assert!(part_targets(&foreign)
-        .unwrap_err()
-        .message
-        .contains("Discord"));
+    assert!(
+        part_targets(&foreign)
+            .unwrap_err()
+            .message
+            .contains("Discord")
+    );
 
     let mut unscoped = receipt(&["10"]);
     unscoped.conversation = None;
     assert!(part_targets(&unscoped).is_err());
-    assert!(part_targets(&receipt(&[]))
-        .unwrap_err()
-        .message
-        .contains("no provider message id"));
-    assert!(part_targets(&receipt(&["x1"]))
-        .unwrap_err()
-        .message
-        .contains("numeric"));
+    assert!(
+        part_targets(&receipt(&[]))
+            .unwrap_err()
+            .message
+            .contains("no provider message id")
+    );
+    assert!(
+        part_targets(&receipt(&["x1"]))
+            .unwrap_err()
+            .message
+            .contains("numeric")
+    );
     let mut bad_primary = receipt(&[]);
     bad_primary.primary_platform_message_id = Some("zz".into());
     assert!(part_targets(&bad_primary).is_err());
@@ -135,21 +141,27 @@ fn emoji_segments_cover_unicode_and_custom_emoji() {
         custom_emoji_id: Some("123".into()),
     };
     assert_eq!(emoji_segment(&custom).unwrap(), "party:123");
-    assert!(emoji_segment(&ChannelReaction {
-        value: " ".into(),
-        custom_emoji_id: None
-    })
-    .is_err());
-    assert!(emoji_segment(&ChannelReaction {
-        value: "x".into(),
-        custom_emoji_id: Some("a".into())
-    })
-    .is_err());
-    assert!(emoji_segment(&ChannelReaction {
-        value: "".into(),
-        custom_emoji_id: Some("1".into())
-    })
-    .is_err());
+    assert!(
+        emoji_segment(&ChannelReaction {
+            value: " ".into(),
+            custom_emoji_id: None
+        })
+        .is_err()
+    );
+    assert!(
+        emoji_segment(&ChannelReaction {
+            value: "x".into(),
+            custom_emoji_id: Some("a".into())
+        })
+        .is_err()
+    );
+    assert!(
+        emoji_segment(&ChannelReaction {
+            value: "".into(),
+            custom_emoji_id: Some("1".into())
+        })
+        .is_err()
+    );
 }
 
 // ── edit ──────────────────────────────────────────────────────
@@ -186,12 +198,14 @@ async fn edit_rejects_mismatched_scope_oversize_and_non_text_before_dispatch() {
 
     let mut other_conversation = intent("x");
     other_conversation.conversation_id = "42".into();
-    assert!(channel
-        .edit_message_v2(&original, &other_conversation)
-        .await
-        .unwrap_err()
-        .message
-        .contains("scope"));
+    assert!(
+        channel
+            .edit_message_v2(&original, &other_conversation)
+            .await
+            .unwrap_err()
+            .message
+            .contains("scope")
+    );
 
     let mut other_ref = intent("x");
     other_ref.conversation_ref = Some(ConversationRef {
@@ -199,20 +213,24 @@ async fn edit_rejects_mismatched_scope_oversize_and_non_text_before_dispatch() {
         kind: ConversationKind::Dm,
         ..Default::default()
     });
-    assert!(channel
-        .edit_message_v2(&original, &other_ref)
-        .await
-        .is_err());
+    assert!(
+        channel
+            .edit_message_v2(&original, &other_ref)
+            .await
+            .is_err()
+    );
 
     let mut other_account = intent("x");
     other_account.channel_ref = Some(ChannelRef {
         id: "discord".into(),
         account_id: Some("other".into()),
     });
-    assert!(channel
-        .edit_message_v2(&original, &other_account)
-        .await
-        .is_err());
+    assert!(
+        channel
+            .edit_message_v2(&original, &other_account)
+            .await
+            .is_err()
+    );
 
     let too_long = channel
         .edit_message_v2(&original, &intent(&"a".repeat(2001)))
@@ -221,19 +239,23 @@ async fn edit_rejects_mismatched_scope_oversize_and_non_text_before_dispatch() {
     assert_eq!(too_long.kind, SendErrorKind::TooLong);
 
     let buttons = parts_intent(vec![content(ContentPart::Buttons { rows: vec![] })]);
-    assert!(channel
-        .edit_message_v2(&original, &buttons)
-        .await
-        .unwrap_err()
-        .message
-        .contains("plain text"));
+    assert!(
+        channel
+            .edit_message_v2(&original, &buttons)
+            .await
+            .unwrap_err()
+            .message
+            .contains("plain text")
+    );
 
     let mut unscoped = receipt(&["10"]);
     unscoped.conversation = None;
-    assert!(channel
-        .edit_message_v2(&unscoped, &intent("x"))
-        .await
-        .is_err());
+    assert!(
+        channel
+            .edit_message_v2(&unscoped, &intent("x"))
+            .await
+            .is_err()
+    );
     assert!(requests(&server, "PATCH").await.is_empty());
 }
 
@@ -275,10 +297,12 @@ async fn delete_surfaces_real_failures() {
         .unwrap_err();
 
     assert_eq!(error.kind, SendErrorKind::Forbidden);
-    assert!(channel_for(&server)
-        .delete_message_v2(&receipt(&[]))
-        .await
-        .is_err());
+    assert!(
+        channel_for(&server)
+            .delete_message_v2(&receipt(&[]))
+            .await
+            .is_err()
+    );
 }
 
 // ── reactions and typing ──────────────────────────────────────
@@ -334,23 +358,29 @@ async fn reactions_reject_non_numeric_targets_and_empty_emoji() {
         value: "👍".into(),
         custom_emoji_id: None,
     };
-    assert!(channel
-        .send_reaction_v2(&conversation(), "x", &ok, false)
-        .await
-        .is_err());
+    assert!(
+        channel
+            .send_reaction_v2(&conversation(), "x", &ok, false)
+            .await
+            .is_err()
+    );
     let bad_channel = ConversationRef {
         id: "c".into(),
         ..conversation()
     };
-    assert!(channel
-        .send_reaction_v2(&bad_channel, "1", &ok, false)
-        .await
-        .is_err());
+    assert!(
+        channel
+            .send_reaction_v2(&bad_channel, "1", &ok, false)
+            .await
+            .is_err()
+    );
     let empty = ChannelReaction::default();
-    assert!(channel
-        .send_reaction_v2(&conversation(), "1", &empty, false)
-        .await
-        .is_err());
+    assert!(
+        channel
+            .send_reaction_v2(&conversation(), "1", &empty, false)
+            .await
+            .is_err()
+    );
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -404,33 +434,41 @@ async fn invalid_drafts_are_rejected_before_dispatch() {
     let server = MockServer::start().await;
     let channel = channel_for(&server);
     let buttons = parts_intent(vec![content(ContentPart::Buttons { rows: vec![] })]);
-    assert!(channel
-        .upsert_draft_v2(None, buttons)
-        .await
-        .unwrap_err()
-        .message
-        .contains("text"));
-    assert!(channel
-        .upsert_draft_v2(None, intent("  "))
-        .await
-        .unwrap_err()
-        .message
-        .contains("requires text"));
+    assert!(
+        channel
+            .upsert_draft_v2(None, buttons)
+            .await
+            .unwrap_err()
+            .message
+            .contains("text")
+    );
+    assert!(
+        channel
+            .upsert_draft_v2(None, intent("  "))
+            .await
+            .unwrap_err()
+            .message
+            .contains("requires text")
+    );
 
     let mut unscoped = receipt(&["10"]);
     unscoped.conversation = None;
-    assert!(channel
-        .upsert_draft_v2(Some(&unscoped), intent("x"))
-        .await
-        .is_err());
+    assert!(
+        channel
+            .upsert_draft_v2(Some(&unscoped), intent("x"))
+            .await
+            .is_err()
+    );
     let mut elsewhere = intent("x");
     elsewhere.conversation_id = "99".into();
-    assert!(channel
-        .upsert_draft_v2(Some(&receipt(&["10"])), elsewhere)
-        .await
-        .unwrap_err()
-        .message
-        .contains("scope"));
+    assert!(
+        channel
+            .upsert_draft_v2(Some(&receipt(&["10"])), elsewhere)
+            .await
+            .unwrap_err()
+            .message
+            .contains("scope")
+    );
     let mut bad_target = intent("x");
     bad_target.conversation_id = "nope".into();
     bad_target.conversation_ref = None;

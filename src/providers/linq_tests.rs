@@ -410,9 +410,12 @@ async fn injected_linq_client_propagates_transport_failure_and_keeps_webhook_lis
     assert!(!crate::provider_test_support::is_healthy(&channel).await);
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(10), crate::provider_test_support::listen_v1(&channel, tx))
-            .await
-            .is_err()
+        tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            crate::provider_test_support::listen_v1(&channel, tx)
+        )
+        .await
+        .is_err()
     );
     assert!(rx.try_recv().is_err());
 }

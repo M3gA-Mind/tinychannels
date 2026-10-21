@@ -4,7 +4,7 @@ use crate::channel::{
     ChannelTypedSend, ChannelTyping,
 };
 use crate::providers::slack::fixtures::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use tinychannels_bus::channel::{MessageReceiptPart, SendErrorKind};
 use tinychannels_bus::{
@@ -12,7 +12,7 @@ use tinychannels_bus::{
     OutboundPayload, OutboundVoice,
 };
 use tinychannels_conformance::{
-    check_all_features, AdapterFixture, ConformanceFeature, ExpectedScope, WireObservation,
+    AdapterFixture, ConformanceFeature, ExpectedScope, WireObservation, check_all_features,
 };
 use wiremock::MockServer;
 
@@ -780,23 +780,27 @@ async fn typed_interaction_operations_preserve_provider_validation() {
             .await
             .is_err()
     );
-    assert!(ChannelDelete::delete(&channel, &MessageReceipt::default())
-        .await
-        .is_err());
+    assert!(
+        ChannelDelete::delete(&channel, &MessageReceipt::default())
+            .await
+            .is_err()
+    );
     let unknown = tinychannels_bus::channel::ChannelReaction {
         value: "??".into(),
         custom_emoji_id: None,
     };
-    assert!(ChannelReaction::send_reaction(
-        &channel,
-        &channel_ref(),
-        &conversation(None),
-        "1.1",
-        &unknown,
-        false,
-    )
-    .await
-    .is_err());
+    assert!(
+        ChannelReaction::send_reaction(
+            &channel,
+            &channel_ref(),
+            &conversation(None),
+            "1.1",
+            &unknown,
+            false,
+        )
+        .await
+        .is_err()
+    );
 }
 
 #[tokio::test]
@@ -870,11 +874,13 @@ async fn listening_needs_a_channel_or_an_app_token_and_picks_the_transport() {
         }
     }
     let bare = SlackChannel::new("t".into(), None, vec![]);
-    assert!(ChannelAdapter::start(&bare, &NoSink)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("channel_id required"));
+    assert!(
+        ChannelAdapter::start(&bare, &NoSink)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("channel_id required")
+    );
     let dead = |channel: Option<&str>, app: Option<&str>| {
         SlackChannel::new("t".into(), channel.map(str::to_owned), vec!["*".into()])
             .with_app_token(app.map(str::to_owned))

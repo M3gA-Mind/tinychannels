@@ -534,9 +534,10 @@ async fn rest_requests_preserve_auth_thread_routing_and_server_errors() {
         .expect(1)
         .mount(&server)
         .await;
-    let error = crate::provider_test_support::send_v1(&channel, &SendMessage::new("top-level", "room"))
-        .await
-        .unwrap_err();
+    let error =
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("top-level", "room"))
+            .await
+            .unwrap_err();
     assert!(error.to_string().contains("403"));
     assert!(error.to_string().contains("permission denied"));
     server.verify().await;
@@ -632,7 +633,8 @@ async fn listener_recovers_from_invalid_json_and_delivers_posts_in_time_order() 
         })
         .mount(&server).await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let listener = tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
+    let listener =
+        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
     tokio::time::timeout(std::time::Duration::from_secs(15), async {
         let first = rx.recv().await.unwrap();
         let second = rx.recv().await.unwrap();

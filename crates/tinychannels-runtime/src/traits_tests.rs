@@ -38,8 +38,7 @@ fn send_message_generates_deterministic_idempotency_key() {
 
 #[test]
 fn explicit_send_message_idempotency_key_is_preserved() {
-    let message = SendMessage::new("hello", "alice")
-        .with_idempotency_key("caller-key");
+    let message = SendMessage::new("hello", "alice").with_idempotency_key("caller-key");
 
     let intent = channel::outbound_intent_from_send_message("telegram", &message);
     assert_eq!(intent.idempotency_key, "caller-key");
@@ -57,7 +56,10 @@ fn v1_send_message_is_immediately_converted_to_a_scoped_typed_intent() {
     assert_eq!(intent.idempotency_key, "caller-key");
     assert_eq!(intent.thread_id.as_deref(), Some("thread-1"));
     assert_eq!(
-        intent.conversation_ref.as_ref().and_then(|scope| scope.thread_id.as_deref()),
+        intent
+            .conversation_ref
+            .as_ref()
+            .and_then(|scope| scope.thread_id.as_deref()),
         Some("thread-1")
     );
     assert!(matches!(

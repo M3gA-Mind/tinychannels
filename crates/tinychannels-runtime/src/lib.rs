@@ -7,18 +7,18 @@ use rand::RngExt as _;
 
 mod cli;
 mod dispatch;
-#[cfg(test)]
-#[path = "traits_tests.rs"]
-mod traits_tests;
 mod health;
 #[allow(
     deprecated,
     reason = "legacy session projection remains during v22 migration"
 )]
 mod session;
+#[cfg(test)]
+#[path = "traits_tests.rs"]
+mod traits_tests;
 
-pub use dispatch::{RuntimeChannelMessage, run_dispatch_loop};
 pub use cli::CliChannel;
+pub use dispatch::{RuntimeChannelMessage, run_dispatch_loop};
 pub use health::{ChannelHealthState, classify_health_result};
 #[allow(deprecated, reason = "legacy session API remains during v22 migration")]
 pub use session::{ChannelSession, run_in_session};

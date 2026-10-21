@@ -243,7 +243,10 @@ pub(crate) trait NativeProvider: Send + Sync {
         _draft_id: &str,
         _intent: tinychannels_bus::ChannelOutboundIntent,
     ) -> Result<(), ChannelSendError> {
-        Err(unsupported(&format!("{} draft finalization", self.display())))
+        Err(unsupported(&format!(
+            "{} draft finalization",
+            self.display()
+        )))
     }
 
     /// Optional raw webhook delivery owned by the provider. The default keeps

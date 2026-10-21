@@ -854,10 +854,9 @@ async fn the_descriptor_status_and_legacy_methods_use_the_native_surface() {
         "imessage"
     );
     let recorder = rig.spawn_messages();
-    let outcome =
-        ChannelTypedSend::send_typed(&rig.channel, &message(PEER, vec![text("typed")]))
-            .await
-            .unwrap();
+    let outcome = ChannelTypedSend::send_typed(&rig.channel, &message(PEER, vec![text("typed")]))
+        .await
+        .unwrap();
     recorder.abort();
     assert_eq!(outcome.receipt.platform_message_ids, ["SENT1"]);
     let error = ChannelTypedSend::send_typed(

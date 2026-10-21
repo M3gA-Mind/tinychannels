@@ -616,7 +616,9 @@ async fn channel_send_delivers_over_the_async_transport() {
         subject: Some("Greetings".to_string()),
         ..SendMessage::new("Body text", "to@example.com")
     };
-    crate::provider_test_support::send_v1(&channel, &message).await.unwrap();
+    crate::provider_test_support::send_v1(&channel, &message)
+        .await
+        .unwrap();
 
     let transcript = server.await.unwrap();
     assert!(
@@ -1160,7 +1162,8 @@ async fn listen_retries_a_failing_server() {
     channel.config.imap_host = "localhost".to_string();
     channel.config.imap_port = port;
     let (tx, _rx) = mpsc::channel(1);
-    let listen = tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
+    let listen =
+        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
     timeout(HANG_GUARD, accepts)
         .await
         .expect("three connection attempts")

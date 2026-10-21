@@ -386,13 +386,9 @@ async fn send_draft_returns_marker_id() {
 async fn update_draft_is_a_noop_ok() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
     assert!(
-        ChannelStreamingDraft::update_draft(
-            &ch,
-            "any-id",
-            draft_intent("user-42", "text")
-        )
-        .await
-        .is_ok()
+        ChannelStreamingDraft::update_draft(&ch, "any-id", draft_intent("user-42", "text"))
+            .await
+            .is_ok()
     );
 }
 
@@ -549,15 +545,18 @@ async fn start_heartbeat_task_inserts_and_stop_removes() {
 async fn disconnected_sends_and_typing_return_errors_without_leaving_heartbeat_tasks() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
     ch.register_recipient_alias("alias", "original").await;
-    assert!(crate::provider_test_support::send_v1(&ch, &SendMessage::new("hello", "alias")).await.is_err());
-    let error = ChannelStreamingDraft::finalize_draft(
-        &ch,
-        "draft",
-        draft_intent("alias", "hello"),
-    )
-    .await
-    .unwrap_err();
-    assert!(!error.unsupported, "finalization reached the Yuanbao sender");
+    assert!(
+        crate::provider_test_support::send_v1(&ch, &SendMessage::new("hello", "alias"))
+            .await
+            .is_err()
+    );
+    let error = ChannelStreamingDraft::finalize_draft(&ch, "draft", draft_intent("alias", "hello"))
+        .await
+        .unwrap_err();
+    assert!(
+        !error.unsupported,
+        "finalization reached the Yuanbao sender"
+    );
     assert!(error.retryable, "a disconnected send remains retryable");
     assert!(ch.start_typing("alias").await.is_err());
     assert!(ch.heartbeat_tasks.lock().await.is_empty());
@@ -613,16 +612,21 @@ async fn listener_dispatches_push_then_stops_on_kickout_and_second_listen_is_noo
         .send(InboundEvent::Kickout("signed in elsewhere".into()))
         .unwrap();
     let (tx, mut received) = mpsc::channel(4);
-    tokio::time::timeout(Duration::from_secs(3), crate::provider_test_support::listen_v1(&ch, tx.clone()))
-        .await
-        .unwrap()
-        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        crate::provider_test_support::listen_v1(&ch, tx.clone()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let message = received.try_recv().unwrap();
     assert_eq!(message.id, "listener-message");
     assert_eq!(message.sender, "alice");
     assert_eq!(message.content, "hello");
     assert!(*ch.shutdown_tx.borrow());
-    crate::provider_test_support::listen_v1(&ch, tx).await.unwrap();
+    crate::provider_test_support::listen_v1(&ch, tx)
+        .await
+        .unwrap();
     assert!(received.try_recv().is_err());
 }
 
@@ -635,10 +639,13 @@ async fn listener_stops_when_inbound_channel_closes() {
     *ch.inbound_rx.lock().await = Some(rx);
     drop(incoming);
     let (tx, _rx) = mpsc::channel(1);
-    tokio::time::timeout(Duration::from_secs(3), crate::provider_test_support::listen_v1(&ch, tx))
-        .await
-        .unwrap()
-        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        crate::provider_test_support::listen_v1(&ch, tx),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert!(*ch.shutdown_tx.borrow());
 }
 

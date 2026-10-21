@@ -17,12 +17,15 @@ impl ChannelInboundSink for LegacyMessageSink {
         if let ChannelIngress::Inbound(envelope) = ingress {
             let timestamp = envelope.timestamp_unix_ms.unwrap_or_default() / 1_000;
             let message = crate::channel::typed_message_from_inbound_envelope(&envelope, timestamp);
-            self.0.send(message).await.map_err(|_| crate::channel::ChannelSendError {
-                kind: tinychannels_bus::channel::SendErrorKind::Transient,
-                message: "legacy test receiver closed".into(),
-                retryable: true,
-                ..Default::default()
-            })?;
+            self.0
+                .send(message)
+                .await
+                .map_err(|_| crate::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                    message: "legacy test receiver closed".into(),
+                    retryable: true,
+                    ..Default::default()
+                })?;
         }
         Ok(())
     }

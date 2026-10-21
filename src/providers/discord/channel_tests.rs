@@ -180,9 +180,11 @@ fn split_very_long_message() {
     // The shared chunker prefers whitespace boundaries, so it may produce more
     // than the mathematical minimum while preserving Discord's UTF-16 limit.
     assert!(chunks.len() > 1);
-    assert!(chunks
-        .iter()
-        .all(|chunk| discord_units(chunk) <= DISCORD_MAX_MESSAGE_LENGTH));
+    assert!(
+        chunks
+            .iter()
+            .all(|chunk| discord_units(chunk) <= DISCORD_MAX_MESSAGE_LENGTH)
+    );
     // Verify total content is preserved
     let reconstructed = chunks.concat();
     assert_eq!(reconstructed, msg);
@@ -267,9 +269,11 @@ fn split_multibyte_only_content_without_panics() {
     let msg = "🦀".repeat(2500);
     let chunks = split_message_for_discord(&msg);
     assert_eq!(chunks.len(), 3);
-    assert!(chunks
-        .iter()
-        .all(|chunk| discord_units(chunk) <= DISCORD_MAX_MESSAGE_LENGTH));
+    assert!(
+        chunks
+            .iter()
+            .all(|chunk| discord_units(chunk) <= DISCORD_MAX_MESSAGE_LENGTH)
+    );
     let reconstructed = chunks.concat();
     assert_eq!(reconstructed, msg);
 }
@@ -278,9 +282,11 @@ fn split_multibyte_only_content_without_panics() {
 fn split_chunks_always_within_discord_limit() {
     let msg = "x".repeat(12_345);
     let chunks = split_message_for_discord(&msg);
-    assert!(chunks
-        .iter()
-        .all(|chunk| chunk.chars().count() <= DISCORD_MAX_MESSAGE_LENGTH));
+    assert!(
+        chunks
+            .iter()
+            .all(|chunk| chunk.chars().count() <= DISCORD_MAX_MESSAGE_LENGTH)
+    );
 }
 
 #[test]
@@ -592,7 +598,7 @@ fn proactive_target_uses_configured_channel_id() {
 // ── REST + Gateway against loopback mocks ─────────────────────
 
 use axum::{
-    extract::Path, http::HeaderMap, http::StatusCode, routing::get, routing::post, Json, Router,
+    Json, Router, extract::Path, http::HeaderMap, http::StatusCode, routing::get, routing::post,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
