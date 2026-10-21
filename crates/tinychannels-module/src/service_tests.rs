@@ -180,7 +180,13 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
     assert_eq!(sent.thread_ts.as_deref(), Some("thread-9"));
     assert_eq!(sent.idempotency_key.as_deref(), Some("delivery-42"));
     client
-        .call::<()>(tinychannels_bus::methods::SHUTDOWN, ())
+        .call::<()>(
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+            tinychannels_bus::methods::SHUTDOWN.try_into().unwrap(),
+            (),
+        )
         .await
         .unwrap();
     host.shutdown().await.unwrap();
@@ -635,13 +641,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         assert!(result.is_err(), "{key} normalizes to invalid empty parts");
     }
     client
-        .call::<()>(
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::methods::SHUTDOWN.try_into().unwrap(),
-            (),
-        )
+        .call::<()>(tinychannels_bus::methods::SHUTDOWN, ())
         .await
         .unwrap();
     host.shutdown().await.unwrap();
