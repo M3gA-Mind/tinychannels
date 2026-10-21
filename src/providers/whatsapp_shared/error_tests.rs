@@ -1,10 +1,14 @@
 use super::*;
 
 #[test]
-fn rejected_unsupported_and_uncertain_failures_keep_their_retry_contract() {
+fn failure_classes_keep_their_retry_contract() {
     let rejected = WaFailure::rejected("bad scope").into_send_error();
     assert_eq!(rejected.kind, SendErrorKind::Forbidden);
     assert!(!rejected.unsupported && !rejected.sent_before_error && !rejected.retryable);
+
+    let bad_format = WaFailure::bad_format("invalid JID").into_send_error();
+    assert_eq!(bad_format.kind, SendErrorKind::BadFormat);
+    assert!(!bad_format.unsupported && !bad_format.sent_before_error && !bad_format.retryable);
 
     let unsupported = WaFailure::unsupported("no polls").into_send_error();
     assert_eq!(unsupported.kind, SendErrorKind::BadFormat);
@@ -20,6 +24,7 @@ fn rejected_unsupported_and_uncertain_failures_keep_their_retry_contract() {
 fn failure_displays_its_message_for_every_class() {
     for failure in [
         WaFailure::rejected("a"),
+        WaFailure::bad_format("a"),
         WaFailure::unsupported("a"),
         WaFailure::uncertain("a"),
     ] {
