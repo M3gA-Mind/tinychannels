@@ -517,9 +517,7 @@ async fn typed_socket_ack_waits_for_sink_acceptance_without_blocking_ping() {
                     let _ = pong_tx.send(());
                 }
                 if let Some(Ok(Message::Text(_))) = socket.next().await {
-                    panic!(
-                        "a blocked sink must not cause an early Socket Mode acknowledgement"
-                    )
+                    panic!("a blocked sink must not cause an early Socket Mode acknowledgement")
                 }
             } else {
                 expect_ack(&mut socket, "unacked-until-accepted").await;
