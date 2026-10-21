@@ -74,13 +74,11 @@ async fn a_fully_wired_account_declares_media_voice_and_waveforms() {
 async fn adapter_capabilities_match_the_discord_provider_facts() {
     let server = MockServer::start().await;
     let (channel, ..) = full_channel(&server);
-    assert_eq!(
-        ChannelAdapter::declared_capabilities(&channel),
-        channel.v2_capabilities()
-    );
-    assert!(channel.supports_reactions() && channel.supports_edit());
-    assert!(channel.supports_draft_updates() && channel.supports_progressive_edits());
-    assert!(channel.supports_reply_to_id() && channel.supports_thread_id());
+    let capabilities = ChannelAdapter::declared_capabilities(&channel);
+    assert_eq!(capabilities, channel.v2_capabilities());
+    assert!(capabilities.reactions && capabilities.content.presentation.supports_edit);
+    assert!(capabilities.actions.drafts && capabilities.progressive_edits);
+    assert!(capabilities.addressing.reply_to_id && capabilities.addressing.thread_id);
 }
 
 #[tokio::test]
@@ -621,7 +619,9 @@ async fn typed_operations_preserve_errors_and_receipts() {
     ChannelTypedSend::send_typed(&channel, &message)
         .await
         .unwrap();
-    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    let outcome = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
     let receipt = outcome.receipt;
     let thumbs = tinychannels_bus::ChannelReaction {
         value: "👍".into(),
@@ -630,11 +630,12 @@ async fn typed_operations_preserve_errors_and_receipts() {
     ChannelReaction::send_reaction(&channel, &account(), &conversation(), "800", &thumbs, false)
         .await
         .unwrap();
-    channel
-        .edit_message(&receipt, &intent("again"))
+    crate::channel::ChannelEdit::edit(&channel, &receipt, intent("again"))
         .await
         .unwrap();
-    channel.delete_message(&receipt).await.unwrap();
+    crate::channel::ChannelDelete::delete(&channel, &receipt)
+        .await
+        .unwrap();
 
     let bad = ChannelOutboundMessage {
         parts: vec![OutboundContentPart::Content {
@@ -649,10 +650,11 @@ async fn typed_operations_preserve_errors_and_receipts() {
         }],
         ..message
     };
-    let error = channel.send_typed_with_receipt(&bad).await.unwrap_err();
+    let error = crate::channel::ChannelTypedSend::send_typed(&channel, &bad)
+        .await
+        .unwrap_err();
     assert!(error.downcast_ref::<DiscordError>().unwrap().0.unsupported);
-    let failed = channel
-        .edit_message(&receipt, &intent(&"x".repeat(2001)))
+    let failed = crate::channel::ChannelEdit::edit(&channel, &receipt, intent(&"x".repeat(2001)))
         .await
         .unwrap_err();
     assert_eq!(
@@ -660,8 +662,7 @@ async fn typed_operations_preserve_errors_and_receipts() {
         SendErrorKind::TooLong
     );
     assert!(
-        channel
-            .delete_message(&MessageReceipt::default())
+        crate::channel::ChannelDelete::delete(&channel, &MessageReceipt::default())
             .await
             .is_err()
     );
