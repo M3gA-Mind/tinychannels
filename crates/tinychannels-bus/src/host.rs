@@ -1,7 +1,7 @@
 //! Portable payloads for the host callback object.
+use crate::{ChannelRef, ConversationRef};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use crate::{ChannelRef, ConversationRef};
 
 /// Authenticated scope for media operations owned by one configured channel.
 /// The module fills provider identity from its active runtime; callers must

@@ -59,7 +59,9 @@ pub use config::ChannelsConfig;
 pub use controllers::{ChannelAuthMode, ChannelDefinition};
 pub use error::{Result, TinyChannelsError};
 pub use health::{ChannelHealthReport, ChannelHealthState};
-pub use host::{HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult, HostVoiceScope};
+pub use host::{
+    HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult, HostVoiceScope,
+};
 pub use http::HttpProxyPolicy;
 pub use module_controller::{
     ChannelBackendRequest, ChannelBackendResult, ChannelControllerRequest, ChannelControllerResult,
@@ -72,9 +74,9 @@ pub use module_email::{
 pub use module_media::{
     MEDIA_READ_CAPACITY, MEDIA_READ_CHUNK_BYTES, MEDIA_UPLOAD_BEGIN_MAX_BYTES,
     MEDIA_UPLOAD_CAPACITY, MEDIA_UPLOAD_CHUNK_BYTES, MEDIA_UPLOAD_MAX_BYTES,
-    MEDIA_UPLOAD_MAX_CHUNKS, MediaReadBegin, MediaReadChunk, MediaReadChunkResult,
-    MediaReadFinish, MediaReadHandle, MediaReadInfo, MediaUploadBegin, MediaUploadChunk,
-    MediaUploadFinish, MediaUploadHandle, MediaUploadResult,
+    MEDIA_UPLOAD_MAX_CHUNKS, MediaReadBegin, MediaReadChunk, MediaReadChunkResult, MediaReadFinish,
+    MediaReadHandle, MediaReadInfo, MediaUploadBegin, MediaUploadChunk, MediaUploadFinish,
+    MediaUploadHandle, MediaUploadResult,
 };
 pub use names::{BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH, methods};
 #[allow(

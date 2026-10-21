@@ -129,7 +129,18 @@ fn opaque_media_reference_round_trips_without_a_shared_path() {
     let decoded: crate::ChannelInboundEnvelope = serde_json::from_value(encoded.clone()).unwrap();
     assert_eq!(decoded.parts, envelope.parts);
     assert_eq!(decoded.parts[1], envelope.parts[1]);
-    assert_eq!(decoded.parts[1].media_reference().unwrap().opaque_id, media.opaque_id);
-    assert!(encoded.to_string().contains("tinychannels_media_v1_fixture"));
+    let crate::ContentPart::Image {
+        media: decoded_media,
+        ..
+    } = &decoded.parts[1]
+    else {
+        panic!("ordered media part changed kind");
+    };
+    assert_eq!(decoded_media.opaque_id, media.opaque_id);
+    assert!(
+        encoded
+            .to_string()
+            .contains("tinychannels_media_v1_fixture")
+    );
     assert!(!encoded.to_string().contains("localCachePath"));
 }
