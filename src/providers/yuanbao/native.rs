@@ -173,7 +173,27 @@ impl NativeProvider for YuanbaoChannel {
         intent: ChannelOutboundIntent,
     ) -> Result<(), ChannelSendError> {
         let text = match &intent.payload {
-            OutboundPayload::Text { text } => text.as_str(),
+            OutboundPayload::Text { text } => text.clone(),
+            OutboundPayload::Parts { .. } => ChannelOutboundMessage::from_intent(&intent)
+                .legacy_text()
+                .map_err(|_| {
+                    crate::providers::native::unsupported(
+                        "Yuanbao streaming draft requires plain text",
+                    )
+                })?,
+            OutboundPayload::NativeChannelData { data } => data
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .filter(|_| {
+                    data.get("subject")
+                        .is_none_or(serde_json::Value::is_null)
+                })
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    crate::providers::native::unsupported(
+                        "Yuanbao streaming draft requires plain text",
+                    )
+                })?,
             _ => {
                 return Err(crate::providers::native::unsupported(
                     "Yuanbao streaming draft requires plain text",
@@ -183,7 +203,7 @@ impl NativeProvider for YuanbaoChannel {
         let message = ChannelOutboundMessage::from_intent(&intent);
         let target = self.normalized_target(&message)?;
         let recipient = self.resolve_recipient(&target.conversation.id).await;
-        for chunk in &self.split_message(text) {
+        for chunk in &self.split_message(&text) {
             self.outbound
                 .send_text(&recipient, chunk, target.reply_to.as_deref())
                 .await
