@@ -564,12 +564,13 @@ impl LarkChannel {
                 .await
                 .map_err(|_| uncertain_send("Lark message request failed"))?;
             let status = response.status();
-            let body = response
-                .json::<serde_json::Value>()
-                .await
-                .map_err(|_| uncertain_send("Lark message response was invalid"))?;
+            let body = response.json::<serde_json::Value>().await.ok();
             let token_expired = status == reqwest::StatusCode::UNAUTHORIZED
-                || body.get("code").and_then(serde_json::Value::as_i64) == Some(99991663);
+                || body
+                    .as_ref()
+                    .and_then(|body| body.get("code"))
+                    .and_then(serde_json::Value::as_i64)
+                    == Some(99991663);
             if token_expired && attempt == 0 {
                 self.invalidate_token_if_current(&token).await;
                 token = self
@@ -578,6 +579,10 @@ impl LarkChannel {
                     .map_err(|_| known_unsent("Lark authentication failed before message retry"))?;
                 continue;
             }
+            if token_expired {
+                return Err(known_unsent("Lark rejected the message authentication"));
+            }
+            let body = body.ok_or_else(|| uncertain_send("Lark message response was invalid"))?;
             if !status.is_success()
                 || body.get("code").and_then(serde_json::Value::as_i64) != Some(0)
             {
