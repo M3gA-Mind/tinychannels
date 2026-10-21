@@ -158,7 +158,7 @@ async fn gateway_registration_and_webhook_replies_preserve_payloads_and_errors()
         .write()
         .await
         .insert("room".into(), "http://127.0.0.1:0".into());
-    assert!(channel.send(&reply).await.is_err());
+    assert!(crate::provider_test_support::send_v1(&channel, &reply).await.is_err());
 
     for (status, body) in [(403, "denied"), (200, "invalid json")] {
         let server = HttpsServer::start(move |_| (status, body.into())).await;

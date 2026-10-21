@@ -616,7 +616,7 @@ async fn channel_send_delivers_over_the_async_transport() {
         subject: Some("Greetings".to_string()),
         ..SendMessage::new("Body text", "to@example.com")
     };
-    channel.send(&message).await.unwrap();
+    crate::provider_test_support::send_v1(&channel, &message).await.unwrap();
 
     let transcript = server.await.unwrap();
     assert!(

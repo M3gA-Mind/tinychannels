@@ -530,7 +530,7 @@ async fn start_heartbeat_task_inserts_and_stop_removes() {
 async fn disconnected_sends_and_typing_return_errors_without_leaving_heartbeat_tasks() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
     ch.register_recipient_alias("alias", "original").await;
-    assert!(ch.send(&SendMessage::new("hello", "alias")).await.is_err());
+    assert!(crate::provider_test_support::send_v1(&ch, &SendMessage::new("hello", "alias")).await.is_err());
     assert!(
         ch.finalize_draft("alias", "draft", "hello", Some("thread"))
             .await
