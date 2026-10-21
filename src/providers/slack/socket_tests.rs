@@ -303,7 +303,7 @@ async fn typed_polling_retries_transport_errors_before_advancing_the_cursor() {
                     break;
                 }
             }
-            assert!(request.starts_with(b"GET /api/conversations.history "));
+            assert!(request.starts_with(b"GET /api/conversations.history?"));
             if attempt == 0 {
                 // Close without an HTTP response to exercise `send().await`
                 // failure, not merely a non-success HTTP status.
@@ -483,12 +483,16 @@ async fn typed_socket_ack_waits_for_sink_acceptance_without_blocking_ping() {
     mount_auth(&server, "UBOT").await;
     let (pong_tx, pong_rx) = tokio::sync::oneshot::channel();
     let pong_tx = Arc::new(Mutex::new(Some(pong_tx)));
+    let replay_ack_tx = Arc::new(Mutex::new(None));
+    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+    *replay_ack_tx.lock().unwrap() = Some(ack_tx);
     let url = serve(move |index, mut socket| {
         let pong_tx = if index == 0 {
             pong_tx.lock().unwrap().take()
         } else {
             None
         };
+        let replay_ack_tx = replay_ack_tx.clone();
         Box::pin(async move {
             socket
                 .send(envelope(
@@ -513,14 +517,20 @@ async fn typed_socket_ack_waits_for_sink_acceptance_without_blocking_ping() {
                     let _ = pong_tx.send(());
                 }
                 while let Some(frame) = socket.next().await {
-                    let frame = frame.unwrap();
-                    assert!(
-                        !matches!(frame, Message::Text(_)),
-                        "a blocked sink must not cause an early Socket Mode acknowledgement"
-                    );
+                    match frame {
+                        Ok(Message::Text(_)) => {
+                            panic!(
+                                "a blocked sink must not cause an early Socket Mode acknowledgement"
+                            )
+                        }
+                        Ok(_) | Err(_) => break,
+                    }
                 }
             } else {
                 expect_ack(&mut socket, "unacked-until-accepted").await;
+                if let Some(ack_tx) = replay_ack_tx.lock().unwrap().take() {
+                    let _ = ack_tx.send(());
+                }
                 let _ = socket.close(None).await;
             }
         })
@@ -572,6 +582,10 @@ async fn typed_socket_ack_waits_for_sink_acceptance_without_blocking_ping() {
         panic!("expected replayed inbound envelope, got {replayed:?}");
     };
     assert_eq!(replayed.text, "retry after listener restart");
+    tokio::time::timeout(Duration::from_secs(2), ack_rx)
+        .await
+        .expect("ack is sent after acceptance")
+        .expect("test server observed the replay acknowledgement");
     assert!(
         accepted_rx.try_recv().is_err(),
         "the replay is accepted once"
