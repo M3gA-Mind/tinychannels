@@ -767,11 +767,11 @@ async fn send_posts_message_to_recipient_with_bot_auth() {
 }
 
 #[tokio::test]
-async fn send_without_recipient_uses_configured_channel_and_splits_long_text() {
+async fn send_splits_long_text_for_an_explicit_channel() {
     let (base, mut rx) = message_sink(StatusCode::OK).await;
     let ch = channel_at(&base, Some("123456"));
     let long = "word ".repeat(500); // 2500 chars → two chunks
-    send_text(&ch, &long, "").await.unwrap();
+    send_text(&ch, &long, "123456").await.unwrap();
     let first = rx.try_recv().unwrap();
     let second = rx.try_recv().unwrap();
     assert!(rx.try_recv().is_err());

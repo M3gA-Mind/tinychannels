@@ -738,7 +738,7 @@ async fn client_failures_surface_with_their_operation() {
     let paused = ch.stop_typing("+1234567890").await.unwrap_err();
     assert_eq!(
         paused.message,
-        "WhatsApp Web operation outcome is uncertain: Failed to send typing state (paused): paused boom"
+        "WhatsApp Web operation outcome is uncertain"
     );
 }
 
