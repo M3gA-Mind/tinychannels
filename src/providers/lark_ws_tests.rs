@@ -852,7 +852,7 @@ async fn ws_listener_acks_reassembles_filters_and_forwards_messages() {
     let mut delivered = Vec::new();
     while let Ok(message) = rx.try_recv() {
         assert_eq!(message.channel, "lark");
-        assert_eq!(message.sender, "oc_chat");
+        assert_eq!(message.sender, "ou_alice");
         assert_eq!(message.reply_target, "oc_chat");
         delivered.push(message.content);
     }

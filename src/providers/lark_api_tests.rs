@@ -798,8 +798,7 @@ async fn send_fetches_a_token_once_and_posts_a_text_message() {
         } else {
             (
                 200,
-                serde_json::json!({"code": 0, "data": {"message_id": "om-text-1"}})
-                    .to_string(),
+                serde_json::json!({"code": 0, "data": {"message_id": "om-text-1"}}).to_string(),
             )
         }
     })
@@ -1172,12 +1171,13 @@ async fn send_refreshes_an_expired_token_and_retries_once() {
     .await;
     let channel = channel_with(&server, false);
 
-    let result = crate::provider_test_support::send_v1(
-        &channel,
-        &SendMessage::new("retry me", "oc_chat"),
-    )
-    .await;
-    assert!(result.is_ok(), "a refreshed token should allow one retry: {result:?}");
+    let result =
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("retry me", "oc_chat"))
+            .await;
+    assert!(
+        result.is_ok(),
+        "a refreshed token should allow one retry: {result:?}"
+    );
 
     let requests = server.requests.lock().unwrap().clone();
     let auth: Vec<_> = requests
@@ -1204,7 +1204,10 @@ async fn send_reports_failures_with_and_without_a_token_refresh() {
         .await
         .unwrap_err();
     let send_error = typed_send_error(&error);
-    assert_eq!(send_error.kind, tinychannels_bus::channel::SendErrorKind::Transient);
+    assert_eq!(
+        send_error.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
+    );
     assert!(send_error.retryable);
     assert!(!send_error.sent_before_error);
 
@@ -1221,7 +1224,10 @@ async fn send_reports_failures_with_and_without_a_token_refresh() {
         .await
         .unwrap_err();
     let send_error = typed_send_error(&error);
-    assert_eq!(send_error.kind, tinychannels_bus::channel::SendErrorKind::Unknown);
+    assert_eq!(
+        send_error.kind,
+        tinychannels_bus::channel::SendErrorKind::Unknown
+    );
     assert!(send_error.sent_before_error);
 }
 
@@ -1235,7 +1241,10 @@ async fn token_errors_fail_send_and_health_check() {
         .await
         .unwrap_err();
     let send_error = typed_send_error(&error);
-    assert_eq!(send_error.kind, tinychannels_bus::channel::SendErrorKind::Transient);
+    assert_eq!(
+        send_error.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
+    );
     assert!(send_error.retryable);
     assert!(!send_error.sent_before_error);
 
@@ -1266,7 +1275,10 @@ async fn ws_endpoint_errors_stop_listen_before_connecting() {
     let typed = error
         .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
         .expect("typed listener error");
-    assert_eq!(typed.0.kind, tinychannels_bus::channel::SendErrorKind::Transient);
+    assert_eq!(
+        typed.0.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
+    );
     assert!(typed.0.retryable);
     let requests = server.requests.lock().unwrap().clone();
     assert_eq!(requests[0].target, "/callback/ws/endpoint");
@@ -1285,7 +1297,10 @@ async fn ws_endpoint_errors_stop_listen_before_connecting() {
     let typed = error
         .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
         .expect("typed listener error");
-    assert_eq!(typed.0.kind, tinychannels_bus::channel::SendErrorKind::Transient);
+    assert_eq!(
+        typed.0.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
+    );
     assert!(typed.0.retryable);
     let requests = server.requests.lock().unwrap().clone();
     assert_eq!(header(&requests[0], "locale"), Some("en"));
@@ -1299,7 +1314,10 @@ async fn ws_endpoint_errors_stop_listen_before_connecting() {
     let typed = error
         .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
         .expect("typed listener error");
-    assert_eq!(typed.0.kind, tinychannels_bus::channel::SendErrorKind::Transient);
+    assert_eq!(
+        typed.0.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
+    );
     assert!(typed.0.retryable);
 }
 
@@ -1328,7 +1346,10 @@ async fn webhook_mode_requires_a_port() {
     let typed = error
         .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
         .expect("typed listener error");
-    assert_eq!(typed.0.kind, tinychannels_bus::channel::SendErrorKind::Transient);
+    assert_eq!(
+        typed.0.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
+    );
     assert!(typed.0.retryable);
     assert!(server.requests.lock().unwrap().is_empty());
 }
