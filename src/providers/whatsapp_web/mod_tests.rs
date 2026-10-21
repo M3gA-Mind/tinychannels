@@ -729,11 +729,11 @@ async fn client_failures_surface_with_their_operation() {
         .clone();
     assert_eq!(send.kind, crate::channel::SendErrorKind::Unknown);
     assert!(send.sent_before_error);
-    assert!(send.message.contains("send boom"), "{}", send.message);
+    assert_eq!(send.message, "WhatsApp Web send outcome is uncertain");
     let composing = ch.start_typing("+1234567890").await.unwrap_err();
     assert_eq!(
         composing.message,
-        "WhatsApp Web operation outcome is uncertain: Failed to send typing state (composing): composing boom"
+        "WhatsApp Web operation outcome is uncertain"
     );
     let paused = ch.stop_typing("+1234567890").await.unwrap_err();
     assert_eq!(
