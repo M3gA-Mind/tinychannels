@@ -634,7 +634,7 @@ fn content_matches(content_type: &str, bytes: &[u8]) -> bool {
         "video/mp4" | "video/quicktime" => bytes.get(4..8) == Some(b"ftyp"),
         "video/webm" | "audio/webm" => bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]),
         "audio/ogg" => bytes.starts_with(b"OggS"),
-        "audio/mpeg" => bytes.starts_with(b"ID3") || bytes.starts_with(&[0xff, 0xfb]),
+        "audio/mpeg" => bytes.starts_with(b"ID3") || valid_mpeg_audio_header(bytes),
         "audio/mp4" => bytes.get(4..8) == Some(b"ftyp"),
         "audio/wav" => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WAVE"),
         "application/pdf" => bytes.starts_with(b"%PDF-"),
@@ -648,6 +648,23 @@ fn content_matches(content_type: &str, bytes: &[u8]) -> bool {
         }
         _ => false,
     }
+}
+
+fn valid_mpeg_audio_header(bytes: &[u8]) -> bool {
+    let Some(header) = bytes.get(..4) else {
+        return false;
+    };
+    let [sync, second, third, _] = [header[0], header[1], header[2], header[3]];
+    let version = (second >> 3) & 0b11;
+    let layer = (second >> 1) & 0b11;
+    let bitrate_index = third >> 4;
+    let sample_rate_index = (third >> 2) & 0b11;
+    sync == 0xff
+        && second & 0b1110_0000 == 0b1110_0000
+        && version != 0b01
+        && layer != 0
+        && bitrate_index != 0b1111
+        && sample_rate_index != 0b11
 }
 
 #[cfg(test)]
