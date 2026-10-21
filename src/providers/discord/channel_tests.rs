@@ -1,5 +1,5 @@
 use super::*;
-use crate::channel::{ChannelAdapter, ChannelTypedSend};
+use crate::channel::ChannelAdapter;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -564,8 +564,6 @@ fn resolve_recipient_prefers_explicit_then_configured_channel() {
 
 #[test]
 fn proactive_target_uses_configured_channel_id() {
-    use crate::traits::Channel;
-
     // Configured channel_id ⇒ recipient-less proactive sends have a target.
     let with_channel = DiscordChannel::new(
         "fake".into(),
@@ -575,11 +573,14 @@ fn proactive_target_uses_configured_channel_id() {
         false,
         false,
     );
-    assert_eq!(with_channel.proactive_target(), Some("12345".to_string()));
+    assert_eq!(
+        ChannelAdapter::proactive_target(&with_channel),
+        Some("12345".to_string())
+    );
 
     // No channel_id ⇒ None, so proactive routing skips Discord (#3794 Codex P2).
     let no_channel = DiscordChannel::new("fake".into(), None, None, vec![], false, false);
-    assert_eq!(no_channel.proactive_target(), None);
+    assert_eq!(ChannelAdapter::proactive_target(&no_channel), None);
 
     // Whitespace-only channel_id is treated as unset.
     let blank_channel = DiscordChannel::new(
@@ -590,7 +591,7 @@ fn proactive_target_uses_configured_channel_id() {
         false,
         false,
     );
-    assert_eq!(blank_channel.proactive_target(), None);
+    assert_eq!(ChannelAdapter::proactive_target(&blank_channel), None);
 }
 
 // ── REST + Gateway against loopback mocks ─────────────────────
@@ -746,7 +747,6 @@ async fn health_check_reflects_users_me_status() {
     );
     let base = spawn_http(app).await;
     let healthy = channel_at(&base, None);
-    assert!(healthy.health_check().await);
     assert_eq!(
         crate::channel::ChannelAdapter::status(&healthy)
             .await
@@ -757,7 +757,6 @@ async fn health_check_reflects_users_me_status() {
     );
     let bad = DiscordChannel::new("wrong".into(), None, None, vec![], false, false)
         .with_api_base(base.clone());
-    assert!(!bad.health_check().await);
     assert_eq!(
         crate::channel::ChannelAdapter::status(&bad)
             .await
