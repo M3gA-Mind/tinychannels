@@ -249,6 +249,44 @@ async fn session_webhook_rejects_nonzero_application_error_codes() {
 }
 
 #[tokio::test]
+async fn session_webhook_unverifiable_success_is_reported_as_uncertain() {
+    use crate::providers::http_test_support::HttpsServer;
+
+    for body in ["not-json", r#"{"errmsg":"secret-token"}"#] {
+        let body = body.to_owned();
+        let server = HttpsServer::start(move |request| {
+            assert_eq!(request.target, "/session-webhook");
+            (200, body.clone())
+        })
+        .await;
+        let channel = DingTalkChannel::with_http_client(
+            "app-key".into(),
+            "app-secret".into(),
+            vec!["alice".into()],
+            server.client.clone(),
+        );
+        channel.session_webhooks.write().await.insert(
+            "chat-1".into(),
+            "https://api.dingtalk.com/session-webhook".into(),
+        );
+
+        let error = channel
+            .deliver(
+                &target(ConversationKind::Group, "chat-1"),
+                &Step::Text("reply".into()),
+            )
+            .await
+            .err()
+            .expect("a success status without a success code is ambiguous");
+
+        assert_eq!(error.kind, SendErrorKind::Unknown);
+        assert!(error.sent_before_error);
+        assert!(!error.retryable);
+        assert!(!error.message.contains("secret-token"));
+    }
+}
+
+#[tokio::test]
 async fn typed_send_rejects_missing_admission_or_robot_context_before_http() {
     use crate::providers::http_test_support::HttpsServer;
     use tinychannels_bus::{ChannelOutboundMessage, ContentPart, OutboundContentPart};
