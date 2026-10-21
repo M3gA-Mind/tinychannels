@@ -1056,6 +1056,19 @@ impl Channels {
     /// This v1 wire method is retained for existing callers; adapt it to the
     /// typed outbound contract immediately at the module boundary.
     async fn send_message(&self, name: String, message: SendMessage) -> BusResult<()> {
+        let mut message = message;
+        if message.recipient.trim().is_empty() {
+            let configured_target = self
+                .running
+                .lock()
+                .await
+                .get(&name)
+                .filter(|entry| !entry.is_finished())
+                .and_then(|entry| entry.proactive_target());
+            if let Some(target) = configured_target {
+                message.recipient = target;
+            }
+        }
         let mut intent = tinychannels::outbound_intent_from_send_message(&name, &message);
         intent.payload = tinychannels_bus::OutboundPayload::Text {
             text: super::interaction::compatibility_text(&name, &message),
