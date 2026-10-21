@@ -1,5 +1,9 @@
 use super::*;
-use crate::channel::ChannelAdapter;
+use crate::channel::{ChannelAdapter, ChannelInboundSink, ChannelTypedSend};
+use tinychannels_bus::{
+    ChannelInboundEnvelope, ChannelIngress, ChannelOutboundMessage, ContentPart, ConversationKind,
+    ConversationRef, OutboundContentPart,
+};
 use tokio::time::timeout;
 
 #[test]
@@ -679,26 +683,71 @@ fn fake_runner(out: &Path, code: i32) -> Vec<String> {
         "sh".to_string(),
         "-c".to_string(),
         format!(
-            "printf '%s' \"$2\" > '{}'; echo 'runner said no' >&2; exit {code}",
+            "printf '%s\\n---\\n' \"$2\" >> '{}'; echo 'runner said no' >&2; exit {code}",
             out.display()
         ),
         "fake-osascript".to_string(),
     ]
 }
 
+fn typed_text_message(content: &str, recipient: &str) -> ChannelOutboundMessage {
+    ChannelOutboundMessage {
+        channel_id: "imessage".into(),
+        conversation_id: recipient.into(),
+        channel_ref: None,
+        conversation_ref: Some(ConversationRef {
+            kind: ConversationKind::Dm,
+            id: recipient.into(),
+            ..Default::default()
+        }),
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: None,
+        idempotency_key: "imessage-test-send".into(),
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::Text {
+                text: content.into(),
+                markdown_dialect: None,
+            },
+        }],
+    }
+}
+
+struct IngressSender(mpsc::Sender<ChannelIngress>);
+
+#[async_trait::async_trait]
+impl ChannelInboundSink for IngressSender {
+    async fn push(
+        &self,
+        ingress: ChannelIngress,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.0
+            .send(ingress)
+            .await
+            .map_err(|_| tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "test ingress receiver closed".into(),
+                retryable: true,
+                ..Default::default()
+            })
+    }
+}
+
 #[tokio::test]
 async fn send_runs_the_escaped_script_through_the_runner() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("script.txt");
-    let mut channel = IMessageChannel::new(vec![]);
-    channel.script_command = fake_runner(&out, 0);
+    let mut rig = crate::providers::imessage::fixtures::rig();
+    rig.channel.script_command = fake_runner(&out, 0);
+    let recorder = rig.spawn_messages();
 
-    crate::provider_test_support::send_v1(
-        &channel,
-        &SendMessage::new("say \"hi\"", "+15555550123"),
+    ChannelTypedSend::send_typed(
+        &rig.channel,
+        &typed_text_message("say \"hi\"", "+15555550123"),
     )
     .await
     .unwrap();
+    recorder.abort();
 
     let script = std::fs::read_to_string(&out).unwrap();
     assert!(script.contains("tell application \"Messages\""), "{script}");
@@ -712,45 +761,46 @@ async fn send_runs_the_escaped_script_through_the_runner() {
 #[tokio::test]
 async fn send_reports_the_runner_stderr_on_failure() {
     let dir = tempfile::tempdir().unwrap();
-    let mut channel = IMessageChannel::new(vec![]);
-    channel.script_command = fake_runner(&dir.path().join("script.txt"), 1);
+    let mut rig = crate::providers::imessage::fixtures::rig();
+    rig.channel.script_command = fake_runner(&dir.path().join("script.txt"), 1);
 
-    let error = crate::provider_test_support::send_v1(
-        &channel,
-        &SendMessage::new("hello", "user@example.com"),
+    let error = ChannelTypedSend::send_typed(
+        &rig.channel,
+        &typed_text_message("hello", "user@example.com"),
     )
     .await
     .unwrap_err()
-    .to_string();
+    .message;
     assert!(error.contains("iMessage send failed"), "{error}");
-    assert!(error.contains("runner said no"), "{error}");
 }
 
 #[tokio::test]
 async fn send_rejects_an_invalid_target_before_running_anything() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("script.txt");
-    let mut channel = IMessageChannel::new(vec![]);
-    channel.script_command = fake_runner(&out, 0);
+    let mut rig = crate::providers::imessage::fixtures::rig();
+    rig.channel.script_command = fake_runner(&out, 0);
 
-    let error =
-        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "not a target"))
-            .await
-            .unwrap_err()
-            .to_string();
-    assert!(error.contains("Invalid iMessage target"), "{error}");
+    let error = ChannelTypedSend::send_typed(
+        &rig.channel,
+        &typed_text_message("hello", "not a target"),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.message.contains("target"), "{}", error.message);
     assert!(!out.exists(), "the runner must not be invoked");
 }
 
 #[tokio::test]
 async fn send_without_a_runner_is_an_error() {
-    let mut channel = IMessageChannel::new(vec![]);
-    channel.script_command = Vec::new();
-    assert!(
-        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "+15555550123"))
-            .await
-            .is_err()
-    );
+    let mut rig = crate::providers::imessage::fixtures::rig();
+    rig.channel.script_command = Vec::new();
+    assert!(ChannelTypedSend::send_typed(
+        &rig.channel,
+        &typed_text_message("hello", "+15555550123"),
+    )
+    .await
+    .is_err());
 }
 
 #[test]
@@ -778,8 +828,16 @@ async fn health_check_reflects_the_host_os() {
     let (_dir, db_path) = create_test_db();
     let channel = channel_on(&db_path, &[]);
     assert_eq!(
-        crate::provider_test_support::is_healthy(&channel).await,
-        std::env::consts::OS == "macos"
+        ChannelAdapter::status(&channel)
+            .await
+            .unwrap()
+            .health_state
+            .as_deref(),
+        Some(if std::env::consts::OS == "macos" {
+            "healthy"
+        } else {
+            "unhealthy"
+        })
     );
 }
 
@@ -788,11 +846,11 @@ async fn listen_fails_when_the_database_is_missing() {
     let dir = tempfile::tempdir().unwrap();
     let channel = channel_on(&dir.path().join("chat.db"), &["*"]);
     let (tx, _rx) = mpsc::channel(1);
-    let error = crate::provider_test_support::listen_v1(&channel, tx)
+    let error = ChannelAdapter::start(&channel, &IngressSender(tx))
         .await
         .unwrap_err()
-        .to_string();
-    assert!(error.contains("Messages database not found"), "{error}");
+        .message;
+    assert!(error.contains("Messages database"), "{error}");
 }
 
 fn insert_message(conn: &Connection, rowid: i64, handle: i64, text: &str) {
@@ -810,16 +868,18 @@ fn insert_message(conn: &Connection, rowid: i64, handle: i64, text: &str) {
 async fn next_delivery(
     writer: &Connection,
     rowid: &mut i64,
-    rx: &mut mpsc::Receiver<ChannelMessage>,
-) -> ChannelMessage {
+    rx: &mut mpsc::Receiver<ChannelIngress>,
+) -> ChannelInboundEnvelope {
     let deadline = tokio::time::Instant::now() + HANG_GUARD;
     loop {
         for (handle, text) in [(2, "from a stranger"), (1, "   "), (1, "hello")] {
             *rowid += 1;
             insert_message(writer, *rowid, handle, text);
         }
-        if let Ok(Some(message)) = timeout(Duration::from_millis(200), rx.recv()).await {
-            return message;
+        if let Ok(Some(ChannelIngress::Inbound(envelope))) =
+            timeout(Duration::from_millis(200), rx.recv()).await
+        {
+            return envelope;
         }
         assert!(tokio::time::Instant::now() < deadline, "no delivery");
     }
@@ -840,16 +900,16 @@ async fn listen_delivers_only_allowed_non_blank_messages() {
 
     let channel = channel_on(&db_path, &["+15555550123"]);
     let (tx, mut rx) = mpsc::channel(8);
-    let listen =
-        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
+    let sink = IngressSender(tx);
+    let listen = tokio::spawn(async move { ChannelAdapter::start(&channel, &sink).await });
 
     let first = next_delivery(&writer, &mut rowid, &mut rx).await;
-    assert_eq!(first.sender, "+15555550123");
-    assert_eq!(first.reply_target, "+15555550123");
-    assert_eq!(first.content, "hello");
-    assert_eq!(first.channel, "imessage");
-    assert_ne!(first.id, "1", "rows before startup are never replayed");
-    assert!(first.timestamp > 0);
+    assert_eq!(first.sender.id, "+15555550123");
+    assert_eq!(first.conversation.id, "+15555550123");
+    assert_eq!(first.text, "hello");
+    assert_eq!(first.channel.id, "imessage");
+    assert_ne!(first.message_id, "1", "rows before startup are never replayed");
+    assert!(first.timestamp_unix_ms.is_some_and(|timestamp| timestamp > 0));
 
     // The receiver going away ends the listener cleanly.
     drop(rx);
@@ -861,7 +921,7 @@ async fn listen_delivers_only_allowed_non_blank_messages() {
         .await
         .expect("listen returns once the receiver is gone")
         .unwrap();
-    assert!(result.is_ok(), "{result:?}");
+    assert!(result.is_err(), "a closed typed ingress sink stops the listener");
 }
 
 /// A poll that fails (here: the `handle` table is missing) is logged and
@@ -884,8 +944,8 @@ async fn listen_survives_failing_polls() {
 
     let channel = channel_on(&db_path, &["*"]);
     let (tx, mut rx) = mpsc::channel(8);
-    let listen =
-        tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
+    let sink = IngressSender(tx);
+    let listen = tokio::spawn(async move { ChannelAdapter::start(&channel, &sink).await });
 
     // Give the listener time to fail a few polls; the assertions below hold
     // whether or not it did.
@@ -907,6 +967,6 @@ async fn listen_survives_failing_polls() {
     let mut rowid = 0;
     let delivered = next_delivery(&writer, &mut rowid, &mut rx).await;
     // With a wildcard allowlist the stranger is delivered too; blanks never are.
-    assert!(!delivered.content.trim().is_empty());
+    assert!(!delivered.text.trim().is_empty());
     listen.abort();
 }

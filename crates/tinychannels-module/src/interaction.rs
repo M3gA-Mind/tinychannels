@@ -73,7 +73,9 @@ fn draft_intent(
 pub(crate) fn compatibility_text(provider: &str, message: &tinychannels::SendMessage) -> String {
     // Configured instances are named `<provider>:<account>`. Keep the v1
     // subject convention keyed to the provider family, not the instance id.
-    let provider = provider.split_once(':').map_or(provider, |(provider, _)| provider);
+    let provider = provider
+        .split_once(':')
+        .map_or(provider, |(provider, _)| provider);
     match (provider, message.subject.as_deref()) {
         ("email" | "dingtalk", Some(subject)) => format!(
             "Subject: {}\n{}",

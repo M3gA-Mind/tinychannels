@@ -1320,9 +1320,10 @@ impl TelegramChannel {
             .or(message.thread_id.as_deref())
             .map(str::to_owned);
         let reply_to_id = match message.reply_to_id.as_deref() {
-            Some(id) => Some(id.parse::<i64>().map_err(|_| {
-                anyhow::Error::new(TelegramBadFormatError)
-            })?),
+            Some(id) => Some(
+                id.parse::<i64>()
+                    .map_err(|_| anyhow::Error::new(TelegramBadFormatError))?,
+            ),
             None => None,
         };
         let (ids, error, _sent_before_error) = match self

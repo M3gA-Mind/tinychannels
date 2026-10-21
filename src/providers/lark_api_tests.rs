@@ -1203,7 +1203,10 @@ async fn empty_unauthorized_response_still_refreshes_before_retry() {
             } else if sends.fetch_add(1, Ordering::SeqCst) == 0 {
                 (401, String::new())
             } else {
-                (200, r#"{"code":0,"data":{"message_id":"om-after-empty-401"}}"#.into())
+                (
+                    200,
+                    r#"{"code":0,"data":{"message_id":"om-after-empty-401"}}"#.into(),
+                )
             }
         }
     })
@@ -1249,7 +1252,10 @@ async fn a_second_token_expired_response_is_known_unsent() {
     .await
     .unwrap_err();
     let typed = typed_send_error(&error);
-    assert_eq!(typed.kind, tinychannels_bus::channel::SendErrorKind::Transient);
+    assert_eq!(
+        typed.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
+    );
     assert!(!typed.sent_before_error);
     assert!(typed.retryable);
     assert_eq!(tokens.load(Ordering::SeqCst), 2);

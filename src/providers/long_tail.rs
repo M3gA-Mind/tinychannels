@@ -303,7 +303,11 @@ macro_rules! impl_long_tail_adapter {
                 tinychannels_bus::channel::ChannelSendError,
             > {
                 let mut snapshot = $crate::providers::long_tail::status::<$ty>();
-                snapshot.health_state = Some($crate::providers::long_tail::LongTail::health_state(self).await.into());
+                snapshot.health_state = Some(
+                    $crate::providers::long_tail::LongTail::health_state(self)
+                        .await
+                        .into(),
+                );
                 Ok(snapshot)
             }
         }
