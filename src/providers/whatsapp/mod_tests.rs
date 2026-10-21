@@ -1269,8 +1269,10 @@ mod v2 {
             .await
             .unwrap();
         assert_eq!(typed.receipt.platform_message_ids, ["wamid.ok"]);
-        Channel::send_typed(&channel, &message).await.unwrap();
-        let receipt = Channel::send_typed_with_receipt(&channel, &message)
+        crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+            .await
+            .unwrap();
+        let receipt = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
             .await
             .unwrap();
         assert!(!receipt.receipt.platform_message_ids.is_empty());
@@ -1289,7 +1291,7 @@ mod v2 {
         .unwrap_err();
         assert!(typed_error.unsupported);
         assert!(
-            Channel::send_typed(
+            crate::channel::ChannelTypedSend::send_typed(
                 &channel,
                 &tinychannels_bus::ChannelOutboundMessage::from_intent(&threaded)
             )
@@ -1320,11 +1322,11 @@ mod v2 {
         let mut mac = Hmac::<Sha256>::new_from_slice(b"secret").unwrap();
         mac.update(&body);
         let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
-        let outcome = Channel::deliver_webhook(&channel, Some(&signature), &body)
+        let outcome = crate::channel::ChannelAdapter::deliver_webhook(&channel, Some(&signature), &body)
             .await
             .unwrap();
         assert_eq!(outcome.messages, 1);
-        let refused = Channel::deliver_webhook(&channel, Some("sha256=00"), &body)
+        let refused = crate::channel::ChannelAdapter::deliver_webhook(&channel, Some("sha256=00"), &body)
             .await
             .unwrap_err();
         assert!(
@@ -1339,7 +1341,7 @@ mod v2 {
                 fail: true,
                 ..CollectingSink::new()
             }));
-        let error = Channel::deliver_webhook(&failing, Some(&signature), &body)
+        let error = crate::channel::ChannelAdapter::deliver_webhook(&failing, Some(&signature), &body)
             .await
             .unwrap_err();
         assert!(
@@ -1348,11 +1350,11 @@ mod v2 {
                 .is_none()
         );
         assert_eq!(
-            Channel::verify_webhook(&channel, "subscribe", "verify-me", "c1").as_deref(),
+            crate::channel::ChannelAdapter::verify_webhook(&channel, "subscribe", "verify-me", "c1").as_deref(),
             Some("c1")
         );
         assert_eq!(
-            Channel::verify_webhook(&channel, "subscribe", "nope", "c1"),
+            crate::channel::ChannelAdapter::verify_webhook(&channel, "subscribe", "nope", "c1"),
             None
         );
     }
@@ -1377,7 +1379,9 @@ mod v2 {
         #[allow(deprecated, reason = "the legacy listener seam is under test")]
         let listener = {
             let channel = Arc::clone(&channel);
-            tokio::spawn(async move { Channel::listen(channel.as_ref(), tx).await })
+            tokio::spawn(async move {
+                crate::provider_test_support::listen_v1(channel.as_ref(), tx).await
+            })
         };
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while channel.listener.lock().is_none() {
