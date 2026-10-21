@@ -4,14 +4,9 @@ use crate::text::{ChunkMode, TextChunkOptions, chunk_text_with_options};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
-#[cfg(test)]
-use std::time::Instant;
 
 /// Minimum spacing between streaming-draft edits (Discord allows roughly five
 /// edits per five seconds per channel).
-#[cfg(test)]
-const DEFAULT_DRAFT_UPDATE_INTERVAL_MS: u64 = 1000;
-
 /// Discord channel — connects via Gateway WebSocket for real-time messages
 pub struct DiscordChannel {
     pub(super) bot_token: String,
@@ -20,8 +15,6 @@ pub struct DiscordChannel {
     pub(super) allowed_users: Vec<String>,
     pub(super) listen_to_bots: bool,
     pub(super) mention_only: bool,
-    #[cfg(test)]
-    typing_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Cancellation for the single Gateway session owned by the typed adapter.
     pub(super) listener_cancel: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
     http_client: reqwest::Client,
@@ -42,10 +35,6 @@ pub struct DiscordChannel {
     /// Channel id -> thread parent, filled from gateway events and REST lookups.
     pub(super) channel_cache: Mutex<HashMap<String, super::inbound::ChannelInfo>>,
     /// Last streaming-draft edit per channel, for edit rate limiting.
-    #[cfg(test)]
-    pub(super) last_draft_edit: Mutex<HashMap<String, Instant>>,
-    #[cfg(test)]
-    pub(super) draft_update_interval_ms: u64,
 }
 
 impl DiscordChannel {
@@ -64,8 +53,6 @@ impl DiscordChannel {
             allowed_users,
             listen_to_bots,
             mention_only,
-            #[cfg(test)]
-            typing_handle: Mutex::new(None),
             listener_cancel: Mutex::new(None),
             http_client: reqwest::Client::new(),
             api_base: DISCORD_API_BASE.to_string(),
@@ -76,10 +63,6 @@ impl DiscordChannel {
             voice_synthesis: false,
             events: None,
             channel_cache: Mutex::new(HashMap::new()),
-            #[cfg(test)]
-            last_draft_edit: Mutex::new(HashMap::new()),
-            #[cfg(test)]
-            draft_update_interval_ms: DEFAULT_DRAFT_UPDATE_INTERVAL_MS,
         }
     }
 
@@ -99,8 +82,6 @@ impl DiscordChannel {
             allowed_users,
             listen_to_bots,
             mention_only,
-            #[cfg(test)]
-            typing_handle: Mutex::new(None),
             listener_cancel: Mutex::new(None),
             http_client,
             api_base: DISCORD_API_BASE.to_string(),
@@ -111,10 +92,6 @@ impl DiscordChannel {
             voice_synthesis: false,
             events: None,
             channel_cache: Mutex::new(HashMap::new()),
-            #[cfg(test)]
-            last_draft_edit: Mutex::new(HashMap::new()),
-            #[cfg(test)]
-            draft_update_interval_ms: DEFAULT_DRAFT_UPDATE_INTERVAL_MS,
         }
     }
 
