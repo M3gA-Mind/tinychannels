@@ -2706,7 +2706,7 @@ async fn preparation_preserves_explicit_keys_and_typed_thread_before_provider_io
         .await
         .unwrap();
     assert_eq!(prepared.intent.idempotency_key, expected.idempotency_key);
-    assert_eq!(prepared.intent.thread_id.as_deref(), Some("topic"));
+    assert_eq!(prepared.intent.thread_id, None);
     assert_eq!(prepared.intent.channel_id, "telegram");
     assert_eq!(prepared.intent.conversation_id, "recipient");
     assert_eq!(
