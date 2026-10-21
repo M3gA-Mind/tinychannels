@@ -460,11 +460,11 @@ async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
     sender.delete("discord:room", "message-id").await.unwrap();
     let requests = callback.requests.lock().await;
     assert!(
-        matches!(&requests[0], ProgressiveTransportRequest::Edit { channel, message_id, text }
+        matches!(&requests[0], ProgressiveTransportRequest::Edit { channel, message_id, text, .. }
         if channel == "discord:room" && message_id == "message-id" && text == "updated")
     );
     assert!(
-        matches!(&requests[1], ProgressiveTransportRequest::Delete { channel, message_id }
+        matches!(&requests[1], ProgressiveTransportRequest::Delete { channel, message_id, .. }
         if channel == "discord:room" && message_id == "message-id")
     );
 }
@@ -500,7 +500,11 @@ async fn transport_failures_preserve_recovery_classification() {
                 };
                 assert_eq!(error.to_string(), "progressive transport failed");
             }
-            ProgressiveTransportResult::Success(_) => unreachable!(),
+            ProgressiveTransportResult::Acknowledged
+            | ProgressiveTransportResult::Accepted
+            | ProgressiveTransportResult::Success(_)
+            | ProgressiveTransportResult::Outcome(_)
+            | ProgressiveTransportResult::UnsupportedContent => unreachable!(),
         }
     }
 }
