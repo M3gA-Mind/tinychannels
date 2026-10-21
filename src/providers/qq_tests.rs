@@ -138,13 +138,17 @@ async fn oauth_cache_gateway_and_send_preserve_auth_and_routing() {
             Some(format!("qq-message-{}", index + 1).as_str())
         );
     }
-    assert!(
-        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "blocked"))
+    let denied =
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "user:blocked"))
             .await
             .unwrap_err()
-            .to_string()
-            .contains("denied")
-    );
+            .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+            .expect("typed QQ errors retain their structured classification")
+            .0
+            .clone();
+    assert_eq!(denied.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!denied.sent_before_error);
+    assert!(!denied.message.contains("denied"));
     let requests = server.requests.lock().unwrap();
     for target in [
         "/v2/groups/room/messages",
