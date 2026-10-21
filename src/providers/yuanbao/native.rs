@@ -199,6 +199,7 @@ impl NativeProvider for YuanbaoChannel {
         };
         let message = ChannelOutboundMessage::from_intent(&intent);
         let target = self.normalized_target(&message)?;
+        self.validate_target(&target)?;
         let recipient = self.resolve_recipient(&target.conversation.id).await;
         for chunk in &self.split_message(&text) {
             self.outbound

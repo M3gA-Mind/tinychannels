@@ -629,7 +629,10 @@ async fn finalizing_dm_reply_is_rejected_before_the_disconnected_sender() {
         .await
         .expect_err("DM replies cannot be represented by Yuanbao's protocol");
 
-    assert!(error.unsupported, "address validation runs before sender I/O");
+    assert!(
+        error.unsupported,
+        "address validation runs before sender I/O"
+    );
 }
 
 #[tokio::test]
