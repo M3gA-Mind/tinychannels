@@ -4246,23 +4246,40 @@ async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
     )
     .await;
     mount_post(&server, "sendMessage", ok()).await;
-    let events = Arc::new(RecordingEvents::default());
+    let events = Arc::new(TelegramConformanceEvents::default());
     let channel = Arc::new(fast_backoff(
         channel_for(&server, &["alice", "42"]).with_events(events.clone()),
     ));
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let listener = tokio::spawn({
         let channel = channel.clone();
-        async move { crate::provider_test_support::listen_v1(channel.as_ref(), tx).await }
+        let events = events.clone();
+        async move { ChannelAdapter::start(channel.as_ref(), events.as_ref()).await }
     });
-    tokio::time::timeout(GUARD, rx.recv())
+    tokio::time::timeout(GUARD, async {
+        loop {
+            let has_callbacks = events
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| event.event_type == "button_callback")
+                .count()
+                >= 2;
+            let has_inbound = !events.inbounds.lock().unwrap().is_empty();
+            if has_callbacks && has_inbound {
+                break;
+            }
+            events.notified.notified().await;
+        }
+    })
+    .await
+    .expect("typed listener delivered allowed callbacks and inbound messages");
+    ChannelAdapter::stop(channel.as_ref())
         .await
-        .expect("allowed message terminates listener")
-        .expect("message delivered");
-    drop(rx);
+        .expect("typed listener stops");
     tokio::time::timeout(GUARD, listener)
         .await
-        .expect("listener exits after receiver closes")
+        .expect("listener exits after stop")
         .unwrap()
         .unwrap();
 
@@ -4271,8 +4288,8 @@ async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
         .lock()
         .unwrap()
         .iter()
-        .filter(|(_, kind, _)| kind == "button_callback")
-        .map(|(_, _, payload)| payload.clone())
+        .filter(|event| event.event_type == "button_callback")
+        .map(|event| event.payload.clone())
         .collect::<Vec<_>>();
     assert_eq!(callbacks.len(), 2);
     assert_eq!(callbacks[0]["type"], "button_callback");
@@ -4673,54 +4690,80 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
         .await;
     mount_post(&server, "sendMessage", ok()).await;
 
-    let events = Arc::new(RecordingEvents::default());
+    let events = Arc::new(TelegramConformanceEvents::default());
     let ch = Arc::new(fast_backoff(
         channel_for(&server, &["alice"]).with_events(events.clone()),
     ));
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let listener = tokio::spawn({
         let ch = ch.clone();
-        async move { crate::provider_test_support::listen_v1(ch.as_ref(), tx).await }
+        let events = events.clone();
+        async move { ChannelAdapter::start(ch.as_ref(), events.as_ref()).await }
     });
 
-    let first = tokio::time::timeout(GUARD, rx.recv())
+    tokio::time::timeout(GUARD, async {
+        loop {
+            let has_inbound = events
+                .inbounds
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|envelope| envelope.message_id == "telegram_100_5");
+            let has_events = events.events.lock().unwrap().len() >= 2;
+            if has_inbound && has_events {
+                break;
+            }
+            events.notified.notified().await;
+        }
+    })
+    .await
+    .expect("typed listener dispatched message and reaction events");
+    let first = events
+        .inbounds
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|envelope| envelope.message_id == "telegram_100_5")
+        .cloned()
+        .expect("original message delivered");
+    assert_eq!(first.sender.id, "7");
+    assert!(first.parts.iter().any(|part| matches!(
+        part,
+        tinychannels_bus::ContentPart::Text { text, .. } if text == "original hello"
+    )));
+    ChannelAdapter::stop(ch.as_ref())
         .await
-        .expect("message dispatched")
-        .expect("channel open");
-    assert_eq!(first.content, "original hello");
-    assert_eq!(first.sender, "alice");
-    drop(rx);
+        .expect("typed listener stops");
 
     tokio::time::timeout(GUARD, listener)
         .await
-        .expect("listen returns once receiver is gone")
+        .expect("listen returns after stop")
         .unwrap()
         .unwrap();
 
     let recorded = events.events.lock().unwrap().clone();
     assert_eq!(recorded.len(), 2);
-    assert_eq!(recorded[0].1, "message_updated");
-    assert_eq!(recorded[0].2["type"], "message_updated");
-    assert_eq!(recorded[0].2["sourceEventId"], "13");
-    assert_eq!(recorded[0].2["conversation"]["id"], "100");
-    assert_eq!(recorded[0].2["messageId"], "telegram_100_5");
-    assert_eq!(recorded[0].2["providerMessageId"], "5");
-    assert_eq!(recorded[0].2["conversation"]["kind"], "group");
-    assert_eq!(recorded[0].2["conversation"]["topicId"], "88");
-    assert_eq!(recorded[0].2["parts"][0]["text"], "edited hello");
-    assert_eq!(recorded[1].1, "reaction_added");
-    assert_eq!(recorded[1].2["type"], "reaction_added");
-    assert_eq!(recorded[1].2["sourceEventId"], "15");
+    assert_eq!(recorded[0].event_type, "message_updated");
+    assert_eq!(recorded[0].payload["type"], "message_updated");
+    assert_eq!(recorded[0].payload["sourceEventId"], "13");
+    assert_eq!(recorded[0].payload["conversation"]["id"], "100");
+    assert_eq!(recorded[0].payload["messageId"], "telegram_100_5");
+    assert_eq!(recorded[0].payload["providerMessageId"], "5");
+    assert_eq!(recorded[0].payload["conversation"]["kind"], "group");
+    assert_eq!(recorded[0].payload["conversation"]["topicId"], "88");
+    assert_eq!(recorded[0].payload["parts"][0]["text"], "edited hello");
+    assert_eq!(recorded[1].event_type, "reaction_added");
+    assert_eq!(recorded[1].payload["type"], "reaction_added");
+    assert_eq!(recorded[1].payload["sourceEventId"], "15");
     assert_eq!(
-        recorded[1].2["eventId"],
+        recorded[1].payload["eventId"],
         "telegram:update:15:reaction:added:100:5:❤"
     );
-    assert_eq!(recorded[1].2["messageId"], "telegram_100_5");
-    assert_eq!(recorded[1].2["providerMessageId"], "5");
-    assert_eq!(recorded[1].2["conversation"]["id"], "100");
-    assert_eq!(recorded[1].2["conversation"]["topicId"], "88");
-    assert_eq!(recorded[1].2["actor"]["id"], "7");
-    assert_eq!(recorded[1].2["reaction"]["value"], "❤");
+    assert_eq!(recorded[1].payload["messageId"], "telegram_100_5");
+    assert_eq!(recorded[1].payload["providerMessageId"], "5");
+    assert_eq!(recorded[1].payload["conversation"]["id"], "100");
+    assert_eq!(recorded[1].payload["conversation"]["topicId"], "88");
+    assert_eq!(recorded[1].payload["actor"]["id"], "7");
+    assert_eq!(recorded[1].payload["reaction"]["value"], "❤");
     assert_eq!(json_bodies(&server, "deleteWebhook").await.len(), 1);
     // The unauthorized sender got the approval prompt.
     let prompts = sent_texts(&server).await;
@@ -4759,6 +4802,25 @@ impl crate::host::EventSink for RejectingInboundEvents {
     }
 }
 
+#[async_trait::async_trait]
+impl ChannelInboundSink for RejectingInboundEvents {
+    async fn push(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        if matches!(ingress, tinychannels_bus::ChannelIngress::Inbound(_)) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            return Err(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "fixture ingress delivery failed".into(),
+                retryable: false,
+                ..Default::default()
+            });
+        }
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn listen_does_not_duplicate_inbound_after_ordered_sink_failure() {
     let server = mock_api().await;
@@ -4780,22 +4842,15 @@ async fn listen_does_not_duplicate_inbound_after_ordered_sink_failure() {
     let channel = Arc::new(fast_backoff(
         channel_for(&server, &["alice"]).with_events(events.clone()),
     ));
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let listener = tokio::spawn({
         let channel = channel.clone();
-        async move { crate::provider_test_support::listen_v1(channel.as_ref(), tx).await }
+        let events = events.clone();
+        async move { ChannelAdapter::start(channel.as_ref(), events.as_ref()).await }
     });
 
-    let delivered_on_legacy_path = tokio::time::timeout(GUARD, rx.recv())
-        .await
-        .expect("listener must finish after the ingress callback fails");
-    assert!(
-        delivered_on_legacy_path.is_none(),
-        "an ambiguous callback failure must not submit the same update through the legacy queue"
-    );
     let result = tokio::time::timeout(GUARD, listener)
         .await
-        .expect("listener must return after callback failure")
+        .expect("listener must return after typed ingress failure")
         .unwrap();
     assert!(result.is_err());
     assert_eq!(events.0.load(Ordering::SeqCst), 1);
