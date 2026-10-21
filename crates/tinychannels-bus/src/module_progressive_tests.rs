@@ -1,4 +1,5 @@
 use super::*;
+use crate::channel::OutboundContentPart;
 
 #[test]
 fn canonical_output_events_keep_typed_tags_and_camel_case_fields() {
