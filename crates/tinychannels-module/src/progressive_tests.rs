@@ -12,47 +12,13 @@ struct ConfiguredChannelWithCapabilities {
     capabilities: tinychannels_bus::ChannelCapabilities,
 }
 
-#[async_trait::async_trait]
-#[allow(
-    deprecated,
-    reason = "test fake implements the required v21 compatibility methods"
-)]
-impl tinychannels::Channel for ConfiguredChannelWithCapabilities {
-    fn name(&self) -> &str {
-        self.name
-    }
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.capabilities.clone()
-    }
-    async fn send(&self, _message: &tinychannels::SendMessage) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        std::future::pending().await
-    }
+impl crate::provider::TestProviderBehavior for ConfiguredChannelWithCapabilities {
+    fn test_provider_id(&self) -> &'static str { self.name }
+    fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities { self.capabilities.clone() }
 }
 
-#[async_trait::async_trait]
-#[allow(
-    deprecated,
-    reason = "test fake implements the required v21 compatibility methods"
-)]
-impl tinychannels::Channel for ConfiguredChannel {
-    fn name(&self) -> &str {
-        self.0
-    }
-    async fn send(&self, _message: &tinychannels::SendMessage) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        std::future::pending().await
-    }
+impl crate::provider::TestProviderBehavior for ConfiguredChannel {
+    fn test_provider_id(&self) -> &'static str { self.0 }
 }
 
 #[test]
@@ -909,7 +875,7 @@ async fn open_scoped_provider(
     );
     replies.running.lock().await.insert(
         account.to_owned(),
-        Running::start(
+        Running::start_test(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: provider,
                 capabilities,
@@ -2041,7 +2007,7 @@ async fn no_edit_channel_sends_final_text_in_configured_segments() {
     let mut configured = HashMap::new();
     configured.insert(
         "discord:segmented".to_owned(),
-        Running::start(
+        Running::start_test(
             channel,
             Arc::new(crate::provider::Hooks::default()),
             replies.host.clone(),
@@ -2099,7 +2065,7 @@ async fn segmented_partial_send_retains_prior_receipts_and_stops_remaining_parts
     let mut configured = HashMap::new();
     configured.insert(
         "discord:partial-segments".to_owned(),
-        Running::start(
+        Running::start_test(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: "discord",
                 capabilities,
@@ -2232,7 +2198,7 @@ async fn terminal_text_edits_existing_draft_without_duplicate_send() {
     let mut configured = HashMap::new();
     configured.insert(
         "discord:final-draft".to_owned(),
-        Running::start(
+        Running::start_test(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: "discord",
                 capabilities,
@@ -2315,7 +2281,7 @@ async fn failed_terminal_edit_retains_the_existing_draft_receipt() {
     let mut configured = HashMap::new();
     configured.insert(
         "discord:failed-final-edit".to_owned(),
-        Running::start(
+        Running::start_test(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: "discord",
                 capabilities,
@@ -2401,7 +2367,7 @@ async fn partial_media_outcome_is_retained_and_stops_mixed_terminal_batch() {
     let configured = Arc::new(Mutex::new(HashMap::new()));
     configured.lock().await.insert(
         "discord:partial-batch".to_owned(),
-        Running::start(
+        Running::start_test(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: "discord",
                 capabilities: tinychannels_bus::ChannelCapabilities::default(),
@@ -2493,7 +2459,7 @@ async fn media_without_receipt_is_unknown_and_stops_terminal_batch() {
     let configured = Arc::new(Mutex::new(HashMap::new()));
     configured.lock().await.insert(
         "discord:no-receipt".to_owned(),
-        Running::start(
+        Running::start_test(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: "discord",
                 capabilities: tinychannels_bus::ChannelCapabilities::default(),
@@ -2554,7 +2520,7 @@ async fn cancellation_retains_prior_media_receipt() {
     let configured = Arc::new(Mutex::new(HashMap::new()));
     configured.lock().await.insert(
         "discord:media-cancel".to_owned(),
-        Running::start(
+        Running::start_test(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: "discord",
                 capabilities: tinychannels_bus::ChannelCapabilities::default(),
@@ -2667,7 +2633,7 @@ async fn typed_callback_error_after_acceptance_is_unknown_and_stops_batch() {
     let configured = Arc::new(Mutex::new(HashMap::new()));
     configured.lock().await.insert(
         "discord:typed-unknown".to_owned(),
-        Running::start(
+        Running::start_test(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: "discord",
                 capabilities: tinychannels_bus::ChannelCapabilities::default(),
@@ -2970,7 +2936,7 @@ async fn scoped_voice_finalization_obeys_turn_lease_while_synthesis_is_blocked()
     capabilities.voice_out.accepted_codecs = vec!["ogg_opus".into()];
     replies.running.lock().await.insert(
         "discord:voice-lease".into(),
-        Running::start(
+        Running::start_test(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: "discord",
                 capabilities,
@@ -3074,7 +3040,7 @@ async fn scoped_output_expiry_cleans_an_existing_draft_without_sending_a_reply()
     let account = "discord:short-lease";
     replies.running.lock().await.insert(
         account.into(),
-        Running::start(
+        Running::start_test(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: "discord",
                 capabilities: tinychannels_bus::ChannelCapabilities {
@@ -3161,7 +3127,7 @@ async fn native_approval_and_clarification_events_deliver_prompts() {
     let configured = Arc::new(Mutex::new(HashMap::new()));
     configured.lock().await.insert(
         "discord:prompts".to_owned(),
-        Running::start(
+        Running::start_test(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: "discord",
                 capabilities: tinychannels_bus::ChannelCapabilities {
@@ -3249,7 +3215,7 @@ async fn provider_with_native_presentation_sends_typed_approval_choices() {
     let configured = Arc::new(Mutex::new(HashMap::new()));
     configured.lock().await.insert(
         "telegram:approvals".to_owned(),
-        Running::start(
+        Running::start_test(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: "telegram",
                 capabilities: tinychannels_bus::ChannelCapabilities {
@@ -3576,7 +3542,7 @@ async fn configured_progressive_channel_posts_and_edits_one_draft() {
     let mut configured = HashMap::new();
     configured.insert(
         "discord:editable".to_owned(),
-        Running::start(
+        Running::start_test(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: "discord",
                 capabilities,
@@ -3587,7 +3553,7 @@ async fn configured_progressive_channel_posts_and_edits_one_draft() {
     );
     configured.insert(
         "discord:editable-b".to_owned(),
-        Running::start(
+        Running::start_test(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: "discord",
                 capabilities: tinychannels_bus::ChannelCapabilities {
@@ -3968,7 +3934,7 @@ async fn open_output_uses_configured_account_and_preserves_full_conversation_sco
         let channel = Arc::new(ConfiguredChannel("discord"));
         configured.insert(
             account.to_owned(),
-            Running::start(
+            Running::start_test(
                 channel,
                 Arc::new(crate::provider::Hooks::default()),
                 replies.host.clone(),
