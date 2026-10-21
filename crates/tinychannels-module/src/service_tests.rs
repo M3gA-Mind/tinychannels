@@ -1073,8 +1073,8 @@ async fn channels_with_store(
 }
 
 #[tokio::test]
-async fn confidential_media_bus_roundtrips_only_within_the_provider_turn_scope() {
-    let (channels, _callbacks, server) = channels_with_store(Arc::new(EndedChannel(Arc::new(
+async fn module_media_handlers_roundtrip_only_within_the_provider_turn_scope() {
+    let (channels, _callbacks, _server) = channels_with_store(Arc::new(EndedChannel(Arc::new(
         std::sync::atomic::AtomicUsize::new(0),
     ))))
     .await;
@@ -1085,21 +1085,6 @@ async fn confidential_media_bus_roundtrips_only_within_the_provider_turn_scope()
             media_account_scope: Some("private-account-digest".into()),
         },
     );
-    server
-        .serve_at(tinychannels_bus::OBJECT_PATH.try_into().unwrap(), channels)
-        .await
-        .unwrap();
-    server
-        .request_name(tinychannels_bus::BUS_NAME)
-        .await
-        .unwrap();
-    let client = server
-        .proxy(
-            tinychannels_bus::BUS_NAME,
-            tinychannels_bus::OBJECT_PATH,
-            tinychannels_bus::BUS_NAME,
-        )
-        .unwrap();
     let scope = tinychannels_bus::HostVoiceScope {
         conversation: tinychannels_bus::ConversationRef {
             id: "room-7".into(),
@@ -1109,41 +1094,32 @@ async fn confidential_media_bus_roundtrips_only_within_the_provider_turn_scope()
         ..Default::default()
     };
     let bytes = b"private media payload".to_vec();
-    let upload = client
-        .call_confidential::<tinychannels_bus::MediaUploadHandle>(
-            tinychannels_bus::methods::BEGIN_MEDIA_UPLOAD,
-            tinychannels_bus::MediaUploadBegin {
-                instance: "fixture".into(),
-                scope: scope.clone(),
-                kind: tinychannels_bus::MediaKind::Document,
-                content_type: "text/plain".into(),
-                file_name: Some("note.txt".into()),
-                duration_ms: None,
-                codec: None,
-                byte_count: bytes.len(),
-            },
-        )
+    let upload = channels
+        .begin_media_upload(tinychannels_bus::MediaUploadBegin {
+            instance: "fixture".into(),
+            scope: scope.clone(),
+            kind: tinychannels_bus::MediaKind::Document,
+            content_type: "text/plain".into(),
+            file_name: Some("note.txt".into()),
+            duration_ms: None,
+            codec: None,
+            byte_count: bytes.len(),
+        })
         .await
         .unwrap();
     assert_eq!(
-        client
-            .call_confidential::<u32>(
-                tinychannels_bus::methods::APPEND_MEDIA_UPLOAD_CHUNK,
-                tinychannels_bus::MediaUploadChunk {
-                    handle: upload.clone(),
-                    sequence: 0,
-                    bytes: bytes.clone(),
-                },
-            )
+        channels
+            .append_media_upload_chunk(tinychannels_bus::MediaUploadChunk {
+                handle: upload.clone(),
+                sequence: 0,
+                bytes: bytes.clone(),
+            })
             .await
             .unwrap(),
         1
     );
-    let media = client
-        .call_confidential::<tinychannels_bus::MediaUploadResult>(
-            tinychannels_bus::methods::FINISH_MEDIA_UPLOAD,
-            tinychannels_bus::MediaUploadFinish(upload),
-        )
+    let media = channels
+        .finish_media_upload(tinychannels_bus::MediaUploadFinish(upload))
         .await
         .unwrap();
     assert!(
@@ -1158,55 +1134,40 @@ async fn confidential_media_bus_roundtrips_only_within_the_provider_turn_scope()
     let mut wrong_turn = scope.clone();
     wrong_turn.turn_id = "other-turn".into();
     assert!(
-        client
-            .call_confidential::<tinychannels_bus::MediaReadInfo>(
-                tinychannels_bus::methods::BEGIN_MEDIA_READ,
-                tinychannels_bus::MediaReadBegin {
-                    instance: "fixture".into(),
-                    scope: wrong_turn,
-                    media: media.clone(),
-                    max_bytes: 1024,
-                },
-            )
+        channels
+            .begin_media_read(tinychannels_bus::MediaReadBegin {
+                instance: "fixture".into(),
+                scope: wrong_turn,
+                media: media.clone(),
+                max_bytes: 1024,
+            })
             .await
             .is_err()
     );
 
-    let read = client
-        .call_confidential::<tinychannels_bus::MediaReadInfo>(
-            tinychannels_bus::methods::BEGIN_MEDIA_READ,
-            tinychannels_bus::MediaReadBegin {
-                instance: "fixture".into(),
-                scope,
-                media,
-                max_bytes: 1024,
-            },
-        )
+    let read = channels
+        .begin_media_read(tinychannels_bus::MediaReadBegin {
+            instance: "fixture".into(),
+            scope,
+            media,
+            max_bytes: 1024,
+        })
         .await
         .unwrap();
-    let chunk = client
-        .call_confidential::<tinychannels_bus::MediaReadChunkResult>(
-            tinychannels_bus::methods::READ_MEDIA_CHUNK,
-            tinychannels_bus::MediaReadChunk {
-                handle: read.handle.clone(),
-                sequence: 0,
-            },
-        )
+    let chunk = channels
+        .read_media_chunk(tinychannels_bus::MediaReadChunk {
+            handle: read.handle.clone(),
+            sequence: 0,
+        })
         .await
         .unwrap();
     assert_eq!(chunk.bytes, bytes);
     assert!(chunk.done);
-    client
-        .call_confidential::<()>(
-            tinychannels_bus::methods::ABORT_MEDIA_READ,
-            tinychannels_bus::MediaReadFinish(read.handle),
-        )
+    channels
+        .abort_media_read(tinychannels_bus::MediaReadFinish(read.handle))
         .await
         .unwrap();
-    client
-        .call::<()>(tinychannels_bus::methods::SHUTDOWN, ())
-        .await
-        .unwrap();
+    channels.shutdown().await.unwrap();
 }
 
 fn required_intent(id: &str, text: &str) -> ChannelOutboundIntent {
