@@ -1,9 +1,9 @@
 //! Lark upload, media conversion, and provider-specific payload preparation.
 
-use super::*;
-use base64::Engine as _;
-use crate::providers::native::FileStep;
 use super::outbound::known_unsent;
+use super::*;
+use crate::providers::native::FileStep;
+use base64::Engine as _;
 use tinychannels_bus::channel::ChannelSendError;
 
 impl LarkChannel {
@@ -93,7 +93,10 @@ impl LarkChannel {
             .map_err(|_| known_unsent("Lark authentication failed before upload"))
     }
 
-    pub(super) async fn opus_audio(&self, file: &FileStep) -> Result<(Vec<u8>, String), ChannelSendError> {
+    pub(super) async fn opus_audio(
+        &self,
+        file: &FileStep,
+    ) -> Result<(Vec<u8>, String), ChannelSendError> {
         let from = match file.mime.as_str() {
             "audio/ogg" | "audio/opus" => "ogg_opus",
             "audio/mp4" | "audio/m4a" | "audio/x-m4a" => "m4a_aac",
@@ -218,7 +221,7 @@ fn uncertain_send(message: &str) -> ChannelSendError {
     }
 }
 
-
+impl LarkChannel {
     pub(super) async fn prepare_steps(
         &self,
         _target: &crate::providers::native::Target,
@@ -228,22 +231,40 @@ fn uncertain_send(message: &str) -> ChannelSendError {
             let is_voice = matches!(step, crate::providers::native::Step::Voice(_));
             let file = match step {
                 crate::providers::native::Step::Text(_) => continue,
-                crate::providers::native::Step::File(file) if file.kind == tinychannels_bus::MediaKind::Image => {
+                crate::providers::native::Step::File(file)
+                    if file.kind == tinychannels_bus::MediaKind::Image =>
+                {
                     if file.bytes.len() as u64 > super::IMAGE_LIMIT {
-                        return Err(crate::providers::native::pre_dispatch("Lark image exceeds the 10 MiB limit"));
+                        return Err(crate::providers::native::pre_dispatch(
+                            "Lark image exceeds the 10 MiB limit",
+                        ));
                     }
-                    if !matches!(file.mime.as_str(), "image/jpeg" | "image/png" | "image/gif" | "image/webp") {
-                        return Err(crate::providers::native::pre_dispatch("Lark image type is not supported"));
+                    if !matches!(
+                        file.mime.as_str(),
+                        "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+                    ) {
+                        return Err(crate::providers::native::pre_dispatch(
+                            "Lark image type is not supported",
+                        ));
                     }
                     continue;
                 }
-                crate::providers::native::Step::File(file) | crate::providers::native::Step::Voice(file) => file,
+                crate::providers::native::Step::File(file)
+                | crate::providers::native::Step::Voice(file) => file,
             };
-            if file.caption.as_deref().is_some_and(|caption| !caption.trim().is_empty()) {
-                return Err(crate::providers::native::unsupported("Lark file/audio captions"));
+            if file
+                .caption
+                .as_deref()
+                .is_some_and(|caption| !caption.trim().is_empty())
+            {
+                return Err(crate::providers::native::unsupported(
+                    "Lark file/audio captions",
+                ));
             }
             if file.bytes.len() as u64 > super::FILE_LIMIT {
-                return Err(crate::providers::native::pre_dispatch("Lark file exceeds the 30 MiB limit"));
+                return Err(crate::providers::native::pre_dispatch(
+                    "Lark file exceeds the 30 MiB limit",
+                ));
             }
             if file.kind == tinychannels_bus::MediaKind::Video && file.mime != "video/mp4" {
                 return Err(crate::providers::native::unsupported("Lark video type"));
@@ -257,5 +278,4 @@ fn uncertain_send(message: &str) -> ChannelSendError {
         }
         Ok(())
     }
-
 }

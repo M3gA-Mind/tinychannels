@@ -1120,3 +1120,4 @@ impl LarkChannel {
         }
         Some((bytes, mime, None))
     }
+}
