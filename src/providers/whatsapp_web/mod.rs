@@ -1301,46 +1301,6 @@ impl WhatsAppWebChannel {
     }
 }
 
-#[cfg(not(feature = "whatsapp-web"))]
-#[async_trait]
-impl Channel for WhatsAppWebChannel {
-    fn name(&self) -> &str {
-        "whatsapp"
-    }
-
-    async fn send(&self, _message: &SendMessage) -> Result<()> {
-        anyhow::bail!(
-            "WhatsApp Web channel requires the 'whatsapp-web' feature. \
-            Enable with: cargo build --features whatsapp-web"
-        );
-    }
-
-    async fn listen(&self, _tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> Result<()> {
-        anyhow::bail!(
-            "WhatsApp Web channel requires the 'whatsapp-web' feature. \
-            Enable with: cargo build --features whatsapp-web"
-        );
-    }
-
-    async fn health_check(&self) -> bool {
-        false
-    }
-
-    async fn start_typing(&self, _recipient: &str) -> Result<()> {
-        anyhow::bail!(
-            "WhatsApp Web channel requires the 'whatsapp-web' feature. \
-            Enable with: cargo build --features whatsapp-web"
-        );
-    }
-
-    async fn stop_typing(&self, _recipient: &str) -> Result<()> {
-        anyhow::bail!(
-            "WhatsApp Web channel requires the 'whatsapp-web' feature. \
-            Enable with: cargo build --features whatsapp-web"
-        );
-    }
-}
-
 // Every test is `#[cfg(feature = "whatsapp-web")]`, so gate the whole module
 // on the feature to avoid an unused `use super::*` in the feature-off build.
 #[cfg(all(test, feature = "whatsapp-web"))]
