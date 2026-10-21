@@ -1,5 +1,39 @@
 use super::*;
 
+#[tokio::test]
+async fn typed_inbound_strips_feishu_mention_placeholders_from_text() {
+    let channel = LarkChannel::new(
+        "app".into(),
+        "secret".into(),
+        "verify".into(),
+        None,
+        vec!["ou_alice".into()],
+    );
+    let event = serde_json::json!({
+        "sender": {
+            "sender_id": {"open_id": "ou_alice"},
+            "sender_type": "user"
+        },
+        "message": {
+            "message_id": "mention-1",
+            "chat_id": "oc_chat",
+            "chat_type": "p2p",
+            "message_type": "text",
+            "content": serde_json::json!({"text": "hello @_user_1 there"}).to_string()
+        }
+    });
+
+    let inbound = channel
+        .inbound_envelope(&event)
+        .await
+        .expect("admitted Lark text becomes a typed event");
+    assert_eq!(inbound.text, "hello there");
+    assert!(matches!(
+        inbound.parts.as_slice(),
+        [tinychannels_bus::ContentPart::Text { text, .. }] if text == "hello there"
+    ));
+}
+
 #[test]
 fn file_mime_types_map_to_lark_upload_types() {
     for (mime, file_type) in [
