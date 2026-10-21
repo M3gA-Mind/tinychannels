@@ -1,3 +1,4 @@
+use super::super::MediaRepository;
 use super::*;
 use base64::Engine;
 use std::ops::Range;
