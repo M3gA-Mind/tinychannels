@@ -15,10 +15,13 @@ fn health_probe_results_are_classified_without_losing_timeout_state() {
         .enable_time()
         .build()
         .expect("runtime")
-        .block_on(tokio::time::timeout(
-            std::time::Duration::ZERO,
-            std::future::pending::<bool>(),
-        ));
+        .block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::ZERO,
+                std::future::pending::<bool>(),
+            )
+            .await
+        });
     assert_eq!(
         classify_health_result(&timed_out),
         ChannelHealthState::Timeout
