@@ -1565,26 +1565,16 @@ struct SlowChannel {
 }
 
 #[async_trait::async_trait]
-impl Channel for SlowChannel {
-    fn name(&self) -> &str {
-        "fixture"
-    }
-
-    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+impl crate::provider::TestProviderBehavior for SlowChannel {
+    fn test_provider_id(&self) -> &'static str { "fixture" }
+    async fn test_send(&self, _message: &tinychannels_bus::ChannelOutboundMessage) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
         if let Some(started) = self.started.lock().unwrap().take() {
             let _ = started.send(());
         }
         if let Some(release) = self.release.lock().await.take() {
-            let _ = release.await;
+            release.await.map_err(|error| tinychannels::channel::ChannelSendError { message: error.to_string(), ..Default::default() })?;
         }
-        Ok(())
-    }
-
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        std::future::pending().await
+        Ok(Default::default())
     }
 }
 
@@ -1604,7 +1594,7 @@ async fn canceled_send_waiter_does_not_cancel_owned_send_or_shutdown_join() {
     .await
     .unwrap();
     let host = HostChannels::new(connection);
-    let running = Running::start(channel, Arc::new(Hooks::default()), host);
+    let running = Running::start_test(channel, Arc::new(Hooks::default()), host);
     let send_waiter = tokio::spawn({
         let running = running.clone();
         async move {
@@ -1637,32 +1627,27 @@ async fn canceled_send_waiter_does_not_cancel_owned_send_or_shutdown_join() {
 #[derive(Default)]
 struct InteractionChannel(StdMutex<Vec<String>>);
 #[async_trait::async_trait]
-impl Channel for InteractionChannel {
-    fn name(&self) -> &str {
-        "interaction-fixture"
-    }
-    async fn listen(&self, _: mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
-        std::future::pending().await
-    }
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
+impl crate::provider::TestProviderBehavior for InteractionChannel {
+    fn test_provider_id(&self) -> &'static str { "interaction-fixture" }
+    async fn test_send(&self, message: &tinychannels_bus::ChannelOutboundMessage) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
         self.0
             .lock()
             .unwrap()
-            .push(format!("send:{}", message.content));
-        Ok(())
+            .push(format!("send:{}", crate::provider::test_message_text(message)));
+        Ok(Default::default())
     }
-    async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
+    async fn test_start_typing(&self, recipient: &str) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         self.0.lock().unwrap().push(format!("typing:{recipient}"));
         Ok(())
     }
-    async fn send_draft(&self, message: &SendMessage) -> anyhow::Result<Option<String>> {
+    async fn test_start_draft(&self, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<Option<String>, tinychannels::channel::ChannelSendError> {
         self.0
             .lock()
             .unwrap()
-            .push(format!("draft:{}", message.content));
+            .push(format!("draft:{}", match intent.payload { tinychannels_bus::OutboundPayload::Text { text } => text, _ => String::new() }));
         Ok(Some("module-draft".into()))
     }
-    async fn stop_typing(&self, recipient: &str) -> anyhow::Result<()> {
+    async fn test_stop_typing(&self, recipient: &str) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         self.0.lock().unwrap().push(format!("stop:{recipient}"));
         Ok(())
     }
@@ -1677,7 +1662,7 @@ async fn provider_actor_orders_interactions_with_sends_and_rejects_after_stop() 
         .await
         .unwrap();
     let channel = Arc::new(InteractionChannel::default());
-    let running = Running::start(
+    let running = Running::start_test(
         channel.clone(),
         Arc::new(Hooks::default()),
         HostChannels::new(connection),
@@ -1729,7 +1714,7 @@ async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
         .await
         .unwrap();
     let channel = Arc::new(InteractionChannel::default());
-    let running = Running::start(
+    let running = Running::start_test(
         channel.clone(),
         Arc::new(Hooks::default()),
         HostChannels::new(connection.clone()),
@@ -1841,20 +1826,9 @@ struct PendingTypingChannel {
 }
 
 #[async_trait::async_trait]
-impl Channel for PendingTypingChannel {
-    fn name(&self) -> &str {
-        "pending-typing"
-    }
-
-    async fn send(&self, _: &SendMessage) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn listen(&self, _: mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
-        std::future::pending().await
-    }
-
-    async fn start_typing(&self, _: &str) -> anyhow::Result<()> {
+impl crate::provider::TestProviderBehavior for PendingTypingChannel {
+    fn test_provider_id(&self) -> &'static str { "pending-typing" }
+    async fn test_start_typing(&self, _: &str) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         struct DropMark(Arc<std::sync::atomic::AtomicUsize>);
         impl Drop for DropMark {
             fn drop(&mut self) {
@@ -1881,7 +1855,7 @@ async fn typing_refresh_stop_and_shutdown_cancel_inflight_provider_calls() {
         entered: Arc::clone(&entered),
         dropped: Arc::clone(&dropped),
     });
-    let running = Running::start(
+    let running = Running::start_test(
         channel,
         Arc::new(Hooks::default()),
         HostChannels::new(connection.clone()),
@@ -1943,7 +1917,7 @@ async fn typing_refresh_capacity_counts_handles_not_recipients() {
         .await
         .unwrap();
     let channel = Arc::new(InteractionChannel::default());
-    let running = Running::start(
+    let running = Running::start_test(
         channel,
         Arc::new(Hooks::default()),
         HostChannels::new(connection.clone()),

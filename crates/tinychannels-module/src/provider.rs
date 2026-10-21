@@ -21,7 +21,8 @@ pub(crate) trait TestProviderBehavior: Send + Sync {
     fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         tinychannels_bus::ChannelCapabilities::unknown()
     }
-    fn test_listener_ends(&self) -> bool { false }
+    async fn test_start(&self, _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync)) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { std::future::pending().await }
+    fn test_media_account_identity(&self) -> Option<String> { None }
     async fn test_send(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
@@ -80,8 +81,9 @@ impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelAdapter fo
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         self.test_capabilities()
     }
+    fn media_account_identity(&self) -> Option<String> { self.test_media_account_identity() }
     async fn start(&self, _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync)) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
-        if self.test_listener_ends() { Ok(()) } else { std::future::pending().await }
+        self.test_start(_sink).await
     }
     async fn stop(&self) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { Ok(()) }
     async fn send(&self, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<tinychannels::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
