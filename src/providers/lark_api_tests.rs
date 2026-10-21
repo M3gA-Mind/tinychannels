@@ -1243,7 +1243,10 @@ async fn ws_endpoint_errors_stop_listen_before_connecting() {
     let server =
         HttpsServer::start(|_| (200, r#"{"code":1000040345,"msg":"bad app"}"#.into())).await;
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let error = channel_with(&server, true).listen(tx).await.unwrap_err();
+    let channel = channel_with(&server, true);
+    let error = crate::provider_test_support::listen_v1(&channel, tx)
+        .await
+        .unwrap_err();
     assert_eq!(
         error.to_string(),
         "Lark WS endpoint failed: code=1000040345 msg=bad app"
@@ -1258,7 +1261,10 @@ async fn ws_endpoint_errors_stop_listen_before_connecting() {
 
     let server = HttpsServer::start(|_| (200, r#"{"code":1}"#.into())).await;
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let error = channel_with(&server, false).listen(tx).await.unwrap_err();
+    let channel = channel_with(&server, false);
+    let error = crate::provider_test_support::listen_v1(&channel, tx)
+        .await
+        .unwrap_err();
     assert_eq!(
         error.to_string(),
         "Lark WS endpoint failed: code=1 msg=(none)"
@@ -1268,7 +1274,10 @@ async fn ws_endpoint_errors_stop_listen_before_connecting() {
 
     let server = HttpsServer::start(|_| (200, r#"{"code":0}"#.into())).await;
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let error = channel_with(&server, true).listen(tx).await.unwrap_err();
+    let channel = channel_with(&server, true);
+    let error = crate::provider_test_support::listen_v1(&channel, tx)
+        .await
+        .unwrap_err();
     assert_eq!(error.to_string(), "Lark WS endpoint: empty data");
 }
 

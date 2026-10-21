@@ -4231,7 +4231,7 @@ async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let listener = tokio::spawn({
         let channel = channel.clone();
-        async move { channel.listen(tx).await }
+        async move { crate::provider_test_support::listen_v1(channel.as_ref(), tx).await }
     });
     tokio::time::timeout(GUARD, rx.recv())
         .await
@@ -4362,7 +4362,7 @@ async fn health_check_reflects_get_me_status() {
         .mount(&server)
         .await;
     let ch = channel_for(&server, &["*"]);
-    assert!(ch.health_check().await);
+    assert!(crate::provider_test_support::is_healthy(&ch).await);
     assert_eq!(
         ChannelAdapter::status(&ch)
             .await
@@ -4379,7 +4379,7 @@ async fn health_check_reflects_get_me_status() {
         .mount(&failing)
         .await;
     let failing_channel = channel_for(&failing, &["*"]);
-    assert!(!failing_channel.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&failing_channel).await);
     assert_eq!(
         ChannelAdapter::status(&failing_channel)
             .await
@@ -4391,7 +4391,7 @@ async fn health_check_reflects_get_me_status() {
 
     let mut dead = TelegramChannel::new("tok".into(), vec!["*".into()], false);
     dead.api_base = dead_base();
-    assert!(!dead.health_check().await);
+    assert!(!crate::provider_test_support::is_healthy(&dead).await);
 }
 
 #[tokio::test]
@@ -4658,7 +4658,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let listener = tokio::spawn({
         let ch = ch.clone();
-        async move { ch.listen(tx).await }
+        async move { crate::provider_test_support::listen_v1(ch.as_ref(), tx).await }
     });
 
     let first = tokio::time::timeout(GUARD, rx.recv())
@@ -4761,7 +4761,7 @@ async fn listen_does_not_duplicate_inbound_after_ordered_sink_failure() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let listener = tokio::spawn({
         let channel = channel.clone();
-        async move { channel.listen(tx).await }
+        async move { crate::provider_test_support::listen_v1(channel.as_ref(), tx).await }
     });
 
     let delivered_on_legacy_path = tokio::time::timeout(GUARD, rx.recv())
@@ -4817,7 +4817,7 @@ async fn listen_backs_off_when_webhook_delete_fails_and_on_transport_error() {
     let ch = Arc::new(ch);
     let listener = tokio::spawn({
         let ch = ch.clone();
-        async move { ch.listen(tx).await }
+        async move { crate::provider_test_support::listen_v1(ch.as_ref(), tx).await }
     });
 
     let msg = tokio::time::timeout(GUARD, rx.recv())
@@ -4835,7 +4835,11 @@ async fn listen_backs_off_when_webhook_delete_fails_and_on_transport_error() {
     let mut dead = fast_backoff(TelegramChannel::new("tok".into(), vec!["*".into()], true));
     dead.api_base = dead_base();
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let outcome = tokio::time::timeout(Duration::from_millis(300), dead.listen(tx)).await;
+    let outcome = tokio::time::timeout(
+        Duration::from_millis(300),
+        crate::provider_test_support::listen_v1(&dead, tx),
+    )
+    .await;
     assert!(
         outcome.is_err(),
         "listen keeps retrying on transport errors"
