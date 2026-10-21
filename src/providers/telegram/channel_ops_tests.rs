@@ -3,7 +3,9 @@ use crate::providers::telegram::fixtures::*;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tinychannels_runtime::channel::ChannelAdapter;
+use tinychannels_runtime::channel::{
+    ChannelAdapter, ChannelInboundSink, ChannelReaction, ChannelStreamingDraft,
+};
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -79,6 +81,25 @@ impl crate::host::EventSink for TelegramConformanceEvents {
         }
         self.notified.notify_one();
         Ok(true)
+    }
+}
+
+#[async_trait::async_trait]
+impl ChannelInboundSink for TelegramConformanceEvents {
+    async fn push(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        match ingress {
+            tinychannels_bus::ChannelIngress::Event(event) => {
+                self.events.lock().unwrap().push(event);
+            }
+            tinychannels_bus::ChannelIngress::Inbound(envelope) => {
+                self.inbounds.lock().unwrap().push(envelope);
+            }
+        }
+        self.notified.notify_one();
+        Ok(())
     }
 }
 
@@ -330,11 +351,10 @@ impl TelegramWireFixture {
         }
         self.events.events.lock().unwrap().clear();
         self.events.inbounds.lock().unwrap().clear();
-        let (tx, _rx) = tokio::sync::mpsc::channel(4);
         let channel = self.channel.clone();
+        let events = self.events.clone();
         let listener = tokio::spawn(async move {
-            #[allow(deprecated)]
-            tinychannels_runtime::traits::Channel::listen(channel.as_ref(), tx).await
+            ChannelAdapter::start(channel.as_ref(), events.as_ref()).await
         });
         let capture = tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
@@ -1042,14 +1062,14 @@ fn outbound_voice_message(
 
 #[test]
 fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() {
-    let without_store = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).capabilities();
+    let without_store = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).declared_capabilities();
     assert!(!without_store.voice_in.supported);
     assert!(!without_store.voice_out.supported);
     assert!(!without_store.voice_out.synthesis);
 
     let with_storage = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
         .with_voice_media_store(Arc::new(VoiceReadFixture))
-        .capabilities();
+        .declared_capabilities();
     assert!(with_storage.voice_in.supported);
     assert!(with_storage.content.parts.contains(&"text".into()));
     assert!(with_storage.content.parts.contains(&"voice_note".into()));
@@ -1064,7 +1084,7 @@ fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() 
     let with_all_ports = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
         .with_voice_media_store(Arc::new(VoiceReadFixture))
         .with_voice_synthesis(true)
-        .capabilities();
+        .declared_capabilities();
     assert!(with_all_ports.voice_out.synthesis);
 }
 
@@ -1072,7 +1092,7 @@ fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() 
 fn telegram_voice_capabilities_preserve_base_text_and_stream_descriptor() {
     let off = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
         .with_voice_media_store(Arc::new(VoiceReadFixture))
-        .capabilities();
+        .declared_capabilities();
     assert!(off.content.text.inbound && off.content.text.outbound);
     assert!(off.content.parts.contains(&"text".into()));
     assert!(off.content.parts.contains(&"voice_note".into()));
@@ -1083,7 +1103,7 @@ fn telegram_voice_capabilities_preserve_base_text_and_stream_descriptor() {
     let on = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
         .with_streaming(StreamMode::Partial, 100, true)
         .with_voice_media_store(Arc::new(VoiceReadFixture))
-        .capabilities();
+        .declared_capabilities();
     assert!(on.progressive_edits);
     assert!(on.streaming_reply_pipeline);
     assert!(on.actions.supported.contains(&"draft-update".into()));
@@ -1091,13 +1111,13 @@ fn telegram_voice_capabilities_preserve_base_text_and_stream_descriptor() {
 
 #[test]
 fn telegram_advertises_typed_media_only_with_scoped_storage() {
-    let unavailable = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).capabilities();
+    let unavailable = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).declared_capabilities();
     assert!(!unavailable.content.image.outbound);
     assert!(!unavailable.content.file.inbound);
 
     let configured = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
         .with_media_repository(Arc::new(TypedMediaReadFixture))
-        .capabilities();
+        .declared_capabilities();
     assert!(configured.content.image.inbound && configured.content.image.outbound);
     assert!(configured.content.video.inbound && configured.content.video.outbound);
     assert!(configured.content.audio.inbound && configured.content.audio.outbound);
@@ -2903,7 +2923,7 @@ async fn configured_local_adapter_accepts_and_delivers_typed_telegram_media() {
             account_id: account.account_id.clone(),
             ..Default::default()
         },
-        channel.capabilities(),
+        channel.declared_capabilities(),
         Arc::new(TelegramConformanceSink(channel.clone())),
     );
     let outcome = adapter
@@ -3453,7 +3473,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
             account_id: scope.channel.account_id.clone(),
             ..Default::default()
         },
-        channel.capabilities(),
+        channel.declared_capabilities(),
         Arc::new(TelegramConformanceSink(channel.clone())),
     );
     let fixture = TelegramWireFixture {
@@ -4380,7 +4400,7 @@ async fn typing_refresh_reports_acceptance_rejection_and_transport_error() {
 fn telegram_advertises_reaction_support() {
     let ch = TelegramChannel::new("tok".into(), vec!["*".into()], false);
     assert!(ch.supports_reactions());
-    let caps = ch.capabilities();
+    let caps = ch.declared_capabilities();
     assert!(caps.actions.supported.contains(&"typing".into()));
     assert!(caps.actions.supported.contains(&"edit".into()));
     assert!(caps.actions.supported.contains(&"delete".into()));
