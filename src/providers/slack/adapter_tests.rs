@@ -597,9 +597,24 @@ async fn lifecycle_hooks_are_owned_by_the_module_runtime() {
             Ok(())
         }
     }
-    let channel = SlackChannel::new("t".into(), Some("C1".into()), vec![]);
-    channel.start(&NoSink).await.unwrap();
-    channel.stop().await.unwrap();
+    let channel = Arc::new(SlackChannel::new("t".into(), Some("C1".into()), vec![]));
+    let listener_channel = channel.clone();
+    let listener = tokio::spawn(async move {
+        ChannelAdapter::start(listener_channel.as_ref(), &NoSink).await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !channel.listener_running.load(std::sync::atomic::Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("listener start registers before it polls");
+    ChannelAdapter::stop(channel.as_ref()).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), listener)
+        .await
+        .expect("listener stop cancels polling")
+        .expect("listener task joins")
+        .unwrap();
     let status = channel.status().await.unwrap();
     assert_eq!(status.channel_id, "slack");
     assert_eq!(status.states.len(), 2);
