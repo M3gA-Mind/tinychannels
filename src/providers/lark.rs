@@ -137,11 +137,6 @@ impl Drop for LarkListenerRegistration<'_> {
     }
 }
 
-enum LarkIngress<'a> {
-    Legacy(tokio::sync::mpsc::Sender<ChannelMessage>),
-    Typed(&'a (dyn crate::channel::ChannelInboundSink + Send + Sync)),
-}
-
 struct TypedWebhookEvent {
     event: serde_json::Value,
     reply: tokio::sync::oneshot::Sender<TypedWebhookResult>,
@@ -389,7 +384,10 @@ impl LarkChannel {
     /// WS long-connection event loop.  Returns Ok(()) when the connection closes
     /// (the caller reconnects).
     #[allow(clippy::too_many_lines)]
-    async fn listen_ws(&self, ingress: LarkIngress<'_>) -> anyhow::Result<()> {
+    async fn listen_ws(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> anyhow::Result<()> {
         let (wss_url, client_config) = self.get_ws_endpoint().await?;
         let service_id = wss_url
             .split('?')
@@ -552,19 +550,8 @@ impl LarkChannel {
                         Err(e) => { tracing::error!("Lark: payload parse: {e}"); continue; }
                     };
 
-                    if matches!(&ingress, LarkIngress::Typed(_)) {
-                        if !self.is_event_admitted(&event_payload) {
-                            continue;
-                        }
-                    } else {
-                        if recv.sender.sender_type == "app" || recv.sender.sender_type == "bot" {
-                            continue;
-                        }
-                        let sender_open_id = recv.sender.sender_id.open_id.as_deref().unwrap_or("");
-                        if !self.is_user_allowed(sender_open_id) {
-                            tracing::warn!("Lark WS: ignoring {sender_open_id} (not in allowed_users)");
-                            continue;
-                        }
+                    if !self.is_event_admitted(&event_payload) {
+                        continue;
                     }
 
                     let lark_msg = &recv.message;
@@ -577,21 +564,22 @@ impl LarkChannel {
                         continue;
                     }
 
-                    if let LarkIngress::Typed(sink) = &ingress {
-                        if let Some(envelope) = self
-                            .inbound_envelope_for_listener(&event_payload, true)
-                            .await
-                            && sink
-                                .push(tinychannels_bus::ChannelIngress::Inbound(envelope))
-                                .await
-                                .is_err()
-                        {
-                            tracing::warn!("Lark WS: typed ingress sink rejected an event");
-                            break;
-                        }
-                        self.mark_ws_message_seen(&lark_msg.message_id).await;
+                    let Some(envelope) = self
+                        .inbound_envelope_for_listener(&event_payload, true)
+                        .await
+                    else {
                         continue;
+                    };
+                    if sink
+                        .push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                        .await
+                        .is_err()
+                    {
+                        tracing::warn!("Lark WS: typed ingress sink rejected an event");
+                        break;
                     }
+                    self.mark_ws_message_seen(&lark_msg.message_id).await;
+                    continue;
 
                     self.mark_ws_message_seen(&lark_msg.message_id).await;
 
@@ -1252,7 +1240,7 @@ impl crate::providers::long_tail::LongTail for LarkChannel {
                 tokio::select! {
                     biased;
                     _ = cancellation.changed() => Ok(()),
-                    result = self.listen_ws(LarkIngress::Typed(sink)) => result,
+                    result = self.listen_ws(sink) => result,
                 }
             }
             crate::config::LarkReceiveMode::Webhook => {
