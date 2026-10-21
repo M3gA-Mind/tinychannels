@@ -42,7 +42,7 @@ pub(super) fn ensure_secure(url: &str) -> anyhow::Result<()> {
     if is_loopback_http(url) {
         return Ok(());
     }
-    super::ensure_https(url)
+    super::channel::ensure_https(url)
 }
 
 /// Classify a non-success status. A definite client-side refusal left the
