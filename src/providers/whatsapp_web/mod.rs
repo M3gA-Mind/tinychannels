@@ -41,8 +41,11 @@
 //!
 //! [`whatsapp-rust`]: https://docs.rs/whatsapp-rust/0.7
 
+#[cfg(feature = "whatsapp-web")]
 use crate::traits::ChannelMessage;
+#[cfg(feature = "whatsapp-web")]
 use anyhow::Result;
+#[cfg(feature = "whatsapp-web")]
 use async_trait::async_trait;
 use std::sync::Arc;
 
