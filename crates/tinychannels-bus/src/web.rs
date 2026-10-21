@@ -1,8 +1,8 @@
 //! Transport-free DTOs for the deployed OpenHuman web chat event stream.
 //!
 //! These events are a separate vocabulary from [`crate::channel::ChannelEvent`]
-//! and [`crate::module_progressive::ChannelOutputEvent`]: `event` is the
-//! historical Socket.IO discriminator and is intentionally kept in snake case.
+//! and the progressive delivery protocol's `ChannelOutputEvent`: `event` is
+//! the historical Socket.IO discriminator and is intentionally kept in snake case.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
