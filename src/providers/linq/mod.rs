@@ -18,6 +18,10 @@ pub use inbound::verify_linq_signature;
 super::native::native_v2_adapter!(LinqChannel);
 
 #[cfg(test)]
+#[path = "legacy_tests.rs"]
+mod legacy_tests;
+
+#[cfg(test)]
 #[path = "fixtures_tests.rs"]
 mod fixtures;
 
