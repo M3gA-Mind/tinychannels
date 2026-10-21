@@ -398,17 +398,31 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.Channels")]
 impl Channels {
     /// Register a network-free remote-control channel for host integration tests.
-    #[cfg(feature = "test-support")]
     #[tinybus(confidential)]
     async fn test_register_remote_channel(&self, name: String) -> BusResult<()> {
-        self.register_test_remote_channel(name).await
+        #[cfg(feature = "test-support")]
+        {
+            self.register_test_remote_channel(name).await
+        }
+        #[cfg(not(feature = "test-support"))]
+        {
+            let _ = name;
+            Err(BusError::failed("TinyChannels test support is disabled"))
+        }
     }
 
     /// Remove a network-free remote-control channel registered by a test.
-    #[cfg(feature = "test-support")]
     #[tinybus(confidential)]
     async fn test_unregister_remote_channel(&self, name: String) -> BusResult<()> {
-        self.unregister_test_remote_channel(name).await
+        #[cfg(feature = "test-support")]
+        {
+            self.unregister_test_remote_channel(name).await
+        }
+        #[cfg(not(feature = "test-support"))]
+        {
+            let _ = name;
+            Err(BusError::failed("TinyChannels test support is disabled"))
+        }
     }
 
     /// Reserve an inert identity-scoped runtime and immutable callback paths.
@@ -564,7 +578,8 @@ impl Channels {
         };
         let capabilities = match &request {
             tinychannels_bus::module_control::ChannelControlRequest::Route {
-                capabilities: Some(capabilities), ..
+                capabilities: Some(capabilities),
+                ..
             } => capabilities.clone(),
             _ => configured_capabilities(&self.running, name).await,
         };
