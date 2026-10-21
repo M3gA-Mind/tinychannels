@@ -502,6 +502,28 @@ fn amr_audio_requires_its_storage_magic_header() {
     assert!(!content_matches("audio/amr", b"not an AMR stream"));
 }
 
+#[test]
+fn mpeg_audio_accepts_valid_frame_header_variants() {
+    for header in [
+        [0xff, 0xfb, 0x90, 0x64], // MPEG-1 Layer III, no CRC
+        [0xff, 0xfa, 0x90, 0x64], // MPEG-1 Layer III, CRC protected
+        [0xff, 0xf3, 0x80, 0xc4], // MPEG-2 Layer III
+        [0xff, 0xe3, 0x80, 0xc4], // MPEG-2.5 Layer III
+    ] {
+        assert!(content_matches("audio/mpeg", &header));
+    }
+
+    for header in [
+        [0xff, 0x7b, 0x90, 0x64], // invalid sync
+        [0xff, 0xf9, 0x90, 0x64], // reserved layer
+        [0xff, 0xf3, 0x8c, 0xc4], // reserved sample rate
+        [0xff, 0xf3, 0xf0, 0xc4], // reserved bitrate
+    ] {
+        assert!(!content_matches("audio/mpeg", &header));
+    }
+    assert!(!content_matches("audio/mpeg", &[0xff, 0xfb]));
+}
+
 #[tokio::test]
 async fn media_store_rejects_spoofed_mime_and_truncated_image_bodies() {
     let store = store();
