@@ -77,7 +77,13 @@ async fn adapter_capabilities_match_the_discord_provider_facts() {
     let capabilities = ChannelAdapter::declared_capabilities(&channel);
     assert_eq!(capabilities, channel.v2_capabilities());
     assert!(capabilities.reactions);
-    assert!(capabilities.actions.supported.iter().any(|action| action == "edit"));
+    assert!(
+        capabilities
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "edit")
+    );
     assert!(capabilities.progressive_edits);
     assert!(
         capabilities
