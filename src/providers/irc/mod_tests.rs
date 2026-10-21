@@ -191,7 +191,6 @@ fn split_only_newlines() {
     assert_eq!(chunks, vec![""]);
 }
 
-
 // ── Allowlist ───────────────────────────────────────────
 
 #[test]
