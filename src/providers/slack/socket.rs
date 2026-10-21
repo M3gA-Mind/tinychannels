@@ -5,6 +5,7 @@ use super::events::Flow;
 use super::types::SlackChannel;
 use crate::traits::ChannelMessage;
 use futures_util::{SinkExt, StreamExt};
+use futures_util::stream::FuturesUnordered;
 use serde_json::Value;
 use tokio::sync::mpsc::Sender;
 use tokio_tungstenite::tungstenite::Message;
@@ -12,6 +13,7 @@ use tokio_tungstenite::tungstenite::Message;
 struct SocketDelivery {
     kind: String,
     payload: Value,
+    accepted: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl SlackChannel {
@@ -94,7 +96,12 @@ impl SlackChannel {
                     .handle_socket_delivery(&delivery.kind, &delivery.payload, sink)
                     .await
                 {
-                    Ok(()) => break,
+                    Ok(()) => {
+                        if let Some(accepted) = delivery.accepted {
+                            let _ = accepted.send(());
+                        }
+                        break;
+                    }
                     Err(error) => {
                         tracing::warn!(message = %error.message, "[slack] typed ingress is waiting for sink acceptance");
                         tokio::time::sleep(self.reconnect_backoff).await;
@@ -115,57 +122,89 @@ impl SlackChannel {
             return Flow::Continue;
         };
         let (mut write, mut read) = stream.split();
-        while let Some(Ok(frame)) = read.next().await {
-            match frame {
-                Message::Ping(payload) => {
-                    if write.send(Message::Pong(payload)).await.is_err() {
-                        break;
-                    }
-                    continue;
-                }
-                Message::Pong(_) => continue,
-                Message::Close(_) => break,
-                Message::Text(text) => {
-                    let Ok(envelope) = serde_json::from_str::<Value>(text.as_str()) else {
-                        continue;
-                    };
-                    let kind = envelope
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    if kind == "disconnect" {
-                        tracing::info!("[slack] server requested a typed reconnect");
-                        break;
-                    }
-                    let payload = envelope.get("payload").unwrap_or(&Value::Null);
-                    if matches!(kind, "events_api" | "interactive") {
-                        let delivery = SocketDelivery {
-                            kind: kind.to_owned(),
-                            payload: payload.clone(),
-                        };
-                        match delivery_tx.try_send(delivery) {
-                            Ok(()) => {}
-                            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                                // Do not acknowledge an envelope we could not
-                                // retain; Slack will redeliver after reconnect.
-                                tracing::warn!(
-                                    "[slack] typed ingress queue is full; reconnecting without ack"
-                                );
-                                break;
-                            }
-                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                                return Flow::Stop;
-                            }
-                        }
-                    }
-                    if let Some(id) = envelope.get("envelope_id").and_then(Value::as_str) {
+        let mut pending_acks = FuturesUnordered::new();
+        loop {
+            tokio::select! {
+                Some(ack_id) = pending_acks.next(), if !pending_acks.is_empty() => {
+                    if let Some(id) = ack_id {
                         let ack = serde_json::json!({ "envelope_id": id }).to_string();
                         if write.send(Message::Text(ack.into())).await.is_err() {
                             break;
                         }
                     }
                 }
-                _ => continue,
+                frame = read.next() => {
+                    let Some(Ok(frame)) = frame else { break; };
+                    match frame {
+                        Message::Ping(payload) => {
+                            if write.send(Message::Pong(payload)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Message::Pong(_) => {}
+                        Message::Close(_) => break,
+                        Message::Text(text) => {
+                            let Ok(envelope) = serde_json::from_str::<Value>(text.as_str()) else {
+                                continue;
+                            };
+                            let kind = envelope
+                                .get("type")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            if kind == "disconnect" {
+                                tracing::info!("[slack] server requested a typed reconnect");
+                                break;
+                            }
+                            let payload = envelope.get("payload").unwrap_or(&Value::Null);
+                            if matches!(kind, "events_api" | "interactive") {
+                                let acknowledgement = envelope
+                                    .get("envelope_id")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned)
+                                    .map(|id| {
+                                        let (accepted, wait_for_acceptance) = tokio::sync::oneshot::channel();
+                                        ((id.clone(), accepted), (id, wait_for_acceptance))
+                                    });
+                                let (accepted, wait_for_acceptance) = acknowledgement
+                                    .map(|(accepted, wait)| (Some(accepted), Some(wait)))
+                                    .unwrap_or((None, None));
+                                let delivery = SocketDelivery {
+                                    kind: kind.to_owned(),
+                                    payload: payload.clone(),
+                                    accepted: accepted.map(|(_, sender)| sender),
+                                };
+                                match delivery_tx.try_send(delivery) {
+                                    Ok(()) => {
+                                        if let Some((id, wait)) = wait_for_acceptance {
+                                            pending_acks.push(async move {
+                                                wait.await.ok().map(|()| id)
+                                            });
+                                        }
+                                    }
+                                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                        // Do not acknowledge an envelope we could not
+                                        // retain; Slack will redeliver after reconnect.
+                                        tracing::warn!(
+                                            "[slack] typed ingress queue is full; reconnecting without ack"
+                                        );
+                                        break;
+                                    }
+                                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                        return Flow::Stop;
+                                    }
+                                }
+                            } else if let Some(id) = envelope.get("envelope_id").and_then(Value::as_str) {
+                                // Unsupported envelope types have no typed record to
+                                // await, so acknowledge them immediately as before.
+                                let ack = serde_json::json!({ "envelope_id": id }).to_string();
+                                if write.send(Message::Text(ack.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
         Flow::Continue
@@ -279,14 +318,27 @@ impl SlackChannel {
             if !oldest.is_empty() {
                 query.push(("oldest", oldest.clone()));
             }
-            let response = self
+            let response = match self
                 .http_client()
                 .get(self.api_url("conversations.history"))
                 .bearer_auth(&self.bot_token)
                 .query(&query)
                 .send()
-                .await?;
-            let data = response.json::<Value>().await?;
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    tracing::warn!(message = %error, "[slack] typed history poll failed");
+                    continue;
+                }
+            };
+            let data = match response.json::<Value>().await {
+                Ok(data) => data,
+                Err(error) => {
+                    tracing::warn!(message = %error, "[slack] typed history response was unreadable");
+                    continue;
+                }
+            };
             let messages = data.get("messages").and_then(Value::as_array);
             for message in messages.into_iter().flatten().rev() {
                 let ts = message
@@ -299,10 +351,14 @@ impl SlackChannel {
                 let mut event = message.clone();
                 event["type"] = "message".into();
                 event["channel"] = channel_id.into();
-                self.handle_event_typed(&event, sink)
-                    .await
-                    .map_err(|error| anyhow::anyhow!(error.message))?;
-                oldest = ts.to_owned();
+                match self.handle_event_typed(&event, sink).await {
+                    Ok(Flow::Continue) => oldest = ts.to_owned(),
+                    Ok(Flow::Stop) => return Ok(()),
+                    Err(error) => {
+                        tracing::warn!(message = %error.message, "[slack] typed history delivery was not accepted; retrying");
+                        break;
+                    }
+                }
             }
         }
     }
