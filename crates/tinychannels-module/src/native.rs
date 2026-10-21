@@ -27,19 +27,6 @@ pub(crate) struct NativeLaunch {
 }
 
 impl NativeLaunch {
-    pub(crate) fn with_legacy<T>(provider: &'static str, channel: Arc<T>) -> Self
-    where
-        T: tinychannels::LongTailNative + tinychannels::traits::Channel + 'static,
-    {
-        let provider_id = channel.descriptor().id;
-        Self {
-            provider_id,
-            start: Box::new(move |hooks, host, supervision, outbound_only| {
-                Running::start_native(provider, channel, hooks, host, supervision, outbound_only)
-            }),
-        }
-    }
-
     /// A long-tail text provider held as its trait object.
     fn long_tail(
         provider: &'static str,
@@ -95,8 +82,12 @@ pub(crate) fn build_native_v2(
     http: &dyn HttpClientFactory,
 ) -> Option<NativeLaunch> {
     match tinychannels_bus::provider_id(name) {
-        "discord" => tinychannels::factory::build_discord_channel(config, host, http)
-            .map(|channel| NativeLaunch::with_legacy("Discord", channel)),
+        "discord" => {
+            tinychannels::factory::build_discord_channel(config, host, http).map(|channel| {
+                let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
+                NativeLaunch::long_tail("Discord", adapter, LongTailListenerMode::Adapter)
+            })
+        }
         "signal" => {
             tinychannels::factory::build_signal_channel(config, host, http).map(|channel| {
                 let adapter: Arc<dyn tinychannels::LongTailNative> = channel;

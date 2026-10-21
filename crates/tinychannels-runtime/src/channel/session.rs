@@ -102,7 +102,10 @@ pub fn conversation_history_key_candidates(msg: &ChannelMessage) -> LegacySessio
     }
 }
 
-/// Derive a stable host-local thread key from inbound channel facts.
+/// Derive the host-local thread key used for legacy channel messages.
+///
+/// Provider-specific thread-addressing compatibility belongs to the runtime;
+/// the bus carries only the identity data structures.
 pub fn derive_inbound_thread_id(
     channel: &str,
     sender: Option<&str>,
@@ -159,16 +162,16 @@ pub(crate) fn encode_identity_component(value: &str, separators: &[char]) -> Str
     encoded
 }
 
+fn nonempty(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (!value.is_empty()).then_some(value)
+}
+
 fn normalize_namespace(namespace: &str) -> &str {
     match namespace.trim() {
         "" | "default" => "main",
         value => value,
     }
-}
-
-fn nonempty(value: &str) -> Option<&str> {
-    let value = value.trim();
-    (!value.is_empty()).then_some(value)
 }
 
 #[cfg(test)]

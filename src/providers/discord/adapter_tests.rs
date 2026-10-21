@@ -3,6 +3,7 @@ use crate::channel::SendErrorKind;
 use crate::providers::discord::http::DiscordError;
 use crate::providers::discord::support::*;
 use crate::traits::Channel;
+use parking_lot::Mutex;
 use serde_json::json;
 use std::sync::Arc;
 use tinychannels_bus::channel::{ChannelRef, ConversationRef};
@@ -81,7 +82,7 @@ async fn the_legacy_channel_reports_the_same_facts() {
 }
 
 #[tokio::test]
-async fn the_adapter_describes_itself_and_manages_no_lifecycle_of_its_own() {
+async fn the_adapter_describes_itself_without_starting_a_gateway() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(wiremock::matchers::path("/users/@me"))
@@ -109,6 +110,18 @@ async fn the_adapter_describes_itself_and_manages_no_lifecycle_of_its_own() {
         channel.v2_capabilities()
     );
 
+    let status = ChannelAdapter::status(&channel).await.unwrap();
+    assert_eq!(status.channel_id, "discord");
+    assert_eq!(status.health_state.as_deref(), Some("healthy"));
+}
+
+#[tokio::test]
+async fn gateway_listener_cleans_up_after_aborted_start_and_restarts_once() {
+    use futures_util::{SinkExt, StreamExt};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio_tungstenite::tungstenite::Message;
+    use wiremock::matchers::path;
+
     struct Sink;
     #[async_trait::async_trait]
     impl ChannelInboundSink for Sink {
@@ -116,11 +129,373 @@ async fn the_adapter_describes_itself_and_manages_no_lifecycle_of_its_own() {
             Ok(())
         }
     }
-    ChannelAdapter::start(&channel, &Sink).await.unwrap();
-    ChannelAdapter::stop(&channel).await.unwrap();
-    let status = ChannelAdapter::status(&channel).await.unwrap();
-    assert_eq!(status.channel_id, "discord");
-    assert_eq!(status.health_state.as_deref(), Some("healthy"));
+
+    let rest = MockServer::start().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let websocket_url = format!("ws://{}", listener.local_addr().unwrap());
+    Mock::given(method("GET"))
+        .and(path("/gateway/bot"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"url": websocket_url})))
+        .mount(&rest)
+        .await;
+
+    let sessions = Arc::new(AtomicUsize::new(0));
+    let accepted = sessions.clone();
+    let (ready_tx, mut ready_rx) = tokio::sync::mpsc::channel(2);
+    let gateway = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (socket, _) = listener.accept().await.unwrap();
+            accepted.fetch_add(1, Ordering::SeqCst);
+            let mut websocket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            websocket
+                .send(Message::Text(
+                    json!({"op": 10, "d": {"heartbeat_interval": 60_000}})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            let identify =
+                tokio::time::timeout(std::time::Duration::from_secs(2), websocket.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&identify.to_string()).unwrap()["op"],
+                2
+            );
+            ready_tx.send(()).await.unwrap();
+            while websocket.next().await.is_some() {}
+        }
+    });
+
+    let channel = Arc::new(channel_for(&rest));
+    let sink = Arc::new(Sink);
+    let first_channel = channel.clone();
+    let first_sink = sink.clone();
+    let first = tokio::spawn(async move {
+        ChannelAdapter::start(first_channel.as_ref(), first_sink.as_ref()).await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), ready_rx.recv())
+        .await
+        .expect("first Gateway session starts")
+        .unwrap();
+
+    let duplicate = ChannelAdapter::start(channel.as_ref(), sink.as_ref()).await;
+    assert!(
+        duplicate.is_err(),
+        "a second Gateway session must be rejected"
+    );
+
+    // Aborting the caller drops the typed start future; its ownership guard
+    // must release the active-session slot and close the Gateway connection.
+    first.abort();
+    let _ = first.await;
+
+    let second_channel = channel.clone();
+    let second_sink = sink.clone();
+    let second = tokio::spawn(async move {
+        ChannelAdapter::start(second_channel.as_ref(), second_sink.as_ref()).await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), ready_rx.recv())
+        .await
+        .expect("the same configured channel can restart after caller cancellation")
+        .unwrap();
+    ChannelAdapter::stop(channel.as_ref()).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), second)
+        .await
+        .expect("stop cancels and joins the second Gateway session")
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), gateway)
+        .await
+        .expect("both mock Gateway sessions close")
+        .unwrap();
+    assert_eq!(sessions.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn typed_gateway_delivers_the_original_rich_ingress_to_its_sink() {
+    use futures_util::{SinkExt, StreamExt};
+    use tinychannels_bus::{ChannelIngress, ContentPart};
+    use tokio_tungstenite::tungstenite::Message;
+    use wiremock::matchers::path;
+
+    let rest = MockServer::start().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let websocket_url = format!("ws://{}", listener.local_addr().unwrap());
+    Mock::given(method("GET"))
+        .and(path("/gateway/bot"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"url": websocket_url})))
+        .mount(&rest)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/channels/{}",
+            crate::providers::discord::support::THREAD
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": crate::providers::discord::support::THREAD,
+            "type": 11,
+            "parent_id": crate::providers::discord::support::CHANNEL,
+        })))
+        .mount(&rest)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/cdn/voice-message.ogg"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            crate::providers::discord::support::OGG_FIXTURE.to_vec(),
+            "audio/ogg",
+        ))
+        .mount(&rest)
+        .await;
+
+    let rest_uri = rest.uri();
+    let gateway = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+        ws.send(Message::Text(
+            json!({"op": 10, "d": {"heartbeat_interval": 60000}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let identify = ws.next().await.unwrap().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&identify.to_string()).unwrap()["op"],
+            2
+        );
+        ws.send(Message::Text(json!({"op": 1, "s": 11}).to_string().into()))
+            .await
+            .unwrap();
+        let heartbeat = ws.next().await.unwrap().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&heartbeat.to_string()).unwrap(),
+            json!({"op": 1, "d": 11})
+        );
+        ws.send(Message::Text(
+            json!({"op": 0, "s": 11, "t": "THREAD_CREATE", "d": {
+                "id": crate::providers::discord::support::THREAD,
+                "type": 11,
+                "parent_id": crate::providers::discord::support::CHANNEL
+            }})
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+        ws.send(Message::Text(
+            json!({
+                "op": 0, "s": 12, "t": "MESSAGE_CREATE", "d": {
+                    "id": "1111111111111111111",
+                    "channel_id": crate::providers::discord::support::THREAD,
+                    "guild_id": "999000333",
+                    "content": "",
+                    "flags": 8192,
+                    "author": {"id": "42", "username": "alice"},
+                    "message_reference": {"message_id": "2222222222222222222"},
+                    "attachments": [{
+                        "id": "5",
+                        "url": format!("{rest_uri}/cdn/voice-message.ogg"),
+                        "filename": "voice-message.ogg",
+                        "content_type": "audio/ogg",
+                        "duration_secs": 0.2,
+                        "waveform": "AQID"
+                    }]
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+        while ws.next().await.is_some() {}
+    });
+
+    struct IngressSink(tokio::sync::mpsc::Sender<ChannelIngress>);
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for IngressSink {
+        async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+            self.0
+                .send(ingress)
+                .await
+                .map_err(|error| ChannelSendError {
+                    kind: SendErrorKind::Unknown,
+                    message: error.to_string(),
+                    retryable: false,
+                    ..Default::default()
+                })
+        }
+    }
+
+    let (ingress_tx, mut ingress_rx) = tokio::sync::mpsc::channel(1);
+    let channel = Arc::new(
+        DiscordChannel::new(
+            crate::providers::discord::support::BOT_TOKEN.into(),
+            None,
+            None,
+            vec![],
+            false,
+            false,
+        )
+        .with_api_base(rest.uri())
+        .with_voice_media_store(Arc::new(
+            crate::providers::discord::support::MemoryVoice::default(),
+        ))
+        .with_transcriber(Arc::new(
+            crate::providers::discord::support::FixedTranscriber(Some("spoken words")),
+        )),
+    );
+    let sink = Arc::new(IngressSink(ingress_tx));
+    let channel_task = channel.clone();
+    let sink_task = sink.clone();
+    let listener_task = tokio::spawn(async move {
+        ChannelAdapter::start(channel_task.as_ref(), sink_task.as_ref()).await
+    });
+    let ingress = tokio::time::timeout(std::time::Duration::from_secs(3), ingress_rx.recv())
+        .await
+        .expect("typed Gateway delivers ingress")
+        .unwrap();
+    let ChannelIngress::Inbound(envelope) = ingress else {
+        panic!("expected the original inbound envelope");
+    };
+    assert!(envelope.raw.is_some());
+    assert!(envelope.media.iter().any(|media| media.opaque_id.is_some()));
+    assert!(
+        matches!(envelope.parts.as_slice(), [ContentPart::VoiceNote { voice_note }] if voice_note.media.opaque_id.is_some() && voice_note.transcript.as_ref().is_some_and(|t| t.text == "spoken words"))
+    );
+    assert_eq!(envelope.reply_to_id.as_deref(), Some("2222222222222222222"));
+    assert_eq!(
+        envelope.conversation.thread_id.as_deref(),
+        Some(crate::providers::discord::support::THREAD)
+    );
+    assert_eq!(
+        envelope.conversation.parent_id.as_deref(),
+        Some(crate::providers::discord::support::CHANNEL)
+    );
+
+    ChannelAdapter::stop(channel.as_ref()).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), listener_task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), gateway)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn blocked_typed_delivery_does_not_stop_gateway_heartbeat_handling() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::sync::{Notify, oneshot};
+    use tokio_tungstenite::tungstenite::Message;
+    use wiremock::matchers::path;
+
+    struct BlockingSink {
+        entered: Mutex<Option<oneshot::Sender<()>>>,
+        release: Notify,
+    }
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for BlockingSink {
+        async fn push(&self, _: tinychannels_bus::ChannelIngress) -> Result<(), ChannelSendError> {
+            if let Some(entered) = self.entered.lock().take() {
+                let _ = entered.send(());
+            }
+            self.release.notified().await;
+            Ok(())
+        }
+    }
+
+    let rest = MockServer::start().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let websocket_url = format!("ws://{}", listener.local_addr().unwrap());
+    Mock::given(method("GET"))
+        .and(path("/gateway/bot"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"url": websocket_url})))
+        .mount(&rest)
+        .await;
+    let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
+    let (request_tx, request_rx) = oneshot::channel();
+    let gateway = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+        ws.send(Message::Text(
+            json!({"op": 10, "d": {"heartbeat_interval": 60000}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let _identify = ws.next().await.unwrap().unwrap();
+        let _initial_heartbeat = ws.next().await.unwrap().unwrap();
+        ws.send(Message::Text(
+            json!({
+                "op": 0, "s": 20, "t": "MESSAGE_CREATE", "d": {
+                    "id": "1111111111111111111", "channel_id": "555000111", "content": "hello",
+                    "author": {"id": "42"}
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+        request_rx.await.unwrap();
+        ws.send(Message::Text(json!({"op": 1, "s": 21}).to_string().into()))
+            .await
+            .unwrap();
+        let received = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next()).await;
+        let responded = received
+            .ok()
+            .flatten()
+            .and_then(Result::ok)
+            .is_some_and(|frame| {
+                serde_json::from_str::<serde_json::Value>(&frame.to_string())
+                    .is_ok_and(|value| value == json!({"op": 1, "d": 21}))
+            });
+        let _ = heartbeat_tx.send(responded);
+        while ws.next().await.is_some() {}
+    });
+
+    let channel = Arc::new(crate::providers::discord::support::channel_for(&rest));
+    let (started_tx, started_rx) = oneshot::channel();
+    let sink = Arc::new(BlockingSink {
+        entered: Mutex::new(Some(started_tx)),
+        release: Notify::new(),
+    });
+    let start_channel = channel.clone();
+    let start_sink = sink.clone();
+    let start = tokio::spawn(async move {
+        ChannelAdapter::start(start_channel.as_ref(), start_sink.as_ref()).await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), started_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    request_tx.send(()).unwrap();
+    let responded = tokio::time::timeout(std::time::Duration::from_secs(3), heartbeat_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    sink.release.notify_one();
+    ChannelAdapter::stop(channel.as_ref()).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), start)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), gateway)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        responded,
+        "Gateway op 1 heartbeat must be answered while sink delivery is pending"
+    );
 }
 
 #[tokio::test]
