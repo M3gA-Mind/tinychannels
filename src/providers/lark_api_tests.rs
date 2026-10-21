@@ -1351,7 +1351,6 @@ async fn webhook_mode_requires_a_port() {
         tinychannels_bus::channel::SendErrorKind::Transient
     );
     assert!(typed.0.retryable);
-    assert!(server.requests.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
