@@ -8,6 +8,14 @@ use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::time::Duration;
 
+struct TelegramListenerGuard<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for TelegramListenerGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 #[derive(Debug)]
 struct TelegramPreDispatchError;
 
@@ -1904,13 +1912,17 @@ Ensure only one `openhuman` process is using this bot token."
                         .and_then(serde_json::Value::as_i64)
                         .unwrap_or_default();
                     if update_id > 0 && !self.track_update_id(update_id) {
+                        offset = offset.max(update_id.saturating_add(1));
                         continue;
                     }
-
-                    // Advance offset past this update
-                    if let Some(uid) = update.get("update_id").and_then(serde_json::Value::as_i64) {
-                        offset = uid + 1;
-                    }
+                    // The update is acknowledged locally only after its
+                    // provider-owned action or typed ingress has succeeded.
+                    let commit_update = |offset: &mut i64| {
+                        if update_id > 0 {
+                            self.track_update_id(update_id);
+                        }
+                        *offset = (*offset).max(update_id.saturating_add(1));
+                    };
 
                     if let Some(query_id) = update
                         .get("callback_query")
@@ -1920,11 +1932,13 @@ Ensure only one `openhuman` process is using this bot token."
                         self.acknowledge_callback(query_id).await;
                         if !self.callback_is_allowed(update) {
                             tracing::debug!("dropped Telegram callback from a disallowed user");
+                            commit_update(&mut offset);
                             continue;
                         }
                         if let Some(event) = Self::callback_event(update) {
                             self.deliver_listener_event(typed_sink, event).await?;
                         }
+                        commit_update(&mut offset);
                         continue;
                     }
 
@@ -2029,8 +2043,10 @@ Ensure only one `openhuman` process is using this bot token."
                                     self.deliver_listener_event(typed_sink, event).await?;
                                 }
                             }
+                            commit_update(&mut offset);
                             continue;
                         }
+                        commit_update(&mut offset);
                         continue;
                     }
 
@@ -2102,11 +2118,13 @@ Ensure only one `openhuman` process is using this bot token."
                             };
                             self.deliver_listener_event(typed_sink, event).await?;
                         }
+                        commit_update(&mut offset);
                         continue;
                     }
 
                     let Some(msg) = self.parse_update_message_or_voice(update).await else {
                         self.handle_unauthorized_message(update).await;
+                        commit_update(&mut offset);
                         continue;
                     };
 
@@ -2143,6 +2161,7 @@ Ensure only one `openhuman` process is using this bot token."
                             }
                         }
                     }
+                    commit_update(&mut offset);
                 }
             }
         }
@@ -3038,15 +3057,38 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
 
     async fn start(
         &self,
-        _sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
     ) -> Result<(), crate::channel::ChannelSendError> {
-        // The configured module's Running task owns the single long-poll loop
-        // and publishes the same Telegram-normalized ingress into TinyBus.
-        let _ = _sink;
-        Ok(())
+        use std::sync::atomic::Ordering;
+
+        if self
+            .listener_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(crate::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
+                message: "Telegram listener is already running".into(),
+                retryable: false,
+                ..Default::default()
+            });
+        }
+        let _guard = TelegramListenerGuard(&self.listener_running);
+        let _ = self.listener_cancel.send(false);
+        let cancellation = self.listener_cancel.subscribe();
+        self.listen_loop(None, Some(sink), cancellation)
+            .await
+            .map_err(|error| crate::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: error.to_string(),
+                retryable: true,
+                sent_before_error: false,
+                ..Default::default()
+            })
     }
 
     async fn stop(&self) -> Result<(), crate::channel::ChannelSendError> {
+        let _ = self.listener_cancel.send(true);
         Ok(())
     }
 
