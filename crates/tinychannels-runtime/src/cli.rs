@@ -4,7 +4,9 @@
 //! dependency and is never part of a desktop UI.
 
 use async_trait::async_trait;
+use std::sync::{Arc, Mutex};
 use tokio::io::{self, AsyncBufRead, AsyncBufReadExt, BufReader};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::channel::{
@@ -15,12 +17,42 @@ use crate::channel::{
 };
 
 /// Console channel. `/quit` or `/exit` ends the listen loop.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct CliChannel;
+#[derive(Debug, Clone)]
+pub struct CliChannel {
+    cancellation: Arc<Mutex<CancellationToken>>,
+}
+
+impl Default for CliChannel {
+    fn default() -> Self {
+        Self {
+            cancellation: Arc::new(Mutex::new(CancellationToken::new())),
+        }
+    }
+}
 
 impl CliChannel {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    fn start_token(&self) -> CancellationToken {
+        let mut guard = self
+            .cancellation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if guard.is_cancelled() {
+            *guard = CancellationToken::new();
+        }
+        guard.clone()
+    }
+
+    async fn start_with_reader<R: AsyncBufRead + Unpin>(
+        &self,
+        reader: R,
+        sink: &(dyn ChannelInboundSink + Send + Sync),
+    ) {
+        let cancellation = self.start_token();
+        forward_lines(reader, sink, &cancellation).await;
     }
 }
 
@@ -29,9 +61,17 @@ impl CliChannel {
 async fn forward_lines<R: AsyncBufRead + Unpin>(
     reader: R,
     sink: &(dyn ChannelInboundSink + Send + Sync),
+    cancellation: &CancellationToken,
 ) {
     let mut lines = reader.lines();
-    while let Ok(Some(line)) = lines.next_line().await {
+    loop {
+        let result = tokio::select! {
+            _ = cancellation.cancelled() => break,
+            result = lines.next_line() => result,
+        };
+        let Ok(Some(line)) = result else {
+            break;
+        };
         let line = line.trim().to_owned();
         if line.is_empty() {
             continue;
@@ -126,11 +166,15 @@ impl ChannelAdapter for CliChannel {
         &self,
         sink: &(dyn ChannelInboundSink + Send + Sync),
     ) -> Result<(), ChannelSendError> {
-        forward_lines(BufReader::new(io::stdin()), sink).await;
+        self.start_with_reader(BufReader::new(io::stdin()), sink).await;
         Ok(())
     }
 
     async fn stop(&self) -> Result<(), ChannelSendError> {
+        self.cancellation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .cancel();
         Ok(())
     }
 
