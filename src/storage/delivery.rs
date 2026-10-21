@@ -137,11 +137,15 @@ fn write_options() -> WriteOptions {
 }
 
 fn decode_entry(found: Versioned<Value>) -> Result<QueuedDelivery, DeliveryQueueError> {
-    let stored: StoredDelivery = serde_json::from_value(found.doc)
-        .map_err(|_| invalid("stored delivery record is unreadable"))?;
-    let entry = QueuedDelivery::from(stored);
+    let entry = match serde_json::from_value::<StoredDelivery>(found.doc.clone()) {
+        Ok(stored) => QueuedDelivery::from(stored),
+        Err(_) => serde_json::from_value::<QueuedDelivery>(found.doc)
+            .map_err(|_| invalid("stored delivery record is unreadable"))?,
+    };
     // The id is derived from the intent, so the document must sit under it.
-    if doc_id(&entry.id).ok().as_deref() != Some(found.id.as_str()) {
+    // Older records used the raw id as their document key; current records
+    // hash it so arbitrary idempotency keys remain valid storage identifiers.
+    if doc_id(&entry.id).ok().as_deref() != Some(found.id.as_str()) && entry.id != found.id {
         return Err(invalid("stored delivery record is unreadable"));
     }
     validate_entry(&entry)?;
