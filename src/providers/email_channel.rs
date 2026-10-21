@@ -363,7 +363,9 @@ impl EmailChannel {
                 && let Some(parsed) = MessageParser::default().parse(body)
             {
                 let sender = Self::extract_sender(&parsed);
+                #[cfg(test)]
                 let subject = parsed.subject().unwrap_or("(no subject)").to_string();
+                #[cfg(test)]
                 let body_text = Self::extract_text(&parsed);
                 #[cfg(test)]
                 let content = format!("Subject: {}\n\n{}", subject, body_text);
