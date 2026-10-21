@@ -345,17 +345,17 @@ impl IrcChannel {
 
     async fn listen_owned(
         &self,
-        ingress: IrcIngress<'_>,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
         mut cancellation: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> anyhow::Result<()> {
         let result = if let Some(cancel) = &mut cancellation {
             tokio::select! {
                 biased;
                 _ = cancel.wait_for(|value| *value) => Ok(()),
-                result = self.listen_loop(ingress) => result,
+                result = self.listen_loop(sink) => result,
             }
         } else {
-            self.listen_loop(ingress).await
+            self.listen_loop(sink).await
         };
         self.clear_writer().await;
         result
@@ -403,7 +403,22 @@ impl IrcChannel {
         }
     }
 
-    async fn listen_loop(&self, ingress: IrcIngress<'_>) -> anyhow::Result<()> {
+    async fn health_check(&self) -> bool {
+        // Lightweight connectivity check: TLS connect + QUIT.
+        match self.connect().await {
+            Ok(tls) => {
+                let (_, mut writer) = tokio::io::split(tls);
+                let _ = Self::send_raw(&mut writer, "QUIT :health check").await;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    async fn listen_loop(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> anyhow::Result<()> {
         let mut current_nick = self.nickname.clone();
         tracing::info!(
             "IRC channel connecting to {}:{} as {}...",
@@ -634,9 +649,9 @@ impl IrcChannel {
                         ..Default::default()
                     };
 
-                    if !ingress.publish(envelope).await? {
-                        return Ok(());
-                    }
+                    sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                        .await
+                        .map_err(|error| anyhow::anyhow!(error.message))?;
                 }
 
                 // ERR_PASSWDMISMATCH (464) or other fatal errors
