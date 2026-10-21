@@ -1629,6 +1629,12 @@ struct InteractionChannel(StdMutex<Vec<String>>);
 #[async_trait::async_trait]
 impl crate::provider::TestProviderBehavior for InteractionChannel {
     fn test_provider_id(&self) -> &'static str { "interaction-fixture" }
+    fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+        capabilities.content.text.outbound = true;
+        capabilities.streaming_reply_pipeline = true;
+        capabilities
+    }
     async fn test_send(&self, message: &tinychannels_bus::ChannelOutboundMessage) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
         self.0
             .lock()
