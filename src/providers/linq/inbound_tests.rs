@@ -6,6 +6,14 @@ use tinychannels_bus::{ContentPart, ConversationKind};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
+fn make_channel() -> LinqChannel {
+    LinqChannel::new(
+        "test-token".into(),
+        "+15551234567".into(),
+        vec!["+1234567890".into()],
+    )
+}
+
 async fn deliver(
     channel: &LinqChannel,
     body: &str,
