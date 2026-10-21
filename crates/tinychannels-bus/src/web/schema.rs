@@ -10,4 +10,3 @@ pub fn web_event_schema_json() -> Result<String, serde_json::Error> {
         .into_root_schema_for::<WebChannelEvent>();
     serde_json::to_string_pretty(&schema)
 }
-

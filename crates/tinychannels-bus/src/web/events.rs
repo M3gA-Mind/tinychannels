@@ -760,4 +760,3 @@ impl WebChannelEvent {
         }
     }
 }
-

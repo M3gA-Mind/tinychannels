@@ -180,4 +180,3 @@ impl std::fmt::Display for QueueMode {
         })
     }
 }
-

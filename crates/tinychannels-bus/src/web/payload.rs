@@ -33,4 +33,3 @@ pub fn cap_web_args(args: Option<serde_json::Value>) -> Option<serde_json::Value
         Some(serde_json::Value::String(cap_web_output(rendered)))
     }
 }
-

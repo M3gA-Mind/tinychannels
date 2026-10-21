@@ -21,4 +21,3 @@ pub fn legacy_event_alias(name: &str, enabled: bool) -> Option<String> {
         None
     }
 }
-
