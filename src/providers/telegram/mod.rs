@@ -7,6 +7,7 @@
 
 mod attachments;
 mod bot_api;
+mod capabilities;
 mod channel;
 mod channel_core;
 mod channel_ops;

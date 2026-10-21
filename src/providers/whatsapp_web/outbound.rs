@@ -1,8 +1,8 @@
 //! Typed outbound delivery for the WhatsApp Web adapter.
 
-use super::WhatsAppWebChannel;
 use super::client::OutboundClient;
 use super::media_build::MediaBuild;
+use super::{WhatsAppWebChannel, failure_of};
 use crate::channel::{
     ChannelSendOutcome, MessageReceipt, MessageReceiptPart, MessageReceiptPartKind,
 };
@@ -12,6 +12,7 @@ use crate::providers::whatsapp_shared::plan::{
 };
 use crate::providers::whatsapp_shared::text::split_text;
 use crate::providers::whatsapp_shared::vcard::{self, ContactCard};
+use async_trait::async_trait;
 use std::sync::Arc;
 use tinychannels_bus::ChannelOutboundMessage;
 use tinychannels_bus::channel::MessageReceiptSourceResult;
@@ -515,3 +516,109 @@ impl WhatsAppWebChannel {
 #[cfg(test)]
 #[path = "outbound_tests.rs"]
 mod tests;
+
+#[cfg(feature = "whatsapp-web")]
+#[async_trait]
+impl crate::channel::ChannelTypedSend for WhatsAppWebChannel {
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError>
+    {
+        self.send_v2(message)
+            .await
+            .map_err(WaFailure::into_send_error)
+    }
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[async_trait]
+impl crate::channel::ChannelTyping for WhatsAppWebChannel {
+    async fn start_typing(
+        &self,
+        conversation_id: &str,
+    ) -> std::result::Result<(), crate::channel::ChannelSendError> {
+        self.start_typing_provider(conversation_id)
+            .await
+            .map_err(|error| failure_of(&error).into_send_error())
+    }
+
+    async fn stop_typing(
+        &self,
+        conversation_id: &str,
+    ) -> std::result::Result<(), crate::channel::ChannelSendError> {
+        self.stop_typing_provider(conversation_id)
+            .await
+            .map_err(|error| failure_of(&error).into_send_error())
+    }
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[async_trait]
+impl crate::channel::ChannelReaction for WhatsAppWebChannel {
+    async fn send_reaction(
+        &self,
+        channel: &tinychannels_bus::channel::ChannelRef,
+        conversation: &tinychannels_bus::channel::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::channel::ChannelReaction,
+        remove: bool,
+    ) -> std::result::Result<(), crate::channel::ChannelSendError> {
+        if channel.id != "whatsapp" {
+            return Err(
+                WaFailure::rejected("reaction channel does not match WhatsApp").into_send_error(),
+            );
+        }
+        self.react_v2(conversation, provider_message_id, reaction, remove)
+            .await
+            .map_err(WaFailure::into_send_error)
+    }
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[async_trait]
+impl crate::channel::ChannelEdit for WhatsAppWebChannel {
+    async fn edit(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::MessageReceipt,
+        crate::channel::ChannelSendError,
+    > {
+        self.edit_v2(receipt, &intent)
+            .await
+            .map_err(WaFailure::into_send_error)
+    }
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[async_trait]
+impl crate::channel::ChannelDelete for WhatsAppWebChannel {
+    async fn delete(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> std::result::Result<(), crate::channel::ChannelSendError> {
+        self.delete_v2(receipt)
+            .await
+            .map_err(WaFailure::into_send_error)
+    }
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[async_trait]
+impl crate::channel::ChannelStreamingDraft for WhatsAppWebChannel {
+    async fn upsert_draft(
+        &self,
+        _previous: Option<&tinychannels_bus::channel::MessageReceipt>,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::MessageReceipt,
+        crate::channel::ChannelSendError,
+    > {
+        Err(
+            WaFailure::unsupported("WhatsApp messages cannot be streamed as edited drafts")
+                .into_send_error(),
+        )
+    }
+}

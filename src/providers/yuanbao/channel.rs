@@ -76,7 +76,7 @@ pub struct YuanbaoChannel {
     /// user exists. See `register_recipient_alias` / `resolve_recipient`.
     recipient_aliases: TokioMutex<HashMap<String, String>>,
     /// Host-scoped services used by the native typed-send adapter.
-    native: NativeState,
+    pub(super) native: NativeState,
     voice_http: reqwest::Client,
     /// Single-owner cancellation for the native typed listener.
     listener: ListenerSlot,

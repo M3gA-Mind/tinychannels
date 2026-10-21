@@ -6,7 +6,10 @@ use crate::providers::whatsapp_shared::inbound::{
     self, DownloadedAttachment, InboundKind, MAX_INBOUND_MEDIA_BYTES, MAX_INBOUND_VOICE_BYTES,
 };
 use crate::providers::whatsapp_shared::vcard;
+use crate::traits::ChannelMessage;
 use sha2::Digest as _;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tinychannels_bus::{
     ChannelEvent, ChannelEventKind, ChannelInboundEnvelope, ChannelIngress, ChannelReaction,
     ChannelRef, ContentPart, ConversationRef, SenderRef,
@@ -171,6 +174,181 @@ fn contact_card(contact: &wa::message::ContactMessage) -> vcard::ContactCard {
         card.display_name = contact.display_name.clone().unwrap_or_default();
     }
     card
+}
+
+#[cfg(feature = "whatsapp-web")]
+impl InboundState {
+    /// Owned entry point for the bot's `on_event` closure.
+    pub(super) async fn handle_owned(self, event: Arc<wacore::types::events::Event>) {
+        self.handle_event(&event).await;
+    }
+
+    /// Whether any form of the sender's identity is on the allow-list.
+    /// Empty list ⇒ allow-all (matches Cloud API behaviour).
+    pub(super) fn is_sender_allowed(&self, allow_forms: &[String]) -> bool {
+        self.allowed_numbers.is_empty()
+            || self
+                .allowed_numbers
+                .iter()
+                .any(|n| n == "*" || allow_forms.contains(n))
+    }
+
+    /// React to one upstream bot event.
+    pub(super) async fn handle_event(&self, event: &wacore::types::events::Event) {
+        use wacore::types::events::Event;
+        match event {
+            Event::Messages(batch) => {
+                for inbound in WhatsAppWebChannel::non_self_echoes(
+                    &batch.messages,
+                    |inbound: &wacore::types::events::InboundMessage| {
+                        inbound.info.source.is_from_me
+                    },
+                ) {
+                    self.handle_inbound(inbound).await;
+                }
+            }
+            Event::Receipt(receipt) => self.publish_receipt(receipt).await,
+            Event::Connected(_) => {
+                let account = self
+                    .client
+                    .lock()
+                    .as_ref()
+                    .and_then(|client| client.linked_account())
+                    .map(|jid| jid.to_string());
+                self.identity.observe(account.as_deref());
+                self.connected.store(true, Ordering::Release);
+                tracing::info!("✅ WhatsApp Web connected successfully!");
+            }
+            Event::LoggedOut(_) => {
+                self.connected.store(false, Ordering::Release);
+                tracing::warn!("❌ WhatsApp Web was logged out!");
+            }
+            Event::StreamError(stream_error) => {
+                self.connected.store(false, Ordering::Release);
+                tracing::error!("❌ WhatsApp Web stream error: {:?}", stream_error);
+            }
+            // The pair code and QR payload are short-lived link
+            // credentials — anyone reading the logs while they
+            // are valid can hijack the session. Surface only a
+            // non-sensitive notice; the raw payload is never
+            // logged at any level. Surfacing the code to the
+            // user is the responsibility of an upstream UX
+            // path (e.g. a JSON-RPC event the frontend renders).
+            Event::PairingCode { .. } => {
+                tracing::info!(
+                    "🔑 WhatsApp Web pair code received. Enter the code shown on \
+                     your linking surface into WhatsApp > Linked Devices."
+                );
+            }
+            Event::PairingQrCode { .. } => {
+                tracing::info!(
+                    "📱 WhatsApp Web QR code received. Render via QR generator and \
+                     scan with WhatsApp > Linked Devices."
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// Translate one non-self-echo inbound message and forward it when the
+    /// sender is allowed.
+    async fn handle_inbound(&self, inbound: &wacore::types::events::InboundMessage) {
+        let msg = &inbound.message;
+        let info = &inbound.info;
+        let text = WhatsAppWebChannel::extract_message_text(
+            msg.conversation.as_deref(),
+            msg.extended_text_message.text.as_deref(),
+        );
+
+        // Sender JID can use either the legacy `s.whatsapp.net`
+        // server (phone-number addressing) or the newer `lid`
+        // server (privacy-preserving identifier): a phone in
+        // E.164, or a LID kept as a JID (`sender_identity`).
+        let (normalized, allow_forms) = WhatsAppWebChannel::sender_identity(
+            &info.source.sender,
+            info.source.sender_alt.as_ref(),
+        );
+        // The name the sender set for themselves, if any.
+        let sender_name = Some(info.push_name.trim())
+            .filter(|name| !name.is_empty())
+            .map(str::to_string);
+        let chat = info.source.chat.to_string();
+        let reply_target = WhatsAppWebChannel::compute_reply_target(&chat, &normalized);
+
+        // Routine logs only carry coarse metadata — no raw
+        // sender identifier, no message body — so PII does
+        // not leak into application logs at any level.
+        // For DM chats `chat` is `<phone>@s.whatsapp.net`,
+        // which still carries the participant's phone
+        // number. Redact the user part so the routine
+        // log keeps only the server suffix (DM vs group)
+        // and a coarse identifier tail.
+        tracing::info!(
+            "📨 WhatsApp inbound: chat={} sender={} text_len={}",
+            WhatsAppWebChannel::redact_recipient(&chat),
+            WhatsAppWebChannel::redact_recipient(&normalized),
+            text.len()
+        );
+
+        if !self.is_sender_allowed(&allow_forms) {
+            tracing::warn!(
+                "WhatsApp Web: message from {} not in allowed list",
+                WhatsAppWebChannel::redact_recipient(&normalized)
+            );
+            return;
+        }
+
+        // Record group provenance: this group has had at
+        // least one allow-listed participant message in,
+        // so subsequent outbound replies into the same
+        // group are legitimate. Outbound to groups
+        // without provenance is rejected by
+        // `should_allow_outbound`.
+        if WhatsAppWebChannel::is_group_jid(&chat) {
+            self.allowed_groups.lock().insert(chat.clone());
+        }
+        if !info.id.is_empty() {
+            self.authors
+                .lock()
+                .insert(&info.id, &info.source.sender.to_non_ad_string());
+        }
+        if self.identity.is_conflicted() {
+            tracing::warn!("[whatsapp_web] the linked account changed; inbound message dropped");
+            return;
+        }
+        match self
+            .publish_typed(
+                inbound,
+                &reply_target,
+                &normalized,
+                sender_name.clone(),
+                WhatsAppWebChannel::is_group_jid(&chat),
+            )
+            .await
+        {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!("[whatsapp_web] typed inbound delivery failed: {error}");
+                return;
+            }
+        }
+        let message = ChannelMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            channel: "whatsapp".to_string(),
+            sender: normalized,
+            reply_target,
+            content: text,
+            timestamp: chrono::Utc::now().timestamp_millis() as u64,
+            topic_id: None,
+            reply_to_id: None,
+            thread_ts: None,
+            sender_name,
+        };
+        if let Err(e) = self.tx.send(message).await {
+            tracing::error!("Failed to forward WhatsApp message to channel: {}", e);
+        }
+    }
 }
 
 impl InboundState {

@@ -380,11 +380,13 @@ pub fn build_whatsapp_web_channel(
         backend = "web",
         "[channels] whatsapp web enabled (session not logged)"
     );
-    let mut channel = crate::WhatsAppWebChannel::new(
-        wa.session_path.clone().unwrap_or_default(),
-        wa.pair_phone.clone(),
-        wa.pair_code.clone(),
-        wa.allowed_numbers.clone(),
+    let mut channel = crate::providers::whatsapp_web::WhatsAppWebChannel::from_config(
+        crate::providers::whatsapp_web::WhatsAppWebConfig {
+            session_path: wa.session_path.clone().unwrap_or_default(),
+            pair_phone: wa.pair_phone.clone(),
+            pair_code: wa.pair_code.clone(),
+            allowed_numbers: wa.allowed_numbers.clone(),
+        },
     );
     if let Some(lifecycle) = host.lifecycle() {
         channel = channel.with_lifecycle(lifecycle);

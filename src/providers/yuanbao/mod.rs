@@ -13,6 +13,7 @@
 // `field_reassign_with_default` lint isn't worth churning that code.
 #![allow(clippy::field_reassign_with_default)]
 
+mod capabilities;
 pub mod channel;
 pub mod config;
 pub mod connect;
