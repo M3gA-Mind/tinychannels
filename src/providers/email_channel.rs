@@ -654,6 +654,7 @@ impl EmailChannel {
             }
 
             let accepted = match delivery {
+                #[cfg(test)]
                 EmailDelivery::Legacy(tx) => self.dispatch_email(email, tx).await,
                 EmailDelivery::Typed(sink) => {
                     self.dispatch_typed_email(&email, *sink).await?;
