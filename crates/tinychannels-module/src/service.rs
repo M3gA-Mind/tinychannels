@@ -190,13 +190,11 @@ impl Channels {
             });
         }
 
-        let media_account_scope = crate::provider::configured_media_account_scope(&name, &config);
+        let media_account_scope =
+            crate::media_account::configured_media_account_scope(&name, &config);
         let hooks = Arc::new(Hooks::default());
-        let owner_host: Arc<dyn ChannelHost> = hooks.host(
-            self.host.clone(),
-            name.clone(),
-            media_account_scope.clone(),
-        );
+        let owner_host: Arc<dyn ChannelHost> =
+            hooks.host(self.host.clone(), name.clone(), media_account_scope.clone());
         let built = build_channels(&config, &owner_host, http);
         let channel = built
             .into_iter()
@@ -1082,6 +1080,186 @@ impl Channels {
         self.email.abort_upload(handle).await
     }
 
+    /// Begin bounded media ingestion for one active configured provider.
+    #[tinybus(confidential)]
+    async fn begin_media_upload(
+        &self,
+        request: tinychannels_bus::MediaUploadBegin,
+    ) -> BusResult<tinychannels_bus::MediaUploadHandle> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let activation = self.media_activation(&request.instance).await?;
+        if activation.media_account_scope.is_none() {
+            return Err(BusError::failed(
+                "configured account has no stable media identity",
+            ));
+        }
+        self.media_uploads
+            .begin(request, activation.generation)
+            .await
+    }
+
+    /// Append one ordered, retry-safe media chunk over confidential TinyBus.
+    #[tinybus(confidential)]
+    async fn append_media_upload_chunk(
+        &self,
+        chunk: tinychannels_bus::MediaUploadChunk,
+    ) -> BusResult<u32> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_uploads.binding_handle(&chunk.handle).await?;
+        if self.media_activation(&instance).await?.generation != activation {
+            return Err(BusError::failed(
+                "media upload belongs to another provider activation",
+            ));
+        }
+        self.media_uploads.append(chunk).await
+    }
+
+    /// Persist a complete upload as an opaque scoped media reference.
+    #[tinybus(confidential)]
+    async fn finish_media_upload(
+        &self,
+        request: tinychannels_bus::MediaUploadFinish,
+    ) -> BusResult<tinychannels_bus::MediaUploadResult> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_uploads.binding(&request).await?;
+        let current = self.media_activation(&instance).await?;
+        if current.generation != activation {
+            return Err(BusError::failed(
+                "media upload belongs to another provider activation",
+            ));
+        }
+        let repository = Arc::new(crate::provider::ModuleMediaRepository(
+            self.host.clone(),
+            instance,
+            current.media_account_scope,
+        ));
+        self.media_uploads
+            .clone()
+            .finish(request, activation, repository)
+            .await
+    }
+
+    /// Abort buffered media without writing a durable record.
+    #[tinybus(confidential)]
+    async fn abort_media_upload(
+        &self,
+        request: tinychannels_bus::MediaUploadFinish,
+    ) -> BusResult<()> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_uploads.binding(&request).await?;
+        if self.media_activation(&instance).await?.generation != activation {
+            return Err(BusError::failed(
+                "media upload belongs to another provider activation",
+            ));
+        }
+        self.media_uploads.abort(request).await
+    }
+
+    /// Resolve one scoped opaque reference into a short-lived chunk session.
+    #[tinybus(confidential)]
+    async fn begin_media_read(
+        &self,
+        request: tinychannels_bus::MediaReadBegin,
+    ) -> BusResult<tinychannels_bus::MediaReadInfo> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let activation = self.media_activation(&request.instance).await?;
+        let Some(account_scope) = activation.media_account_scope.as_ref() else {
+            return Err(BusError::failed(
+                "configured account has no stable media identity",
+            ));
+        };
+        if request.scope.conversation.id.trim().is_empty()
+            || request.scope.turn_id.trim().is_empty()
+            || request.media.opaque_id.as_deref().is_none_or(str::is_empty)
+            || request.max_bytes == 0
+            || request.max_bytes > tinychannels_bus::module_media::MEDIA_UPLOAD_MAX_BYTES as u64
+        {
+            return Err(BusError::failed("media resolution request is invalid"));
+        }
+        let encoded = serde_json::to_vec(&request)
+            .map_err(|_| BusError::failed("media resolution request is invalid"))?;
+        if encoded.len() > tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES {
+            return Err(BusError::failed(
+                "media resolution request exceeds its limit",
+            ));
+        }
+        let instance = request.instance.clone();
+        let repository = crate::provider::ModuleMediaRepository(
+            self.host.clone(),
+            instance.clone(),
+            Some(account_scope.clone()),
+        );
+        let media_id = request
+            .media
+            .opaque_id
+            .clone()
+            .ok_or_else(|| BusError::failed("media resolution request is invalid"))?;
+        let scope = request.scope.clone();
+        let max_bytes = request.max_bytes;
+        self.media_reads
+            .resolve(
+                request,
+                activation.generation.clone(),
+                || async move {
+                    <crate::provider::ModuleMediaRepository as tinychannels::host::MediaRepository>::read_media(
+                        &repository,
+                        scope,
+                        media_id,
+                        max_bytes,
+                    )
+                    .await
+                    .map_err(|_| BusError::failed("media could not be resolved"))
+                },
+                || async {
+                    !self.terminal.load(Ordering::SeqCst)
+                        && matches!(
+                            self.media_activation(&instance).await,
+                            Ok(current) if current == activation
+                        )
+                },
+            )
+            .await
+    }
+
+    /// Return one bounded chunk over confidential TinyBus method-reply framing.
+    #[tinybus(confidential)]
+    async fn read_media_chunk(
+        &self,
+        request: tinychannels_bus::MediaReadChunk,
+    ) -> BusResult<tinychannels_bus::MediaReadChunkResult> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_reads.binding(&request.handle).await?;
+        if self.media_activation(&instance).await?.generation != activation {
+            return Err(BusError::failed("media read belongs to another activation"));
+        }
+        self.media_reads.chunk(request).await
+    }
+
+    /// Release a resolved media read and its temporary byte buffer.
+    #[tinybus(confidential)]
+    async fn abort_media_read(&self, request: tinychannels_bus::MediaReadFinish) -> BusResult<()> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_reads.binding(&request.0).await?;
+        if self.media_activation(&instance).await?.generation != activation {
+            return Err(BusError::failed("media read belongs to another activation"));
+        }
+        self.media_reads.abort(request).await
+    }
+
     /// The providers currently running, in no particular order.
     async fn list_channels(&self) -> BusResult<Vec<String>> {
         Ok(self
@@ -1392,6 +1570,8 @@ pub(crate) mod exports {
             "ReserveRuntime", "StartRuntime", "StopRuntime",
             "DescribeConfiguredChannels", "StartOutboundChannel", "PrepareOutboundIntent",
             "PrepareChannelInbound", "PrepareChannelIdentity", "ExecuteProgressive", "ExecuteRemote", "PrepareChannelControl", "StartRuntimeWithDispatch", "PrepareRuntimeCommand",
+            "BeginMediaUpload", "AppendMediaUploadChunk", "FinishMediaUpload", "AbortMediaUpload",
+            "BeginMediaRead", "ReadMediaChunk", "AbortMediaRead",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:

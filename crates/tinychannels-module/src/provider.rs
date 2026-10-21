@@ -196,10 +196,7 @@ impl Hooks {
 pub(crate) struct ModuleMediaRepository(HostChannels, String, Option<String>);
 
 impl ModuleMediaRepository {
-    fn bind_scope(
-        &self,
-        scope: &mut tinychannels::host::MediaScope,
-    ) -> anyhow::Result<()> {
+    fn bind_scope(&self, scope: &mut tinychannels::host::MediaScope) -> anyhow::Result<()> {
         if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
             anyhow::bail!("media scope requires a conversation and originating turn");
         }
@@ -261,7 +258,10 @@ impl tinychannels::host::MediaRepository for ModuleMediaRepository {
         max_bytes: u64,
     ) -> anyhow::Result<tinychannels::host::StoredMedia> {
         self.bind_scope(&mut scope)?;
-        self.scoped_store().await?.read(scope, &opaque_id, max_bytes).await
+        self.scoped_store()
+            .await?
+            .read(scope, &opaque_id, max_bytes)
+            .await
     }
 
     async fn delete_media(

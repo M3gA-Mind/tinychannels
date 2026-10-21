@@ -9,7 +9,10 @@ fn configured_account_scope_is_stable_provider_specific_and_does_not_disclose_cr
         allowed_users: vec!["first".into()],
     });
     let first = configured_media_account_scope("dingtalk:primary", &config).unwrap();
-    assert_eq!(first, configured_media_account_scope("dingtalk:primary", &config).unwrap());
+    assert_eq!(
+        first,
+        configured_media_account_scope("dingtalk:primary", &config).unwrap()
+    );
     assert!(!first.contains("ding-secret"));
 
     config.dingtalk.as_mut().unwrap().allowed_users = vec!["changed-policy".into()];
@@ -52,7 +55,10 @@ fn required_provider_accounts_need_complete_identity_material() {
         mention_only: None,
     });
     for provider in ["qq", "lark", "mattermost"] {
-        assert!(configured_media_account_scope(provider, &config).is_some(), "{provider}");
+        assert!(
+            configured_media_account_scope(provider, &config).is_some(),
+            "{provider}"
+        );
     }
     config.qq.as_mut().unwrap().app_secret.clear();
     assert!(configured_media_account_scope("qq", &config).is_none());
