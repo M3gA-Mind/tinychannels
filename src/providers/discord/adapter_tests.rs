@@ -280,6 +280,12 @@ async fn typed_gateway_delivers_the_original_rich_ingress_to_its_sink() {
             serde_json::from_str::<serde_json::Value>(&identify.to_string()).unwrap()["op"],
             2
         );
+        // The gateway timer emits an immediate heartbeat before dispatches.
+        let initial_heartbeat = ws.next().await.unwrap().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&initial_heartbeat.to_string()).unwrap(),
+            json!({"op": 1, "d": null})
+        );
         ws.send(Message::Text(json!({"op": 1, "s": 11}).to_string().into()))
             .await
             .unwrap();
