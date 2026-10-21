@@ -4451,6 +4451,35 @@ async fn whatsapp_cloud_starts_normally_and_serves_webhook_ingress_over_the_bus(
         refused,
         BusError::MethodFailed { name, .. } if name == crate::interaction::WEBHOOK_REJECTED_ERROR
     ));
+
+    let body = serde_json::to_vec(&serde_json::json!({
+        "object": "whatsapp_business_account",
+        "entry": [{"id": "account", "changes": [{"field": "messages", "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {"phone_number_id": "123"},
+            "contacts": [{"wa_id": "15550001111", "profile": {"name": "Ada"}}],
+            "messages": [{"from": "15550001111", "id": "wamid.typed-1", "timestamp": "1700000000", "type": "text", "text": {"body": "hello from webhook"}}]
+        }}]}]
+    }))
+    .unwrap();
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(b"secret").unwrap();
+    mac.update(&body);
+    let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
+    let accepted = service
+        .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
+            channel: "whatsapp".into(),
+            interaction: tinychannels_bus::ChannelInteraction::DeliverWebhook {
+                signature: Some(signature),
+                body_base64: base64::engine::general_purpose::STANDARD.encode(body),
+            },
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        accepted,
+        tinychannels_bus::ChannelInteractionResult::WebhookAccepted(outcome)
+            if outcome.messages == 1 && outcome.events == 0 && outcome.duplicates == 0
+    ));
     service.shutdown().await.unwrap();
 }
 

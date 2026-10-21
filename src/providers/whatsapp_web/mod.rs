@@ -835,11 +835,31 @@ impl WhatsAppWebChannel {
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
         cancellation: tokio::sync::watch::Receiver<bool>,
     ) -> Result<()> {
+        self.listen_typed_with(
+            sink,
+            cancellation,
+            Self::websocket_transport(std::env::var("WHATSAPP_WS_URL").ok()),
+            whatsapp_rust_ureq_http_client::UreqHttpClient::new(),
+        )
+        .await
+    }
+
+    async fn listen_typed_with<T, H>(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+        cancellation: tokio::sync::watch::Receiver<bool>,
+        transport_factory: T,
+        http_client: H,
+    ) -> Result<()>
+    where
+        T: whatsapp_rust::transport::TransportFactory + 'static,
+        H: whatsapp_rust::http::HttpClient + 'static,
+    {
         let (tx, mut legacy_rx) = tokio::sync::mpsc::channel(1);
         let mut listener = Box::pin(self.listen_with_ingress(
             tx,
-            Self::websocket_transport(std::env::var("WHATSAPP_WS_URL").ok()),
-            whatsapp_rust_ureq_http_client::UreqHttpClient::new(),
+            transport_factory,
+            http_client,
             Some(sink),
             Some(cancellation),
         ));
@@ -1055,13 +1075,22 @@ impl crate::channel::ChannelAdapter for WhatsAppWebChannel {
 
     async fn start(
         &self,
-        _sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
     ) -> std::result::Result<(), crate::channel::ChannelSendError> {
-        // The configured module runtime owns the single linked-device session.
-        Ok(())
+        self.listener_cancel.send_replace(false);
+        self.listen_typed(sink, self.listener_cancel.subscribe())
+            .await
+            .map_err(|error| crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::Unknown,
+                message: error.to_string(),
+                retryable: true,
+                ..Default::default()
+            })
     }
 
     async fn stop(&self) -> std::result::Result<(), crate::channel::ChannelSendError> {
+        self.listener_cancel.send_replace(true);
+        self.stop_bot().await;
         Ok(())
     }
 

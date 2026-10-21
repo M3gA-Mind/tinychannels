@@ -244,6 +244,7 @@ pub(super) fn base_state(
     use std::sync::atomic::AtomicBool;
     super::InboundState {
         tx,
+        typed_tx: None,
         allowed_numbers: allowed.iter().map(|value| (*value).to_owned()).collect(),
         connected: Arc::new(AtomicBool::new(false)),
         allowed_groups: Arc::new(Mutex::new(std::collections::HashSet::new())),
