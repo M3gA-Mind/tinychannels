@@ -1289,7 +1289,7 @@ async fn webhook_mode_requires_a_port() {
     let mut channel = LarkChannel::new("a".into(), "s".into(), "verify-token".into(), None, vec![]);
     channel.receive_mode = crate::config::LarkReceiveMode::Webhook;
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let error = channel.listen(tx).await.unwrap_err();
+    let error = crate::provider_test_support::listen_v1(&channel, tx).await.unwrap_err();
     assert!(error.to_string().contains("requires `port`"), "{error}");
 }
 
@@ -1309,7 +1309,7 @@ async fn webhook_server_forwards_verified_events() {
     );
     channel.receive_mode = crate::config::LarkReceiveMode::Webhook;
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    let server = tokio::spawn(async move { channel.listen(tx).await });
+    let server = tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
 
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let url = format!("http://127.0.0.1:{port}/lark");

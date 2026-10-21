@@ -872,7 +872,7 @@ async fn injected_cloud_client_reports_connection_failure_and_listener_stays_idl
     assert!(!crate::provider_test_support::is_healthy(&channel).await);
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(10), channel.listen(tx))
+        tokio::time::timeout(std::time::Duration::from_millis(10), crate::provider_test_support::listen_v1(&channel, tx))
             .await
             .is_err()
     );

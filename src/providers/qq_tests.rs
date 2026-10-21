@@ -315,7 +315,7 @@ async fn gateway_listener_identifies_heartbeats_filters_and_routes_private_and_g
             gateway.client.clone(),
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let listening = tokio::spawn(async move { channel.listen(tx).await });
+        let listening = tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let first = rx.recv().await.unwrap();
             let second = rx.recv().await.unwrap();

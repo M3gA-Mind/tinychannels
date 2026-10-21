@@ -590,7 +590,7 @@ async fn listener_dispatches_push_then_stops_on_kickout_and_second_listen_is_noo
         .send(InboundEvent::Kickout("signed in elsewhere".into()))
         .unwrap();
     let (tx, mut received) = mpsc::channel(4);
-    tokio::time::timeout(Duration::from_secs(3), ch.listen(tx.clone()))
+    tokio::time::timeout(Duration::from_secs(3), crate::provider_test_support::listen_v1(&ch, tx.clone()))
         .await
         .unwrap()
         .unwrap();
@@ -599,7 +599,7 @@ async fn listener_dispatches_push_then_stops_on_kickout_and_second_listen_is_noo
     assert_eq!(message.sender, "alice");
     assert_eq!(message.content, "hello");
     assert!(*ch.shutdown_tx.borrow());
-    ch.listen(tx).await.unwrap();
+    crate::provider_test_support::listen_v1(&ch, tx).await.unwrap();
     assert!(received.try_recv().is_err());
 }
 
@@ -612,7 +612,7 @@ async fn listener_stops_when_inbound_channel_closes() {
     *ch.inbound_rx.lock().await = Some(rx);
     drop(incoming);
     let (tx, _rx) = mpsc::channel(1);
-    tokio::time::timeout(Duration::from_secs(3), ch.listen(tx))
+    tokio::time::timeout(Duration::from_secs(3), crate::provider_test_support::listen_v1(&ch, tx))
         .await
         .unwrap()
         .unwrap();
@@ -627,7 +627,7 @@ async fn listener_stops_when_shutdown_is_signaled() {
     let (tx, _rx) = mpsc::channel(1);
     let listener = {
         let ch = ch.clone();
-        tokio::spawn(async move { ch.listen(tx).await })
+        tokio::spawn(async move { crate::provider_test_support::listen_v1(&ch, tx).await })
     };
     tokio::time::timeout(Duration::from_secs(3), async {
         while ch.inbound_rx.lock().await.is_some() {

@@ -273,7 +273,7 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
     });
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let listening_channel = channel.clone();
-    let listening = tokio::spawn(async move { listening_channel.listen(tx).await });
+    let listening = tokio::spawn(async move { crate::provider_test_support::listen_v1(&listening_channel, tx).await });
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         let first = rx.recv().await.unwrap();
         let second = rx.recv().await.unwrap();
@@ -412,7 +412,7 @@ async fn stream_file_callback_downloads_and_publishes_typed_ingress_once() {
     });
     let (tx, mut legacy) = tokio::sync::mpsc::channel(1);
     let listening_channel = channel.clone();
-    let listening = tokio::spawn(async move { listening_channel.listen(tx).await });
+    let listening = tokio::spawn(async move { crate::provider_test_support::listen_v1(&listening_channel, tx).await });
 
     websocket.await.unwrap();
     assert!(
@@ -564,7 +564,7 @@ async fn stream_audio_callback_stores_provider_voice_and_acknowledges_frame() {
     });
     let (tx, mut legacy) = tokio::sync::mpsc::channel(1);
     let listening_channel = channel.clone();
-    let listening = tokio::spawn(async move { listening_channel.listen(tx).await });
+    let listening = tokio::spawn(async move { crate::provider_test_support::listen_v1(&listening_channel, tx).await });
 
     websocket.await.unwrap();
     assert!(
@@ -672,7 +672,7 @@ async fn unauthorized_attachment_callback_is_not_downloaded_or_published() {
     });
     let (tx, _legacy) = tokio::sync::mpsc::channel(1);
     let listening_channel = channel.clone();
-    let listening = tokio::spawn(async move { listening_channel.listen(tx).await });
+    let listening = tokio::spawn(async move { crate::provider_test_support::listen_v1(&listening_channel, tx).await });
     websocket.await.unwrap();
     assert!(
         tokio::time::timeout(std::time::Duration::from_secs(3), listening)

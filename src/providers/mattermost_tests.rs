@@ -635,7 +635,7 @@ async fn listener_recovers_from_invalid_json_and_delivers_posts_in_time_order() 
         })
         .mount(&server).await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let listener = tokio::spawn(async move { channel.listen(tx).await });
+    let listener = tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
     tokio::time::timeout(std::time::Duration::from_secs(15), async {
         let first = rx.recv().await.unwrap();
         let second = rx.recv().await.unwrap();

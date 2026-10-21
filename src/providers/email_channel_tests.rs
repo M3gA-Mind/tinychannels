@@ -1160,7 +1160,7 @@ async fn listen_retries_a_failing_server() {
     channel.config.imap_host = "localhost".to_string();
     channel.config.imap_port = port;
     let (tx, _rx) = mpsc::channel(1);
-    let listen = tokio::spawn(async move { channel.listen(tx).await });
+    let listen = tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
     timeout(HANG_GUARD, accepts)
         .await
         .expect("three connection attempts")

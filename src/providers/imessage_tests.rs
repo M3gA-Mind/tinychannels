@@ -784,7 +784,7 @@ async fn listen_fails_when_the_database_is_missing() {
     let dir = tempfile::tempdir().unwrap();
     let channel = channel_on(&dir.path().join("chat.db"), &["*"]);
     let (tx, _rx) = mpsc::channel(1);
-    let error = channel.listen(tx).await.unwrap_err().to_string();
+    let error = crate::provider_test_support::listen_v1(&channel, tx).await.unwrap_err().to_string();
     assert!(error.contains("Messages database not found"), "{error}");
 }
 
@@ -833,7 +833,7 @@ async fn listen_delivers_only_allowed_non_blank_messages() {
 
     let channel = channel_on(&db_path, &["+15555550123"]);
     let (tx, mut rx) = mpsc::channel(8);
-    let listen = tokio::spawn(async move { channel.listen(tx).await });
+    let listen = tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
 
     let first = next_delivery(&writer, &mut rowid, &mut rx).await;
     assert_eq!(first.sender, "+15555550123");
@@ -876,7 +876,7 @@ async fn listen_survives_failing_polls() {
 
     let channel = channel_on(&db_path, &["*"]);
     let (tx, mut rx) = mpsc::channel(8);
-    let listen = tokio::spawn(async move { channel.listen(tx).await });
+    let listen = tokio::spawn(async move { crate::provider_test_support::listen_v1(&channel, tx).await });
 
     // Give the listener time to fail a few polls; the assertions below hold
     // whether or not it did.

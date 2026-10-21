@@ -1,8 +1,39 @@
 //! Test-only helpers for exercising providers through their typed ports.
 
 use crate::channel::{
-    ChannelAdapter, ChannelSendOutcome, SendMessage, outbound_intent_from_send_message,
+    ChannelAdapter, ChannelInboundSink, ChannelSendOutcome, SendMessage,
+    outbound_intent_from_send_message,
 };
+use async_trait::async_trait;
+use tinychannels_bus::{ChannelIngress, ChannelMessage};
+
+/// Captures the typed provider stream through its one-release text projection
+/// for tests that still assert the historical message fields.
+pub(crate) struct LegacyMessageSink(tokio::sync::mpsc::Sender<ChannelMessage>);
+
+#[async_trait]
+impl ChannelInboundSink for LegacyMessageSink {
+    async fn push(&self, ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
+        if let ChannelIngress::Inbound(envelope) = ingress {
+            let timestamp = envelope.timestamp_unix_ms.unwrap_or_default() / 1_000;
+            let message = crate::channel::typed_message_from_inbound_envelope(&envelope, timestamp);
+            self.0.send(message).await.map_err(|_| crate::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "legacy test receiver closed".into(),
+                retryable: true,
+                ..Default::default()
+            })?;
+        }
+        Ok(())
+    }
+}
+
+pub(crate) async fn listen_v1<C: ChannelAdapter + ?Sized>(
+    channel: &C,
+    tx: tokio::sync::mpsc::Sender<ChannelMessage>,
+) -> Result<(), crate::channel::ChannelSendError> {
+    channel.start(&LegacyMessageSink(tx)).await
+}
 
 /// Exercise a typed adapter with a one-release wire DTO converted at its edge.
 pub(crate) async fn send_v1<C: ChannelAdapter>(

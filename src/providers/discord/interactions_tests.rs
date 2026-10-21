@@ -1,7 +1,7 @@
 use super::*;
 use crate::providers::discord::http::DiscordError;
 use crate::providers::discord::support::*;
-use crate::traits::{Channel, SendMessage};
+use crate::channel::ChannelStreamingDraft;
 use serde_json::json;
 use tinychannels_bus::channel::{MessageReceiptPart, MessageReceiptPartKind};
 use tinychannels_bus::{ChannelRef, ConversationKind};
@@ -491,10 +491,8 @@ async fn a_failed_draft_create_is_an_error_not_a_receipt() {
     assert_eq!(error.kind, SendErrorKind::Forbidden);
 }
 
-// ── legacy streaming path ─────────────────────────────────────
-
 #[tokio::test]
-async fn legacy_drafts_create_update_with_throttling_and_finalize_with_overflow() {
+async fn typed_drafts_create_update_and_clip_to_provider_limit() {
     let server = MockServer::start().await;
     mount_message_post(&server, 400).await;
     Mock::given(method("PATCH"))
@@ -503,75 +501,49 @@ async fn legacy_drafts_create_update_with_throttling_and_finalize_with_overflow(
         .await;
     let channel = channel_for(&server);
 
-    let id = channel
-        .send_draft(&SendMessage::new("", CHANNEL))
+    let created = ChannelStreamingDraft::upsert_draft(&channel, None, intent("draft"))
         .await
-        .unwrap()
-        .expect("draft id");
-    assert_eq!(id, "400");
+        .unwrap();
+    assert_eq!(created.primary_platform_message_id.as_deref(), Some("400"));
     assert_eq!(
         body_json(&requests(&server, "POST").await[0])["content"],
-        "..."
+        "draft"
     );
 
-    // The create just marked the channel, so an immediate edit is skipped.
-    channel.update_draft(CHANNEL, &id, "partial").await.unwrap();
-    assert!(requests(&server, "PATCH").await.is_empty());
-    channel.last_draft_edit.lock().clear();
-    channel.update_draft(CHANNEL, &id, "partial").await.unwrap();
-    assert_eq!(requests(&server, "PATCH").await.len(), 1);
-    // Blank text never reaches Discord.
-    channel.last_draft_edit.lock().clear();
-    channel.update_draft(CHANNEL, &id, "  ").await.unwrap();
+    let updated = ChannelStreamingDraft::upsert_draft(
+        &channel,
+        Some(&created),
+        intent("partial"),
+    )
+    .await
+    .unwrap();
     assert_eq!(requests(&server, "PATCH").await.len(), 1);
 
-    // Finalize edits the first 2000 characters and posts the remainder.
-    channel
-        .finalize_draft(CHANNEL, &id, &"word ".repeat(700), None)
+    let long = "word ".repeat(700);
+    ChannelStreamingDraft::upsert_draft(&channel, Some(&updated), intent(&long))
         .await
         .unwrap();
-    assert_eq!(requests(&server, "PATCH").await.len(), 2);
-    assert_eq!(requests(&server, "POST").await.len(), 2);
-    channel
-        .finalize_draft(CHANNEL, &id, " ", None)
+    assert_eq!(requests(&server, "PATCH").await.len(), 1);
+    let patch = body_json(&requests(&server, "PATCH").await[0]);
+    assert!(patch["content"].as_str().unwrap().len() <= 2000);
+    assert_eq!(requests(&server, "POST").await.len(), 1);
+    assert!(ChannelStreamingDraft::upsert_draft(&channel, Some(&created), intent(" "))
         .await
-        .unwrap();
-    assert_eq!(requests(&server, "PATCH").await.len(), 2);
+        .is_err());
 }
 
 #[tokio::test]
-async fn legacy_draft_errors_carry_the_typed_discord_error() {
+async fn typed_draft_update_errors_preserve_provider_status() {
     let server = MockServer::start().await;
     Mock::given(method("PATCH"))
         .respond_with(ResponseTemplate::new(404).set_body_json(json!({"code": 10008})))
         .mount(&server)
         .await;
-    Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"nope": 1})))
-        .mount(&server)
-        .await;
     let channel = channel_for(&server);
 
-    let error = channel
-        .finalize_draft(CHANNEL, "1", "x", None)
+    let previous = receipt(&["1"]);
+    let error = ChannelStreamingDraft::upsert_draft(&channel, Some(&previous), intent("x"))
         .await
         .unwrap_err();
-    let typed = error
-        .downcast_ref::<DiscordError>()
-        .expect("typed error survives anyhow");
-    assert_eq!(typed.0.kind, SendErrorKind::NotFound);
-    assert!(
-        channel
-            .send_draft(&SendMessage::new("x", "bad id"))
-            .await
-            .is_err()
-    );
-    assert!(
-        channel
-            .send_draft(&SendMessage::new("x", CHANNEL))
-            .await
-            .is_err()
-    );
-    channel.last_draft_edit.lock().clear();
-    assert!(channel.update_draft(CHANNEL, "1", "x").await.is_err());
+    assert_eq!(error.kind, SendErrorKind::NotFound);
 }
