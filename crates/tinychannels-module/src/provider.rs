@@ -72,6 +72,13 @@ fn test_unsupported(operation: &str) -> tinychannels::channel::ChannelSendError 
 struct TestNative<T>(Arc<T>);
 
 #[cfg(test)]
+pub(crate) fn test_adapter<T: TestProviderBehavior + 'static>(
+    channel: Arc<T>,
+) -> Arc<dyn tinychannels::channel::ChannelAdapter> {
+    Arc::new(TestNative(channel))
+}
+
+#[cfg(test)]
 #[async_trait::async_trait]
 impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelAdapter for TestNative<T> {
     fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {

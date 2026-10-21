@@ -3194,7 +3194,7 @@ fn a_fixed_media_scope_is_returned_as_configured_and_never_printed() {
 fn a_linked_session_binds_the_media_scope_only_once_it_knows_its_account() {
     let channel = Arc::new(IdentityChannel(std::sync::Mutex::new(None)));
     let scope = MediaScope::fixed(None);
-    scope.bind_source(channel.clone());
+    scope.bind_source(&crate::provider::test_adapter(channel.clone()));
     // Linking has not happened: media fails closed.
     assert_eq!(scope.current(), None);
     *channel.0.lock().unwrap() = Some("15550001111@s.whatsapp.net".into());
@@ -3204,9 +3204,9 @@ fn a_linked_session_binds_the_media_scope_only_once_it_knows_its_account() {
     // and the same account always gets the same one.
     assert_eq!(scope.current().as_deref(), Some(first.as_str()));
     let other = MediaScope::fixed(None);
-    other.bind_source(Arc::new(IdentityChannel(std::sync::Mutex::new(Some(
-        "15550002222@s.whatsapp.net".into(),
-    )))));
+    other.bind_source(&crate::provider::test_adapter(Arc::new(IdentityChannel(
+        std::sync::Mutex::new(Some("15550002222@s.whatsapp.net".into())),
+    ))));
     assert_ne!(other.current().unwrap(), first);
     // If the provider withdraws the identity (a re-link to another account),
     // every later use fails closed again.
@@ -3217,9 +3217,9 @@ fn a_linked_session_binds_the_media_scope_only_once_it_knows_its_account() {
 #[test]
 fn a_configured_scope_wins_over_any_bound_source() {
     let scope = MediaScope::fixed(Some("fixed".into()));
-    scope.bind_source(Arc::new(IdentityChannel(std::sync::Mutex::new(Some(
-        "someone".into(),
-    )))));
+    scope.bind_source(&crate::provider::test_adapter(Arc::new(IdentityChannel(
+        std::sync::Mutex::new(Some("someone".into())),
+    ))));
     assert_eq!(scope.current().as_deref(), Some("fixed"));
 }
 
@@ -4271,8 +4271,7 @@ async fn configured_slack_draft_dispatch_stamps_trusted_account_on_all_lifecycle
     start.thread_ts = Some("parent-9".into());
     start.reply_to_id = Some("reply-8".into());
     let started = dispatch_interaction(
-        None,
-        Some(native.clone()),
+        native.clone(),
         account,
         tinychannels_bus::ChannelInteraction::SendDraft { message: start },
         &mut typing,
@@ -4284,8 +4283,7 @@ async fn configured_slack_draft_dispatch_stamps_trusted_account_on_all_lifecycle
         tinychannels_bus::ChannelInteractionResult::Draft(Some(id)) if id == "configured-draft"
     ));
     dispatch_interaction(
-        None,
-        Some(native.clone()),
+        native.clone(),
         account,
         tinychannels_bus::ChannelInteraction::UpdateDraft {
             recipient: "C1:100.1".into(),
@@ -4297,8 +4295,7 @@ async fn configured_slack_draft_dispatch_stamps_trusted_account_on_all_lifecycle
     .await
     .unwrap();
     dispatch_interaction(
-        None,
-        Some(native),
+        native,
         account,
         tinychannels_bus::ChannelInteraction::FinalizeDraft {
             recipient: "C1:100.1".into(),
@@ -4362,8 +4359,7 @@ async fn configured_telegram_draft_keeps_topic_and_legacy_reply_separate() {
     let mut typing = TypingRefreshes::default();
 
     let result = dispatch_interaction(
-        None,
-        Some(native),
+        native,
         "telegram:configured-account",
         tinychannels_bus::ChannelInteraction::SendDraft { message },
         &mut typing,
