@@ -132,8 +132,10 @@ impl SlackChannel {
         &self,
         event: &Value,
         sink: &(dyn ChannelInboundSink + Send + Sync),
-    ) -> Result<Flow, ChannelSendError> {
-        self.handle_event_to_sink(event, None, Some(sink)).await
+    ) -> Result<(), ChannelSendError> {
+        self.handle_event_to_sink(event, None, Some(sink))
+            .await
+            .map(|_| ())
     }
 
     pub(crate) async fn handle_socket_delivery(

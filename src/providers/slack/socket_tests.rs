@@ -346,6 +346,350 @@ async fn typed_polling_retries_transport_errors_before_advancing_the_cursor() {
 }
 
 #[tokio::test]
+async fn typed_polling_retries_bad_json_and_rejected_messages_without_advancing_or_duplicating() {
+    use crate::channel::{ChannelInboundSink, ChannelSendError};
+    use tinychannels_bus::ChannelIngress;
+
+    struct RejectFirstSink {
+        calls: Arc<AtomicUsize>,
+        accepted: tokio::sync::mpsc::UnboundedSender<ChannelIngress>,
+    }
+
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for RejectFirstSink {
+        async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                    message: "temporary sink rejection".into(),
+                    retryable: true,
+                    ..Default::default()
+                });
+            }
+            self.accepted.send(ingress).map_err(|_| ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "test sink closed".into(),
+                retryable: true,
+                ..Default::default()
+            })
+        }
+    }
+
+    let server = mock_api().await;
+    mount_auth(&server, "UBOT").await;
+    let polls = Arc::new(AtomicUsize::new(0));
+    let counter = polls.clone();
+    let cursor_advanced = Arc::new(tokio::sync::Notify::new());
+    let cursor_advanced_by_server = cursor_advanced.clone();
+    Mock::given(method("GET"))
+        .and(path("/api/conversations.history"))
+        .and(query_param("channel", "C1"))
+        .respond_with(move |request: &wiremock::Request| {
+            let oldest = request
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "oldest")
+                .map(|(_, value)| value.into_owned());
+            match counter.fetch_add(1, Ordering::SeqCst) {
+                0 => ResponseTemplate::new(200).set_body_string("not json"),
+                1 => {
+                    assert_eq!(oldest, None, "a failed JSON response has no cursor");
+                    ResponseTemplate::new(200).set_body_json(json!({"messages": [
+                        {"ts": "2.0", "user": "U1", "text": "retry me"}
+                    ]}))
+                }
+                2 => {
+                    assert_eq!(
+                        oldest, None,
+                        "a rejected message must not advance the cursor"
+                    );
+                    ResponseTemplate::new(200).set_body_json(json!({"messages": [
+                        {"ts": "3.0", "user": "U1", "text": "next message"},
+                        {"ts": "2.0", "user": "U1", "text": "retry me"},
+                    ]}))
+                }
+                3 => {
+                    assert_eq!(oldest.as_deref(), Some("3.0"));
+                    ResponseTemplate::new(200).set_body_json(json!({"messages": [
+                        {"ts": "4.0", "user": "U1", "text": "after cursor"},
+                        {"ts": "3.0", "user": "U1", "text": "duplicate"},
+                    ]}))
+                }
+                _ => {
+                    assert_eq!(oldest.as_deref(), Some("4.0"));
+                    cursor_advanced_by_server.notify_one();
+                    ResponseTemplate::new(200).set_body_json(json!({"messages": []}))
+                }
+            }
+        })
+        .mount(&server)
+        .await;
+
+    let channel = channel_for(&server, &["U1"])
+        .with_timing(Duration::from_millis(5), Duration::from_millis(5));
+    let (accepted_tx, mut accepted_rx) = tokio::sync::mpsc::unbounded_channel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let sink = RejectFirstSink {
+        calls: calls.clone(),
+        accepted: accepted_tx,
+    };
+    let poller = tokio::spawn(async move { channel.listen_polling_typed(&sink, "C1").await });
+
+    for expected in ["retry me", "next message", "after cursor"] {
+        let ingress = tokio::time::timeout(Duration::from_secs(2), accepted_rx.recv())
+            .await
+            .expect("typed history poll progresses after a retry")
+            .expect("sink remains open");
+        let ChannelIngress::Inbound(ingress) = ingress else {
+            panic!("expected a typed inbound envelope, got {ingress:?}");
+        };
+        assert_eq!(ingress.text, expected);
+    }
+    tokio::time::timeout(Duration::from_secs(2), cursor_advanced.notified())
+        .await
+        .expect("the cursor advances only after the accepted fourth timestamp");
+    poller.abort();
+    let _ = poller.await;
+
+    let requests = server.received_requests().await.unwrap();
+    let cursors = requests
+        .iter()
+        .filter(|request| request.url.path() == "/api/conversations.history")
+        .map(|request| {
+            request
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "oldest")
+                .map(|(_, value)| value.into_owned())
+        })
+        .collect::<Vec<_>>();
+    assert!(cursors.len() >= 5);
+    assert_eq!(&cursors[..4], &[None, None, None, Some("3.0".into())]);
+    assert!(
+        cursors[4..]
+            .iter()
+            .all(|cursor| cursor.as_deref() == Some("4.0"))
+    );
+    assert!(polls.load(Ordering::SeqCst) >= 5);
+    assert_eq!(calls.load(Ordering::SeqCst), 4);
+}
+
+#[tokio::test]
+async fn typed_socket_ignores_control_and_unroutable_frames_without_acknowledging_unidentified_events()
+ {
+    let url = serve(|_, mut socket| {
+        Box::pin(async move {
+            socket
+                .send(Message::Binary(vec![1, 2, 3].into()))
+                .await
+                .unwrap();
+            socket
+                .send(Message::Ping(vec![4, 5, 6].into()))
+                .await
+                .unwrap();
+            loop {
+                let frame = tokio::time::timeout(Duration::from_secs(2), socket.next())
+                    .await
+                    .expect("socket answers the protocol ping")
+                    .expect("websocket remains open")
+                    .expect("websocket frame is valid");
+                if frame == Message::Pong(vec![4, 5, 6].into()) {
+                    break;
+                }
+                assert!(
+                    matches!(frame, Message::Pong(_)),
+                    "unexpected control response: {frame:?}"
+                );
+            }
+            socket
+                .send(Message::Pong(vec![7, 8, 9].into()))
+                .await
+                .unwrap();
+            socket
+                .send(Message::Text("malformed json".into()))
+                .await
+                .unwrap();
+            socket
+                .send(envelope("slash_commands", "unsupported-1", json!({})))
+                .await
+                .unwrap();
+            expect_ack(&mut socket, "unsupported-1").await;
+            socket
+                .send(Message::Text(
+                    json!({"type": "events_api", "payload": message_event("9.0", "unidentified")})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            socket
+                .send(Message::Text(
+                    json!({"type": "disconnect"}).to_string().into(),
+                ))
+                .await
+                .unwrap();
+            assert!(
+                socket.next().await.is_none(),
+                "an unidentified event has no ack frame"
+            );
+        })
+    })
+    .await;
+    let channel = SlackChannel::new("bot-token".into(), Some("C1".into()), vec!["U1".into()]);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+    assert_eq!(
+        channel.run_connection_typed(&url, &tx).await,
+        Flow::Continue
+    );
+    let delivery = rx.recv().await.expect("unidentified typed event is queued");
+    assert_eq!(delivery.kind, "events_api");
+    assert_eq!(delivery.envelope_id, None);
+    assert_eq!(delivery.payload["event"]["text"], "unidentified");
+}
+
+#[tokio::test]
+async fn typed_socket_connection_refusal_and_closed_delivery_queue_are_classified() {
+    let channel = SlackChannel::new("bot-token".into(), Some("C1".into()), vec!["U1".into()]);
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    assert_eq!(
+        channel
+            .run_connection_typed("not a websocket URL", &tx)
+            .await,
+        Flow::Continue,
+        "a refused Socket Mode connection is recoverable"
+    );
+
+    let url = serve(|_, mut socket| {
+        Box::pin(async move {
+            socket
+                .send(envelope(
+                    "events_api",
+                    "closed-queue",
+                    message_event("1.0", "lost"),
+                ))
+                .await
+                .unwrap();
+            let _ = socket.next().await;
+        })
+    })
+    .await;
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    drop(rx);
+    assert_eq!(channel.run_connection_typed(&url, &tx).await, Flow::Stop);
+}
+
+#[tokio::test]
+async fn typed_socket_reconnects_without_ack_when_delivery_queue_is_full() {
+    let url = serve(|_, mut socket| {
+        Box::pin(async move {
+            socket
+                .send(envelope(
+                    "events_api",
+                    "queue-full",
+                    message_event("2.0", "retry"),
+                ))
+                .await
+                .unwrap();
+            let frame = tokio::time::timeout(Duration::from_secs(2), socket.next())
+                .await
+                .expect("the reader reconnects after the queue fills");
+            assert!(
+                !matches!(frame, Some(Ok(Message::Text(_)))),
+                "the queue-full envelope is not acknowledged"
+            );
+        })
+    })
+    .await;
+    let channel = SlackChannel::new("bot-token".into(), Some("C1".into()), vec!["U1".into()]);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    tx.try_send(SocketDelivery {
+        kind: "events_api".into(),
+        payload: Value::Null,
+        envelope_id: Some("already-queued".into()),
+        accepted: None,
+    })
+    .unwrap();
+
+    assert_eq!(
+        channel.run_connection_typed(&url, &tx).await,
+        Flow::Continue
+    );
+    assert_eq!(
+        rx.recv().await.unwrap().envelope_id.as_deref(),
+        Some("already-queued")
+    );
+    assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn typed_socket_reconnects_after_open_refusal_and_stops_on_closed_delivery_queue() {
+    let server = mock_api().await;
+    Mock::given(method("POST"))
+        .and(path("/api/apps.connections.open"))
+        .and(header("authorization", "Bearer app-token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"ok": false, "error": "temporarily_unavailable"})),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    let url = serve(|_, mut socket| {
+        Box::pin(async move {
+            socket
+                .send(envelope(
+                    "events_api",
+                    "closed-queue",
+                    message_event("1.0", "stop"),
+                ))
+                .await
+                .unwrap();
+            let _ = socket.next().await;
+        })
+    })
+    .await;
+    open_returns(&server, &url).await;
+    let channel = channel_for(&server, &["U1"])
+        .with_timing(Duration::from_millis(5), Duration::from_millis(5));
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    drop(rx);
+
+    assert!(
+        channel
+            .listen_socket_typed_transport(tx, "app-token")
+            .await
+            .is_ok()
+    );
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests.len(),
+        2,
+        "the typed transport retries a rejected open"
+    );
+}
+
+#[tokio::test]
+async fn typed_delivery_queue_finishes_cleanly_after_transport_closes() {
+    use crate::channel::{ChannelInboundSink, ChannelSendError};
+    use tinychannels_bus::ChannelIngress;
+
+    struct Sink;
+
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for Sink {
+        async fn push(&self, _ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+            Ok(())
+        }
+    }
+
+    let channel = SlackChannel::new("bot-token".into(), Some("C1".into()), vec!["U1".into()]);
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    drop(tx);
+    channel.deliver_socket_queue(rx, &Sink).await.unwrap();
+}
+
+#[tokio::test]
 async fn typed_socket_listener_rejects_duplicates_and_restarts_after_stop() {
     use crate::channel::{ChannelAdapter, ChannelInboundSink, ChannelSendError};
     use tinychannels_bus::ChannelIngress;

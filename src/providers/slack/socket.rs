@@ -359,8 +359,7 @@ impl SlackChannel {
                 event["type"] = "message".into();
                 event["channel"] = channel_id.into();
                 match self.handle_event_typed(&event, sink).await {
-                    Ok(Flow::Continue) => oldest = ts.to_owned(),
-                    Ok(Flow::Stop) => return Ok(()),
+                    Ok(()) => oldest = ts.to_owned(),
                     Err(error) => {
                         tracing::warn!(message = %error.message, "[slack] typed history delivery was not accepted; retrying");
                         break;
