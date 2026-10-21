@@ -4417,36 +4417,20 @@ async fn health_check_reflects_get_me_status() {
 }
 
 #[tokio::test]
-async fn start_typing_sends_immediately_and_reuses_task_for_same_recipient() {
+async fn typed_typing_sends_action_for_scoped_conversation() {
     let server = mock_api().await;
     mount_post(&server, "sendChatAction", ok_with(serde_json::json!(true))).await;
     let ch = channel_for(&server, &["*"]);
 
-    ch.start_typing("100:6").await.unwrap();
-    // The background refresher's first iteration posts right away; wait for it.
-    tokio::time::timeout(GUARD, async {
-        while json_bodies(&server, "sendChatAction").await.len() < 2 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("typing refresher posted");
-    let first_task_id = ch.typing_handle.lock().as_ref().unwrap().handle.id();
-
-    ch.start_typing("100:6").await.unwrap();
-    assert_eq!(
-        ch.typing_handle.lock().as_ref().unwrap().handle.id(),
-        first_task_id,
-        "same recipient keeps the running refresher"
-    );
+    ChannelTyping::start_typing(&ch, "100:6").await.unwrap();
 
     let bodies = json_bodies(&server, "sendChatAction").await;
+    assert_eq!(bodies.len(), 1);
     assert!(bodies.iter().all(|b| b["chat_id"] == "100"
         && b["action"] == "typing"
         && b["message_thread_id"] == "6"));
 
-    ch.stop_typing("100:6").await.unwrap();
-    assert!(ch.typing_handle.lock().is_none());
+    ChannelTyping::stop_typing(&ch, "100:6").await.unwrap();
 }
 
 #[tokio::test]
