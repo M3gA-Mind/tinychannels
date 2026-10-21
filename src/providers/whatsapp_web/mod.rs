@@ -1168,19 +1168,6 @@ impl crate::channel::ChannelTypedSend for WhatsAppWebChannel {
         message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> std::result::Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError>
     {
-        let scope = crate::providers::whatsapp_shared::plan::outbound_scope(message, "whatsapp")
-            .map_err(WaFailure::into_send_error)?;
-        // The legacy send path treated a valid but disallowed target as a
-        // best-effort no-op. Preserve that provider policy at the typed
-        // boundary, while still reporting a disconnected or changed account.
-        self.live_client().map_err(WaFailure::into_send_error)?;
-        if !self.should_allow_outbound(&scope.conversation.id) {
-            tracing::warn!(
-                "WhatsApp Web: outbound target {} not in allowed list",
-                Self::redact_recipient(&scope.conversation.id)
-            );
-            return Ok(Default::default());
-        }
         self.send_v2(message)
             .await
             .map_err(WaFailure::into_send_error)

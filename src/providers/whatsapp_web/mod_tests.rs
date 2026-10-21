@@ -641,14 +641,18 @@ async fn send_into_a_provenanced_group_uses_the_group_jid() {
 }
 
 #[tokio::test]
-async fn blocked_recipients_are_skipped_silently() {
+async fn blocked_recipients_are_rejected_before_provider_io() {
     let (ch, fake) = connected_channel(false);
-    crate::provider_test_support::send_v1(&ch, &message("+9999999999", "nope"))
+    let dm = crate::provider_test_support::send_v1(&ch, &message("+9999999999", "nope"))
         .await
-        .unwrap();
-    crate::provider_test_support::send_v1(&ch, &message("11111@g.us", "nope"))
+        .unwrap_err();
+    let group = crate::provider_test_support::send_v1(&ch, &message("11111@g.us", "nope"))
         .await
-        .unwrap();
+        .unwrap_err();
+    for error in [dm, group] {
+        assert_eq!(error.kind, crate::channel::SendErrorKind::Forbidden);
+        assert!(!error.sent_before_error);
+    }
     ch.start_typing("+9999999999").await.unwrap();
     ch.stop_typing("+9999999999").await.unwrap();
     assert!(fake.calls().is_empty());
