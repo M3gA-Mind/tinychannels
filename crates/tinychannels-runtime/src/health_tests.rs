@@ -17,7 +17,7 @@ fn health_probe_results_are_classified_without_losing_timeout_state() {
         .expect("runtime")
         .block_on(tokio::time::timeout(
             std::time::Duration::ZERO,
-            std::future::pending::<()>(),
+            std::future::pending::<bool>(),
         ));
     assert_eq!(
         classify_health_result(&timed_out),
