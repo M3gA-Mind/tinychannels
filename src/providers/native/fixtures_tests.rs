@@ -34,6 +34,9 @@ impl MediaRepository for StubMedia {
         self.stored.lock().unwrap().push(request);
         Ok(MediaReference {
             opaque_id: (!self.empty_reference).then(|| "media-1".into()),
+            url: Some("https://private.invalid/media".into()),
+            path: Some("/private/provider/path".into()),
+            local_cache_path: Some("/private/cache/path".into()),
             kind,
             content_type: Some(content_type),
             file_name,

@@ -5,9 +5,9 @@
 #[cfg(test)]
 use super::NativeFailure;
 use super::{NativeProvider, pre_dispatch, unsupported};
+use crate::channel::LengthUnit;
 use crate::providers::telegram::text::strip_tool_call_tags;
 use crate::text::{ChunkMode, TextChunkOptions, chunk_text_with_options};
-use crate::channel::LengthUnit;
 use tinychannels_bus::channel::{
     ChannelSendError, ChannelSendOutcome, MessageReceipt, MessageReceiptPart,
     MessageReceiptPartKind, MessageReceiptSourceResult, SendErrorKind,
@@ -317,7 +317,10 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                     })?;
                 let audio = resolved.bytes;
                 if resolved.media.kind != MediaKind::Audio
-                    || !crate::host::is_allowed_content_type(MediaKind::Audio, &resolved.content_type)
+                    || !crate::host::is_allowed_content_type(
+                        MediaKind::Audio,
+                        &resolved.content_type,
+                    )
                     || audio.is_empty()
                     || audio.len() as u64 > limits.voice_bytes
                 {

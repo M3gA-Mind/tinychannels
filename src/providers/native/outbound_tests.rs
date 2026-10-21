@@ -71,7 +71,8 @@ fn with_media(read: Option<tinychannels_bus::MediaKind>, bytes: &[u8]) -> FakePr
 
 fn with_voice(audio: Option<&[u8]>) -> FakeProvider {
     let store = Arc::new(StubMedia::default());
-    *store.read.lock().unwrap() = audio.map(|bytes| stored_media(MediaKind::Audio, "audio/mp4", bytes));
+    *store.read.lock().unwrap() =
+        audio.map(|bytes| stored_media(MediaKind::Audio, "audio/mp4", bytes));
     let mut provider = FakeProvider {
         media: Some(store),
         ..Default::default()

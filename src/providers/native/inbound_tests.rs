@@ -142,7 +142,14 @@ async fn voice_transcript_is_enriched_without_reordering_the_media_part() {
     rig.ingest(true)
         .add(&mut ingested, &conversation(), "m1", clip)
         .await;
-    assert_eq!(voice_note(&ingested.parts[0]).transcript.as_ref().unwrap().text, "provider transcript");
+    assert_eq!(
+        voice_note(&ingested.parts[0])
+            .transcript
+            .as_ref()
+            .unwrap()
+            .text,
+        "provider transcript"
+    );
 
     let mut next = Ingested::default();
     rig.ingest(false)
@@ -212,7 +219,10 @@ async fn publishing_reports_whether_the_sink_took_the_message() {
     assert!(publish("fake", Some(&taking), envelope.clone()).await);
     let refusing: Arc<dyn EventSink> = Arc::new(RecordingEvents::default());
     assert!(!publish("fake", Some(&refusing), envelope.clone()).await);
-    let failing: Arc<dyn EventSink> = Arc::new(RecordingEvents { fail: true, ..Default::default() });
+    let failing: Arc<dyn EventSink> = Arc::new(RecordingEvents {
+        fail: true,
+        ..Default::default()
+    });
     assert!(!publish("fake", Some(&failing), envelope).await);
 }
 
@@ -223,7 +233,10 @@ async fn events_carry_the_provider_channel_and_survive_a_failing_sink() {
         "e1".into(),
         Some(5),
         Some(conversation()),
-        ChannelEventKind::MessageDeleted { message_id: "m".into(), provider_message_id: None },
+        ChannelEventKind::MessageDeleted {
+            message_id: "m".into(),
+            provider_message_id: None,
+        },
     );
     assert_eq!(event.channel.id, "fake");
     assert_eq!(event.version, 2);
@@ -232,6 +245,9 @@ async fn events_carry_the_provider_channel_and_survive_a_failing_sink() {
     publish_event("fake", Some(&sink), event.clone()).await;
     assert_eq!(recording.events().len(), 1);
     publish_event("fake", None, event.clone()).await;
-    let failing: Arc<dyn EventSink> = Arc::new(RecordingEvents { fail: true, ..Default::default() });
+    let failing: Arc<dyn EventSink> = Arc::new(RecordingEvents {
+        fail: true,
+        ..Default::default()
+    });
     publish_event("fake", Some(&failing), event).await;
 }

@@ -2,8 +2,7 @@
 //! content, or as a voice note when the platform marks it as one.
 
 use crate::host::{
-    EventSink, MediaMetadata, MediaRepository, MediaStoreRequest, Transcriber,
-    TranscriptionRequest,
+    EventSink, MediaMetadata, MediaRepository, MediaStoreRequest, Transcriber, TranscriptionRequest,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -190,7 +189,10 @@ impl Ingest<'_> {
                 .as_deref()
                 .is_none_or(|id| id.trim().is_empty())
             {
-                tracing::warn!(provider, "[native] media repository returned no opaque voice reference");
+                tracing::warn!(
+                    provider,
+                    "[native] media repository returned no opaque voice reference"
+                );
                 return;
             }
             let mut media = media;

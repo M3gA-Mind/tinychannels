@@ -41,10 +41,10 @@ mod noop;
 mod services;
 
 pub use dispatch::{DispatchOptions, DispatchRequest, TurnDispatcher, TurnHandle};
+pub(crate) use media::is_allowed_content_type;
 pub use media::{
     MediaMetadata, MediaScope, MediaStoreRequest, MediaStreamRequest, ScopedMediaStore, StoredMedia,
 };
-pub(crate) use media::is_allowed_content_type;
 pub use noop::{ChannelHostBuilder, NoopHost};
 pub use services::{
     AllowlistStore, ApprovalAsk, ApprovalDecision, ApprovalGate, ConversationMessage,
