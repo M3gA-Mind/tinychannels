@@ -1242,21 +1242,11 @@ impl DurableHost {
 struct FailingChannel(Arc<std::sync::atomic::AtomicUsize>);
 
 #[async_trait::async_trait]
-impl tinychannels::Channel for FailingChannel {
-    fn name(&self) -> &str {
-        "fixture"
-    }
-
-    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+impl crate::provider::TestProviderBehavior for FailingChannel {
+    fn test_provider_id(&self) -> &'static str { "fixture" }
+    async fn test_send(&self, _message: &tinychannels_bus::ChannelOutboundMessage) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Err(anyhow::anyhow!("fixture provider failure"))
-    }
-
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        std::future::pending().await
+        Err(tinychannels::channel::ChannelSendError { message: "fixture provider failure".into(), ..Default::default() })
     }
 }
 
@@ -1269,17 +1259,12 @@ struct SuccessfulReceiptChannel(Arc<std::sync::atomic::AtomicUsize>);
 struct AmbiguousNoIdChannel(Arc<std::sync::atomic::AtomicUsize>);
 
 #[async_trait::async_trait]
-impl tinychannels::Channel for AmbiguousNoIdChannel {
-    fn name(&self) -> &str {
-        "fixture"
-    }
-    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn send_typed_with_receipt(
+impl crate::provider::TestProviderBehavior for AmbiguousNoIdChannel {
+    fn test_provider_id(&self) -> &'static str { "fixture" }
+    async fn test_send(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(tinychannels_bus::channel::ChannelSendOutcome {
             receipt: Default::default(),
@@ -1290,12 +1275,6 @@ impl tinychannels::Channel for AmbiguousNoIdChannel {
                 ..Default::default()
             }),
         })
-    }
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        std::future::pending().await
     }
 }
 
@@ -1344,17 +1323,12 @@ async fn required_durable_ambiguous_send_without_ids_is_not_retried() {
 }
 
 #[async_trait::async_trait]
-impl tinychannels::Channel for SuccessfulReceiptChannel {
-    fn name(&self) -> &str {
-        "fixture"
-    }
-    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn send_typed_with_receipt(
+impl crate::provider::TestProviderBehavior for SuccessfulReceiptChannel {
+    fn test_provider_id(&self) -> &'static str { "fixture" }
+    async fn test_send(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(tinychannels_bus::channel::ChannelSendOutcome {
             receipt: tinychannels_bus::channel::MessageReceipt {
@@ -1366,12 +1340,6 @@ impl tinychannels::Channel for SuccessfulReceiptChannel {
             },
             error: None,
         })
-    }
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        std::future::pending().await
     }
 }
 
@@ -1407,19 +1375,12 @@ async fn required_success_and_replay_return_same_actual_scoped_receipt_without_r
 }
 
 #[async_trait::async_trait]
-impl tinychannels::Channel for PartialReceiptChannel {
-    fn name(&self) -> &str {
-        "fixture"
-    }
-
-    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn send_typed_with_receipt(
+impl crate::provider::TestProviderBehavior for PartialReceiptChannel {
+    fn test_provider_id(&self) -> &'static str { "fixture" }
+    async fn test_send(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(tinychannels_bus::channel::ChannelSendOutcome {
             receipt: tinychannels_bus::channel::MessageReceipt {
@@ -1435,13 +1396,6 @@ impl tinychannels::Channel for PartialReceiptChannel {
                 ..Default::default()
             }),
         })
-    }
-
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        std::future::pending().await
     }
 }
 
@@ -1493,26 +1447,17 @@ async fn required_durable_partial_provider_send_persists_receipt_and_is_not_retr
 }
 
 #[async_trait::async_trait]
-impl tinychannels::Channel for EndedChannel {
-    fn name(&self) -> &str {
-        "fixture"
-    }
-
-    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+impl crate::provider::TestProviderBehavior for EndedChannel {
+    fn test_provider_id(&self) -> &'static str { "fixture" }
+    fn test_listener_ends(&self) -> bool { true }
+    async fn test_send(&self, _message: &tinychannels_bus::ChannelOutboundMessage) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        Ok(())
+        Ok(Default::default())
     }
 }
 
-async fn channels_with_store(
-    channel: Arc<dyn tinychannels::Channel>,
+async fn channels_with_store<T: crate::provider::TestProviderBehavior + 'static>(
+    channel: Arc<T>,
 ) -> (Channels, DurableHost, tinybus::Connection) {
     let bus = tinybus::transport::memory::MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
@@ -1540,7 +1485,7 @@ async fn channels_with_store(
     let hooks = Arc::new(Hooks::default());
     let running = HashMap::from([(
         "fixture".to_owned(),
-        Running::start(channel, hooks, host.clone()),
+        Running::start_test(channel, hooks, host.clone()),
     )]);
     let relays = Arc::new(Relays::new(host.clone()));
     let channels = Channels {

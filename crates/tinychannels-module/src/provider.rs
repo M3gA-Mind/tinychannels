@@ -21,6 +21,7 @@ pub(crate) trait TestProviderBehavior: Send + Sync {
     fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         tinychannels_bus::ChannelCapabilities::unknown()
     }
+    fn test_listener_ends(&self) -> bool { false }
     async fn test_send(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
@@ -80,7 +81,7 @@ impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelAdapter fo
         self.test_capabilities()
     }
     async fn start(&self, _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync)) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
-        std::future::pending().await
+        if self.test_listener_ends() { Ok(()) } else { std::future::pending().await }
     }
     async fn stop(&self) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { Ok(()) }
     async fn send(&self, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<tinychannels::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
@@ -1338,7 +1339,7 @@ pub(crate) enum LongTailListenerMode {
 
 impl NativePorts {
     #[cfg(test)]
-    fn test<T: TestProviderBehavior + 'static>(channel: Arc<T>) -> Self {
+    fn test<T: TestProviderBehavior + 'static>(channel: Arc<T>, listener_mode: LongTailListenerMode) -> Self {
         let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = channel.clone();
         let typed_send: Arc<dyn tinychannels::channel::ChannelTypedSend> = channel.clone();
         let typing: Arc<dyn tinychannels::channel::ChannelTyping> = channel.clone();
@@ -1355,7 +1356,7 @@ impl NativePorts {
             edits,
             deletes,
             drafts,
-            listener_mode: LongTailListenerMode::Webhook,
+            listener_mode,
         }
     }
 
@@ -1786,7 +1787,7 @@ impl Running {
             host,
             None,
             false,
-            NativePorts::test(channel),
+            NativePorts::test(channel, LongTailListenerMode::Adapter),
         )
     }
 
@@ -1803,7 +1804,7 @@ impl Running {
             host,
             None,
             true,
-            NativePorts::test(channel),
+            NativePorts::test(channel, LongTailListenerMode::Webhook),
         )
     }
 
