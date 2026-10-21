@@ -45,12 +45,12 @@ providers support every feature.
 | Discord | `providers/discord/conformance_tests.rs` |
 | Email | `providers/email_channel/conformance_tests.rs` |
 | iMessage | `providers/imessage/conformance_tests.rs` |
-| IRC | `providers/irc_listen_tests.rs` |
+| IRC | `providers/irc_listen_tests.rs::shared_conformance_checks_irc_text_against_a_real_peer_without_fabricated_receipts` |
 | Linq | `providers/linq/conformance_tests.rs` |
 | Mattermost, QQ, DingTalk | `providers/long_tail_conformance_tests.rs` |
 | Signal | `providers/signal/conformance_tests.rs` |
 | Slack | `providers/slack/adapter_tests.rs` |
-| Telegram | `providers/telegram/channel_ops_tests.rs` |
+| Telegram | `providers/telegram/channel_ops_tests.rs::configured_telegram_adapter_passes_mock_wire_conformance` |
 | Lark | `providers/lark_conformance_tests.rs` |
 | WhatsApp Cloud and Web | `providers/whatsapp*/conformance_tests.rs` |
 | Yuanbao | `providers/yuanbao/conformance_tests.rs` |
