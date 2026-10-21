@@ -5470,7 +5470,10 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     drop(synthesis);
     let stored_request = callback.published_voice_requests.lock().await;
     assert_eq!(stored_request.len(), 1);
-    assert_eq!(stored_request[0].scope.configured_instance, "telegram:bot-1");
+    assert_eq!(
+        stored_request[0].scope.configured_instance,
+        "telegram:bot-1"
+    );
     assert_eq!(stored_request[0].scope.channel, context.channel);
     assert_eq!(stored_request[0].scope.conversation, context.conversation);
     assert_eq!(stored_request[0].scope.turn_id, context.turn_id);
