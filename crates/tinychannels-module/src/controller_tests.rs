@@ -217,6 +217,7 @@ fn assert_native_controller_observation(
     method: &str,
     path_fragment: &str,
     authorization: Option<&str>,
+    expected_body: Option<serde_json::Value>,
     returned_id: Option<&str>,
 ) {
     use tinychannels_conformance::NativeControllerFixture as _;
@@ -240,6 +241,9 @@ fn assert_native_controller_observation(
         observation.request["path"]
     );
     assert_eq!(observation.request["authorization"].as_str(), authorization);
+    if let Some(expected_body) = expected_body {
+        assert_eq!(observation.request["body"], expected_body);
+    }
     if let Some(id) = returned_id {
         assert_eq!(observation.returned_ids, [id]);
     }
@@ -2541,7 +2545,18 @@ async fn native_controller_conformance_uses_mattermost_wire_and_rejects_unsuppor
         "POST",
         "/api/v4/reactions",
         Some("Bearer mm-token"),
+        Some(serde_json::json!({
+            "user_id": "bot-user", "post_id": "post-1", "emoji_name": "+1"
+        })),
         None,
+    );
+    let completed_wire_count = fixture.wire_count().await;
+    assert!(
+        fixture
+            .captured_request_since(completed_wire_count)
+            .await
+            .is_err(),
+        "a later operation must not reuse the prior reaction request"
     );
     check_native_controller_feature(&fixture, Feature::ThreadCreate)
         .await
@@ -2624,6 +2639,10 @@ async fn native_controller_conformance_covers_telegram_discord_and_slack() {
                 "POST",
                 "/bottok/setMessageReaction",
                 None,
+                Some(serde_json::json!({
+                    "chat_id": "-100", "message_id": 4,
+                    "reaction": [{"type": "emoji", "emoji": "👍"}]
+                })),
                 None,
             ),
             Feature::ThreadCreate => assert_native_controller_observation(
@@ -2632,6 +2651,7 @@ async fn native_controller_conformance_covers_telegram_discord_and_slack() {
                 "POST",
                 "/bottok/createForumTopic",
                 None,
+                Some(serde_json::json!({"chat_id": "-100", "name": "conformance thread"})),
                 Some("77"),
             ),
             Feature::ThreadUpdate => assert_native_controller_observation(
@@ -2640,6 +2660,7 @@ async fn native_controller_conformance_covers_telegram_discord_and_slack() {
                 "POST",
                 "/bottok/closeForumTopic",
                 None,
+                Some(serde_json::json!({"chat_id": "-100", "message_thread_id": 77})),
                 Some("77"),
             ),
             Feature::ThreadList => assert!(telegram.observations().is_empty()),
@@ -2704,6 +2725,7 @@ async fn native_controller_conformance_covers_telegram_discord_and_slack() {
                 "PUT",
                 "/channels/55/messages/66/reactions/",
                 Some("Bot dtok"),
+                Some(serde_json::Value::String(String::new())),
                 None,
             ),
             Feature::ThreadCreate => assert_native_controller_observation(
@@ -2712,6 +2734,9 @@ async fn native_controller_conformance_covers_telegram_discord_and_slack() {
                 "POST",
                 "/channels/55/threads",
                 Some("Bot dtok"),
+                Some(serde_json::json!({
+                    "name": "conformance thread", "auto_archive_duration": 1440, "type": 11
+                })),
                 Some("77"),
             ),
             Feature::ThreadUpdate => assert_native_controller_observation(
@@ -2720,6 +2745,7 @@ async fn native_controller_conformance_covers_telegram_discord_and_slack() {
                 "PATCH",
                 "/channels/77",
                 Some("Bot dtok"),
+                Some(serde_json::json!({"archived": true})),
                 Some("77"),
             ),
             Feature::ThreadList => assert_native_controller_observation(
@@ -2728,6 +2754,7 @@ async fn native_controller_conformance_covers_telegram_discord_and_slack() {
                 "GET",
                 "/guilds/900/threads/active",
                 Some("Bot dtok"),
+                Some(serde_json::Value::String(String::new())),
                 Some("77"),
             ),
         }
@@ -2780,6 +2807,9 @@ async fn native_controller_conformance_covers_telegram_discord_and_slack() {
                 "POST",
                 "/reactions.add",
                 Some("Bearer slack-token"),
+                Some(serde_json::json!({
+                    "channel": "C1", "timestamp": "171.2", "name": "thumbsup"
+                })),
                 None,
             ),
             Feature::ThreadCreate | Feature::ThreadUpdate | Feature::ThreadList => {
