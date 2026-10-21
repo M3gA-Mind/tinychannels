@@ -1720,34 +1720,6 @@ impl Running {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn start(
-        channel: Arc<dyn Channel>,
-        hooks: Arc<Hooks>,
-        host: HostChannels,
-    ) -> Arc<Self> {
-        let name = channel.name().to_owned();
-        Self::start_inner(Some(channel), name, hooks, host, None, false, None)
-    }
-    #[cfg(test)]
-    pub(crate) fn start_supervised(
-        channel: Arc<dyn Channel>,
-        hooks: Arc<Hooks>,
-        host: HostChannels,
-        policy: ChannelSupervisionPolicy,
-    ) -> Arc<Self> {
-        let name = channel.name().to_owned();
-        Self::start_inner(Some(channel), name, hooks, host, Some(policy), false, None)
-    }
-    #[cfg(test)]
-    pub(crate) fn start_outbound(
-        channel: Arc<dyn Channel>,
-        hooks: Arc<Hooks>,
-        host: HostChannels,
-    ) -> Arc<Self> {
-        let name = channel.name().to_owned();
-        Self::start_inner(Some(channel), name, hooks, host, None, true, None)
-    }
     pub(crate) fn start_telegram(
         channel: Arc<tinychannels::TelegramChannel>,
         hooks: Arc<Hooks>,
@@ -1757,7 +1729,6 @@ impl Running {
     ) -> Arc<Self> {
         let provider_name = channel.descriptor().id;
         Self::start_inner(
-            None,
             provider_name,
             hooks,
             host,
@@ -1784,12 +1755,10 @@ impl Running {
         let provider_name = descriptor.id;
         let listener_mode = match descriptor.metadata.get("backend").map(String::as_str) {
             Some("cloud") => LongTailListenerMode::Webhook,
-            Some("web") => LongTailListenerMode::Adapter,
-            _ => LongTailListenerMode::Legacy,
+            _ => LongTailListenerMode::Adapter,
         };
         let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
         Self::start_inner(
-            None,
             provider_name,
             hooks,
             host,
@@ -1811,7 +1780,6 @@ impl Running {
         listener_mode: LongTailListenerMode,
     ) -> Arc<Self> {
         Self::start_inner(
-            None,
             channel.descriptor().id,
             hooks,
             host,
@@ -1830,7 +1798,6 @@ impl Running {
     ) -> Arc<Self> {
         let provider_name = channel.descriptor().id;
         Self::start_inner(
-            None,
             provider_name,
             hooks,
             host,
@@ -1841,13 +1808,12 @@ impl Running {
     }
 
     fn start_inner(
-        channel: Option<Arc<dyn Channel>>,
         provider_name: String,
         hooks: Arc<Hooks>,
         host: HostChannels,
         supervision: Option<ChannelSupervisionPolicy>,
         outbound_only: bool,
-        native_ports: Option<NativePorts>,
+        native_ports: NativePorts,
     ) -> Arc<Self> {
         let (cancel, mut canceled) = watch::channel(false);
         let send_cancel = cancel.subscribe();
