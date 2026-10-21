@@ -36,6 +36,7 @@ impl SlackChannel {
     }
 
     /// Run Socket Mode, reconnecting after every disconnect.
+    #[cfg(test)]
     pub(crate) async fn listen_socket(
         &self,
         tx: &Sender<ChannelMessage>,
@@ -219,6 +220,7 @@ impl SlackChannel {
 
     /// Serve one websocket connection until it closes or Slack asks us to
     /// reconnect.
+    #[cfg(test)]
     async fn run_connection(&self, url: &str, tx: &Sender<ChannelMessage>) -> Flow {
         let Ok((stream, _)) = tokio_tungstenite::connect_async(url).await else {
             tracing::warn!("[slack] socket connection failed");
@@ -263,6 +265,7 @@ impl SlackChannel {
     }
 
     /// Poll `conversations.history` of the configured channel.
+    #[cfg(test)]
     pub(crate) async fn listen_polling(
         &self,
         tx: &Sender<ChannelMessage>,

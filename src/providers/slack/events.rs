@@ -115,6 +115,7 @@ impl SlackChannel {
     }
 
     /// Handle one Events API / history item.
+    #[cfg(test)]
     pub(crate) async fn handle_event(
         &self,
         event: &Value,
@@ -453,6 +454,7 @@ impl SlackChannel {
     }
 
     /// Handle one Socket Mode `interactive` payload (a Block Kit button press).
+    #[cfg(test)]
     pub(crate) async fn handle_interactive(&self, payload: &Value) {
         if let Err(error) = self.handle_interactive_to_sink(payload, None).await {
             tracing::debug!(message = %error.message, "[slack] interactive event delivery failed");

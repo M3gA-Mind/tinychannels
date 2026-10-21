@@ -21,6 +21,7 @@ use tinychannels_bus::{
 };
 
 /// A plain-text typed message for the legacy `SendMessage` entry points.
+#[cfg(test)]
 pub(crate) fn text_message(
     recipient: &str,
     thread_ts: Option<&str>,
@@ -45,6 +46,7 @@ pub(crate) fn text_message(
 }
 
 /// Carry a typed failure through `anyhow`; callers recover it by downcast.
+#[cfg(test)]
 pub(crate) fn send_error_to_anyhow(error: ChannelSendError) -> anyhow::Error {
     anyhow::Error::new(super::types::SlackFailure(error))
 }
