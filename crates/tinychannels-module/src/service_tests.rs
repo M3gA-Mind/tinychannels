@@ -12,6 +12,9 @@ async fn v1_email_subject_reaches_the_configured_smtp_wire() {
     let smtp_port = listener.local_addr().unwrap().port();
     let smtp = std::thread::spawn(move || {
         let (socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
         let mut writer = socket.try_clone().unwrap();
         let mut reader = std::io::BufReader::new(socket);
         let mut transcript = Vec::new();
@@ -40,7 +43,9 @@ async fn v1_email_subject_reaches_the_configured_smtp_wire() {
                     break;
                 }
                 command if command.starts_with("EHLO") => {
-                    writer.write_all(b"250 fixture\r\n").unwrap();
+                    writer
+                        .write_all(b"250-fixture\r\n250 AUTH PLAIN\r\n")
+                        .unwrap();
                 }
                 command if command.starts_with("AUTH") => {
                     writer.write_all(b"235 authenticated\r\n").unwrap();
@@ -84,7 +89,7 @@ async fn v1_email_subject_reaches_the_configured_smtp_wire() {
         "email:work".into(),
         launch.start(hooks, service.host.clone(), None, true),
     );
-    service
+    let result = service
         .send_message(
             "email:work".into(),
             tinychannels::SendMessage::with_subject(
@@ -93,10 +98,10 @@ async fn v1_email_subject_reaches_the_configured_smtp_wire() {
                 "Project update",
             ),
         )
-        .await
-        .unwrap();
+        .await;
 
     let transcript = smtp.join().unwrap();
+    assert!(result.is_ok(), "{result:?}; SMTP transcript: {transcript}");
     assert!(
         transcript.contains("Subject: Project update"),
         "{transcript}"
