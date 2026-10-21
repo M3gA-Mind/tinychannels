@@ -5374,6 +5374,33 @@ async fn adapter_start_polls_and_delivers_original_typed_telegram_ingress() {
         .await
         .expect("typed Telegram listener observes stop")
         .unwrap();
+
+    let previous_requests = server.received_requests().await.unwrap().len();
+    let restart = crate::channel::ChannelAdapter::start(channel.as_ref(), sink.as_ref());
+    tokio::pin!(restart);
+    tokio::select! {
+        result = &mut restart => panic!("Telegram listener did not restart: {result:?}"),
+        _ = async {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if server.received_requests().await.unwrap().len() > previous_requests {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("restarted listener polls Telegram");
+        } => {},
+    }
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), &mut restart)
+        .await
+        .expect("restarted typed listener observes stop")
+        .unwrap();
+    assert_eq!(sink.items.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]

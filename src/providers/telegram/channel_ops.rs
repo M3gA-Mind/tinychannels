@@ -3091,7 +3091,7 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
             });
         }
         let _guard = TelegramListenerGuard(&self.listener_running);
-        let _ = self.listener_cancel.send(false);
+        self.listener_cancel.send_replace(false);
         let cancellation = self.listener_cancel.subscribe();
         self.listen_loop(None, Some(sink), cancellation)
             .await
@@ -3105,7 +3105,7 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
     }
 
     async fn stop(&self) -> Result<(), crate::channel::ChannelSendError> {
-        let _ = self.listener_cancel.send(true);
+        self.listener_cancel.send_replace(true);
         Ok(())
     }
 
