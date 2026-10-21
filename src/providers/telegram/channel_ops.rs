@@ -1744,330 +1744,13 @@ impl TelegramChannel {
     }
 }
 
-#[async_trait]
-impl Channel for TelegramChannel {
-    fn name(&self) -> &str {
-        "telegram"
-    }
-
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        let progressive_edits = self.supports_progressive_edits();
-        let streaming_reply_pipeline = self.supports_draft_updates();
-        let reply_to_id = self.supports_reply_to_id();
-        let thread_id = self.supports_thread_id();
-        let media_enabled = self.media_repository.is_some();
-        let mut actions = vec!["send".into(), "typing".into(), "delete".into()];
-        if progressive_edits {
-            actions.push("draft-update".into());
-        }
-        if self.supports_edit() {
-            actions.push("edit".into());
-        }
-        if reply_to_id || thread_id {
-            actions.push("reply".into());
-        }
-        if thread_id {
-            actions.push("thread-reply".into());
-        }
-        actions.extend(["react".into(), "reactions".into()]);
-        let mut parts = vec!["text".into()];
-        parts.extend([
-            "location".into(),
-            "contact".into(),
-            "buttons".into(),
-            "poll".into(),
-            "presentation".into(),
-        ]);
-        let media_capability = |accepted: &[&str], emitted: &[&str], max_size_bytes: u64| {
-            if media_enabled {
-                tinychannels_bus::ContentCapability {
-                    inbound: true,
-                    outbound: true,
-                    accepted_types: accepted.iter().map(|kind| (*kind).to_owned()).collect(),
-                    emitted_types: emitted.iter().map(|kind| (*kind).to_owned()).collect(),
-                    max_size_bytes: Some(max_size_bytes),
-                    ..Default::default()
-                }
-            } else {
-                tinychannels_bus::ContentCapability::default()
-            }
-        };
-        if media_enabled {
-            parts.extend([
-                "image".into(),
-                "video".into(),
-                "audio".into(),
-                "file".into(),
-                "sticker".into(),
-            ]);
-        }
-        let (voice_in, voice_out) = if self.voice_media_store.is_some() {
-            parts.push("voice_note".into());
-            (
-                tinychannels_bus::VoiceCapabilities {
-                    supported: true,
-                    max_size_bytes: Some(8 * 1024 * 1024),
-                    transcript_sources: vec![
-                        tinychannels_bus::VoiceTranscriptSource::Provider,
-                        tinychannels_bus::VoiceTranscriptSource::HostStt,
-                    ],
-                    ..Default::default()
-                },
-                tinychannels_bus::VoiceCapabilities {
-                    supported: true,
-                    accepted_codecs: vec!["ogg_opus".into(), "m4a_aac".into(), "mp3".into()],
-                    max_size_bytes: Some(8 * 1024 * 1024),
-                    synthesis: self.voice_synthesis,
-                    ..Default::default()
-                },
-            )
-        } else {
-            (
-                tinychannels_bus::VoiceCapabilities::default(),
-                tinychannels_bus::VoiceCapabilities::default(),
-            )
-        };
-        tinychannels_bus::ChannelCapabilities {
-            remote_control: true,
-            chat_approvals: true,
-            history_key_ignores_thread: true,
-            reactions: true,
-            progressive_edits,
-            streaming_reply_pipeline,
-            addressing: tinychannels_bus::AddressingCapabilities {
-                reply_to_id,
-                thread_id,
-                ..Default::default()
-            },
-            content: tinychannels_bus::ContentCapabilities {
-                parts,
-                text: tinychannels_bus::ContentCapability {
-                    inbound: true,
-                    outbound: true,
-                    ..Default::default()
-                },
-                image: media_capability(
-                    &["image/jpeg", "image/png", "image/gif", "image/webp"],
-                    &["image/jpeg", "image/png"],
-                    10 * 1024 * 1024,
-                ),
-                video: media_capability(
-                    &["video/mp4", "video/quicktime", "video/webm"],
-                    &["video/mp4"],
-                    20 * 1024 * 1024,
-                ),
-                audio: media_capability(
-                    &[
-                        "audio/ogg",
-                        "audio/mpeg",
-                        "audio/mp4",
-                        "audio/wav",
-                        "audio/webm",
-                    ],
-                    &["audio/mpeg", "audio/mp4"],
-                    20 * 1024 * 1024,
-                ),
-                file: media_capability(
-                    &[
-                        "application/pdf",
-                        "text/plain",
-                        "text/csv",
-                        "application/json",
-                        "application/zip",
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    ],
-                    &[
-                        "application/pdf",
-                        "text/plain",
-                        "text/csv",
-                        "application/json",
-                        "application/zip",
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    ],
-                    20 * 1024 * 1024,
-                ),
-                sticker: if media_enabled {
-                    tinychannels_bus::ContentCapability {
-                        inbound: true,
-                        outbound: true,
-                        accepted_types: vec!["image/webp".into()],
-                        emitted_types: vec!["image/webp".into()],
-                        max_size_bytes: Some(20 * 1024 * 1024),
-                        ..Default::default()
-                    }
-                } else {
-                    tinychannels_bus::ContentCapability::default()
-                },
-                location: tinychannels_bus::ContentCapability {
-                    inbound: true,
-                    outbound: true,
-                    ..Default::default()
-                },
-                contact: tinychannels_bus::ContentCapability {
-                    inbound: true,
-                    outbound: true,
-                    ..Default::default()
-                },
-                buttons: tinychannels_bus::ContentCapability {
-                    outbound: true,
-                    ..Default::default()
-                },
-                button_presentation: tinychannels_bus::ButtonPresentationCapabilities {
-                    max_actions_per_row: Some(8),
-                    max_rows: Some(100),
-                    max_label_length: Some(64),
-                    max_value_bytes: Some(64),
-                    ..Default::default()
-                },
-                poll: tinychannels_bus::ContentCapability {
-                    outbound: true,
-                    ..Default::default()
-                },
-                presentation: tinychannels_bus::ContentCapability {
-                    outbound: true,
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            actions: tinychannels_bus::ActionCapabilities {
-                supported: actions,
-                ..Default::default()
-            },
-            voice_in,
-            voice_out,
-            events: tinychannels_bus::EventCapabilities {
-                supported: vec![
-                    "button_callback".into(),
-                    "reaction_added".into(),
-                    "reaction_removed".into(),
-                    "outbound_reaction".into(),
-                    "message_updated".into(),
-                ],
-            },
-            ..Default::default()
-        }
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    fn history_key_ignores_thread(&self) -> bool {
-        true
-    }
-
-    /// Recipient-less proactive sends (cron/heartbeat) deliver to the bot's
-    /// configured default `chat_id`. `None` when unconfigured, so proactive
-    /// routing skips Telegram rather than letting `send` POST to an empty
-    /// `chat_id` (mirrors Discord — #3712 Telegram parity).
-    fn proactive_target(&self) -> Option<String> {
-        self.chat_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-    }
-
-    fn supports_reactions(&self) -> bool {
-        true
-    }
-
-    fn supports_edit(&self) -> bool {
-        true
-    }
-
-    fn supports_reply_to_id(&self) -> bool {
-        true
-    }
-
-    fn supports_thread_id(&self) -> bool {
-        true
-    }
-
-    fn supports_draft_updates(&self) -> bool {
-        self.stream_mode != StreamMode::Off
-    }
-
-    async fn send_draft(&self, message: &SendMessage) -> anyhow::Result<Option<String>> {
-        self.send_draft_provider(message).await
-    }
-
-    async fn update_draft(
+impl TelegramChannel {
+    async fn listen_loop(
         &self,
-        recipient: &str,
-        message_id: &str,
-        text: &str,
+        legacy_tx: Option<tokio::sync::mpsc::Sender<ChannelMessage>>,
+        typed_sink: Option<&(dyn crate::channel::ChannelInboundSink + Send + Sync)>,
+        mut cancellation: tokio::sync::watch::Receiver<bool>,
     ) -> anyhow::Result<()> {
-        self.update_draft_provider(recipient, message_id, text)
-            .await
-    }
-
-    async fn finalize_draft(
-        &self,
-        recipient: &str,
-        message_id: &str,
-        text: &str,
-        thread_ts: Option<&str>,
-    ) -> anyhow::Result<()> {
-        self.finalize_draft_provider(recipient, message_id, text, thread_ts)
-            .await
-    }
-
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        // Strip tool_call tags before processing to prevent Markdown parsing failures
-        let content = strip_tool_call_tags(&message.content);
-        let parent_message_id = Self::parse_message_id(message.thread_ts.as_deref());
-
-        // Parse recipient: "chat_id" or "chat_id:thread_id" format
-        let (chat_id, thread_id) = match message.recipient.split_once(':') {
-            Some((chat, thread)) => (chat, Some(thread)),
-            None => (message.recipient.as_str(), None),
-        };
-
-        self.send_text_chunks(&content, chat_id, thread_id, parent_message_id)
-            .await
-    }
-
-    async fn send_typed_with_receipt(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
-        self.send_v2_with_receipt(message).await
-    }
-
-    async fn send_reaction(
-        &self,
-        conversation: &tinychannels_bus::channel::ConversationRef,
-        provider_message_id: &str,
-        reaction: &tinychannels_bus::channel::ChannelReaction,
-        remove: bool,
-    ) -> anyhow::Result<()> {
-        self.send_reaction_v2(conversation, provider_message_id, reaction, remove)
-            .await
-    }
-
-    async fn edit_message(
-        &self,
-        receipt: &tinychannels_bus::channel::MessageReceipt,
-        intent: &tinychannels_bus::channel::ChannelOutboundIntent,
-    ) -> anyhow::Result<tinychannels_bus::channel::MessageReceipt> {
-        self.edit_message_v2(receipt, intent).await
-    }
-
-    async fn delete_message(
-        &self,
-        receipt: &tinychannels_bus::channel::MessageReceipt,
-    ) -> anyhow::Result<()> {
-        self.delete_message_v2(receipt).await
-    }
-
-    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         let mut offset: i64 = 0;
 
         if self.mention_only {
@@ -2416,12 +2099,342 @@ Ensure only one `openhuman` process is using this bot token."
                     } else {
                         false
                     };
-                    if !delivered_by_event_sink && tx.send(msg).await.is_err() {
+                    if !delivered_by_event_sink && legacy_tx.as_ref().expect("legacy listener has a sender").send(msg).await.is_err() {
                         return Ok(());
                     }
                 }
             }
         }
+    
+    }
+}
+
+#[async_trait]
+impl Channel for TelegramChannel {
+    fn name(&self) -> &str {
+        "telegram"
+    }
+
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        let progressive_edits = self.supports_progressive_edits();
+        let streaming_reply_pipeline = self.supports_draft_updates();
+        let reply_to_id = self.supports_reply_to_id();
+        let thread_id = self.supports_thread_id();
+        let media_enabled = self.media_repository.is_some();
+        let mut actions = vec!["send".into(), "typing".into(), "delete".into()];
+        if progressive_edits {
+            actions.push("draft-update".into());
+        }
+        if self.supports_edit() {
+            actions.push("edit".into());
+        }
+        if reply_to_id || thread_id {
+            actions.push("reply".into());
+        }
+        if thread_id {
+            actions.push("thread-reply".into());
+        }
+        actions.extend(["react".into(), "reactions".into()]);
+        let mut parts = vec!["text".into()];
+        parts.extend([
+            "location".into(),
+            "contact".into(),
+            "buttons".into(),
+            "poll".into(),
+            "presentation".into(),
+        ]);
+        let media_capability = |accepted: &[&str], emitted: &[&str], max_size_bytes: u64| {
+            if media_enabled {
+                tinychannels_bus::ContentCapability {
+                    inbound: true,
+                    outbound: true,
+                    accepted_types: accepted.iter().map(|kind| (*kind).to_owned()).collect(),
+                    emitted_types: emitted.iter().map(|kind| (*kind).to_owned()).collect(),
+                    max_size_bytes: Some(max_size_bytes),
+                    ..Default::default()
+                }
+            } else {
+                tinychannels_bus::ContentCapability::default()
+            }
+        };
+        if media_enabled {
+            parts.extend([
+                "image".into(),
+                "video".into(),
+                "audio".into(),
+                "file".into(),
+                "sticker".into(),
+            ]);
+        }
+        let (voice_in, voice_out) = if self.voice_media_store.is_some() {
+            parts.push("voice_note".into());
+            (
+                tinychannels_bus::VoiceCapabilities {
+                    supported: true,
+                    max_size_bytes: Some(8 * 1024 * 1024),
+                    transcript_sources: vec![
+                        tinychannels_bus::VoiceTranscriptSource::Provider,
+                        tinychannels_bus::VoiceTranscriptSource::HostStt,
+                    ],
+                    ..Default::default()
+                },
+                tinychannels_bus::VoiceCapabilities {
+                    supported: true,
+                    accepted_codecs: vec!["ogg_opus".into(), "m4a_aac".into(), "mp3".into()],
+                    max_size_bytes: Some(8 * 1024 * 1024),
+                    synthesis: self.voice_synthesis,
+                    ..Default::default()
+                },
+            )
+        } else {
+            (
+                tinychannels_bus::VoiceCapabilities::default(),
+                tinychannels_bus::VoiceCapabilities::default(),
+            )
+        };
+        tinychannels_bus::ChannelCapabilities {
+            remote_control: true,
+            chat_approvals: true,
+            history_key_ignores_thread: true,
+            reactions: true,
+            progressive_edits,
+            streaming_reply_pipeline,
+            addressing: tinychannels_bus::AddressingCapabilities {
+                reply_to_id,
+                thread_id,
+                ..Default::default()
+            },
+            content: tinychannels_bus::ContentCapabilities {
+                parts,
+                text: tinychannels_bus::ContentCapability {
+                    inbound: true,
+                    outbound: true,
+                    ..Default::default()
+                },
+                image: media_capability(
+                    &["image/jpeg", "image/png", "image/gif", "image/webp"],
+                    &["image/jpeg", "image/png"],
+                    10 * 1024 * 1024,
+                ),
+                video: media_capability(
+                    &["video/mp4", "video/quicktime", "video/webm"],
+                    &["video/mp4"],
+                    20 * 1024 * 1024,
+                ),
+                audio: media_capability(
+                    &[
+                        "audio/ogg",
+                        "audio/mpeg",
+                        "audio/mp4",
+                        "audio/wav",
+                        "audio/webm",
+                    ],
+                    &["audio/mpeg", "audio/mp4"],
+                    20 * 1024 * 1024,
+                ),
+                file: media_capability(
+                    &[
+                        "application/pdf",
+                        "text/plain",
+                        "text/csv",
+                        "application/json",
+                        "application/zip",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    ],
+                    &[
+                        "application/pdf",
+                        "text/plain",
+                        "text/csv",
+                        "application/json",
+                        "application/zip",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    ],
+                    20 * 1024 * 1024,
+                ),
+                sticker: if media_enabled {
+                    tinychannels_bus::ContentCapability {
+                        inbound: true,
+                        outbound: true,
+                        accepted_types: vec!["image/webp".into()],
+                        emitted_types: vec!["image/webp".into()],
+                        max_size_bytes: Some(20 * 1024 * 1024),
+                        ..Default::default()
+                    }
+                } else {
+                    tinychannels_bus::ContentCapability::default()
+                },
+                location: tinychannels_bus::ContentCapability {
+                    inbound: true,
+                    outbound: true,
+                    ..Default::default()
+                },
+                contact: tinychannels_bus::ContentCapability {
+                    inbound: true,
+                    outbound: true,
+                    ..Default::default()
+                },
+                buttons: tinychannels_bus::ContentCapability {
+                    outbound: true,
+                    ..Default::default()
+                },
+                button_presentation: tinychannels_bus::ButtonPresentationCapabilities {
+                    max_actions_per_row: Some(8),
+                    max_rows: Some(100),
+                    max_label_length: Some(64),
+                    max_value_bytes: Some(64),
+                    ..Default::default()
+                },
+                poll: tinychannels_bus::ContentCapability {
+                    outbound: true,
+                    ..Default::default()
+                },
+                presentation: tinychannels_bus::ContentCapability {
+                    outbound: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            actions: tinychannels_bus::ActionCapabilities {
+                supported: actions,
+                ..Default::default()
+            },
+            voice_in,
+            voice_out,
+            events: tinychannels_bus::EventCapabilities {
+                supported: vec![
+                    "button_callback".into(),
+                    "reaction_added".into(),
+                    "reaction_removed".into(),
+                    "outbound_reaction".into(),
+                    "message_updated".into(),
+                ],
+            },
+            ..Default::default()
+        }
+    }
+
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
+
+    fn history_key_ignores_thread(&self) -> bool {
+        true
+    }
+
+    /// Recipient-less proactive sends (cron/heartbeat) deliver to the bot's
+    /// configured default `chat_id`. `None` when unconfigured, so proactive
+    /// routing skips Telegram rather than letting `send` POST to an empty
+    /// `chat_id` (mirrors Discord — #3712 Telegram parity).
+    fn proactive_target(&self) -> Option<String> {
+        self.chat_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    }
+
+    fn supports_reactions(&self) -> bool {
+        true
+    }
+
+    fn supports_edit(&self) -> bool {
+        true
+    }
+
+    fn supports_reply_to_id(&self) -> bool {
+        true
+    }
+
+    fn supports_thread_id(&self) -> bool {
+        true
+    }
+
+    fn supports_draft_updates(&self) -> bool {
+        self.stream_mode != StreamMode::Off
+    }
+
+    async fn send_draft(&self, message: &SendMessage) -> anyhow::Result<Option<String>> {
+        self.send_draft_provider(message).await
+    }
+
+    async fn update_draft(
+        &self,
+        recipient: &str,
+        message_id: &str,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        self.update_draft_provider(recipient, message_id, text)
+            .await
+    }
+
+    async fn finalize_draft(
+        &self,
+        recipient: &str,
+        message_id: &str,
+        text: &str,
+        thread_ts: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.finalize_draft_provider(recipient, message_id, text, thread_ts)
+            .await
+    }
+
+    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
+        // Strip tool_call tags before processing to prevent Markdown parsing failures
+        let content = strip_tool_call_tags(&message.content);
+        let parent_message_id = Self::parse_message_id(message.thread_ts.as_deref());
+
+        // Parse recipient: "chat_id" or "chat_id:thread_id" format
+        let (chat_id, thread_id) = match message.recipient.split_once(':') {
+            Some((chat, thread)) => (chat, Some(thread)),
+            None => (message.recipient.as_str(), None),
+        };
+
+        self.send_text_chunks(&content, chat_id, thread_id, parent_message_id)
+            .await
+    }
+
+    async fn send_typed_with_receipt(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
+        self.send_v2_with_receipt(message).await
+    }
+
+    async fn send_reaction(
+        &self,
+        conversation: &tinychannels_bus::channel::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::channel::ChannelReaction,
+        remove: bool,
+    ) -> anyhow::Result<()> {
+        self.send_reaction_v2(conversation, provider_message_id, reaction, remove)
+            .await
+    }
+
+    async fn edit_message(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+        intent: &tinychannels_bus::channel::ChannelOutboundIntent,
+    ) -> anyhow::Result<tinychannels_bus::channel::MessageReceipt> {
+        self.edit_message_v2(receipt, intent).await
+    }
+
+    async fn delete_message(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> anyhow::Result<()> {
+        self.delete_message_v2(receipt).await
+    }
+
+    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+        let (_cancel_tx, cancellation) = tokio::sync::watch::channel(false);
+        self.listen_loop(Some(tx), None, cancellation).await
     }
 
     async fn health_check(&self) -> bool {
