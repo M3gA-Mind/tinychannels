@@ -1,6 +1,6 @@
 use super::*;
 use base64::Engine as _;
-use hmac::Mac as _;
+use hmac::{KeyInit as _, Mac as _};
 use tinychannels_bus::ChannelsConfig;
 use tinychannels_bus::config::WhatsAppConfig;
 

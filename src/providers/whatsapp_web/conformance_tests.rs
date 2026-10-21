@@ -271,7 +271,10 @@ impl WebKit {
                 .build(),
         );
         let (tx, _rx) = tokio::sync::mpsc::channel(4);
-        self.channel.inbound_state(tx).handle_event(&batch).await;
+        self.channel
+            .inbound_state(tx, None)
+            .handle_event(&batch)
+            .await;
     }
 
     fn published(&self) -> Vec<ChannelIngress> {
