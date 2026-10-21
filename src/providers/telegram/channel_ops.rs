@@ -3092,9 +3092,13 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
         }
         let _guard = TelegramListenerGuard(&self.listener_running);
         self.listener_cancel.send_replace(false);
-        let cancellation = self.listener_cancel.subscribe();
-        self.listen_loop(None, Some(sink), cancellation)
-            .await
+        let mut stop = self.listener_cancel.subscribe();
+        let poll_cancellation = stop.clone();
+        tokio::select! {
+            biased;
+            _ = stop.wait_for(|stopped| *stopped) => Ok(()),
+            result = self.listen_loop(None, Some(sink), poll_cancellation) => result,
+        }
             .map_err(|error| crate::channel::ChannelSendError {
                 kind: tinychannels_bus::channel::SendErrorKind::Transient,
                 message: error.to_string(),
