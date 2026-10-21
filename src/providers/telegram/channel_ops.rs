@@ -8,6 +8,21 @@ use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use std::time::Duration;
 
+fn parse_telegram_reply_to_id(reply_to_id: &str) -> anyhow::Result<i64> {
+    reply_to_id
+        .parse::<i64>()
+        .ok()
+        .or_else(|| {
+            reply_to_id
+                .strip_prefix("telegram_")?
+                .rsplit_once('_')?
+                .1
+                .parse::<i64>()
+                .ok()
+        })
+        .ok_or_else(|| anyhow::anyhow!("Telegram reply_to_id must contain a numeric message ID"))
+}
+
 impl TelegramChannel {
     pub(crate) fn inbound_envelope_from_update(
         update: &serde_json::Value,
@@ -133,6 +148,37 @@ impl Channel for TelegramChannel {
     }
 
     fn supports_chat_approvals(&self) -> bool {
+        true
+    }
+
+    fn validate_typed_send(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<()> {
+        for part in &message.parts {
+            if !matches!(
+                part,
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text { .. }
+                }
+            ) {
+                anyhow::bail!("Telegram typed sends currently support text content only");
+            }
+        }
+        if message.parts.is_empty() {
+            anyhow::bail!("Telegram typed sends require at least one text part");
+        }
+        if let Some(reply_to_id) = message.reply_to_id.as_deref() {
+            let _ = parse_telegram_reply_to_id(reply_to_id)?;
+        }
+        Ok(())
+    }
+
+    fn supports_reply_to_id(&self) -> bool {
+        true
+    }
+
+    fn supports_thread_id(&self) -> bool {
         true
     }
 
@@ -480,9 +526,7 @@ impl Channel for TelegramChannel {
             .or(message.thread_id.as_deref())
             .map(str::to_owned);
         let reply_to_id = match message.reply_to_id.as_deref() {
-            Some(id) => Some(id.parse::<i64>().map_err(|_| {
-                anyhow::anyhow!("Telegram reply_to_id must be a numeric message ID")
-            })?),
+            Some(id) => Some(parse_telegram_reply_to_id(id)?),
             None => None,
         };
         let (ids, error, _sent_before_error) = match self

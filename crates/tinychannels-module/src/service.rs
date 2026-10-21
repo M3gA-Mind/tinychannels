@@ -239,8 +239,9 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
             Err(error) => {
                 return Err(DeliveryAttemptFailure {
                     error: "provider send failed".into(),
-                    sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
-                    permanent: None,
+                    sent_before_error: matches!(&error, RunningSendError::AfterDispatch(_)),
+                    permanent: matches!(&error, RunningSendError::ValidationFailed(_))
+                        .then_some(true),
                     receipt: None,
                 });
             }

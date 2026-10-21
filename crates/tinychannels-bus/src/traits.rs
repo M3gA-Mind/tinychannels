@@ -153,6 +153,16 @@ pub trait Channel: Send + Sync {
         self.send(&message.to_legacy_message()?).await
     }
 
+    /// Validate a typed send before it enters the provider actor. The default
+    /// validates the one-release text-only projection; native typed providers
+    /// should override this with their own content and addressing checks.
+    fn validate_typed_send(
+        &self,
+        message: &crate::channel::ChannelOutboundMessage,
+    ) -> anyhow::Result<()> {
+        message.to_legacy_message().map(|_| ())
+    }
+
     /// Send canonical content and return the provider receipt when the actual
     /// provider response supplies message IDs. Legacy adapters remain usable;
     /// they return an empty receipt rather than guessing an ID.

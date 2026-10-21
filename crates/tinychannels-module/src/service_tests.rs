@@ -94,6 +94,13 @@ impl tinychannels::Channel for CaptureTypedChannel {
         Ok(())
     }
 
+    fn validate_typed_send(
+        &self,
+        _message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn listen(
         &self,
         _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
@@ -741,6 +748,27 @@ impl DurableHost {
 
 struct FailingChannel(Arc<std::sync::atomic::AtomicUsize>);
 
+struct LegacyProjectionRejectingChannel(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl tinychannels::Channel for LegacyProjectionRejectingChannel {
+    fn name(&self) -> &str {
+        "fixture"
+    }
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
 #[async_trait::async_trait]
 impl tinychannels::Channel for FailingChannel {
     fn name(&self) -> &str {
@@ -840,6 +868,32 @@ async fn required_durable_ambiguous_send_without_ids_is_not_retried() {
             .is_err()
     );
     assert_eq!(sends.load(Ordering::SeqCst), 1);
+    channels.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn required_durable_legacy_projection_failure_is_permanent_before_provider_io() {
+    let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (channels, callbacks, _server) =
+        channels_with_store(Arc::new(LegacyProjectionRejectingChannel(sends.clone()))).await;
+    let mut intent = required_intent("legacy-projection", "body");
+    intent.payload = tinychannels_bus::OutboundPayload::Media {
+        text: Some("caption".into()),
+        media_urls: vec!["https://example.test/image.png".into()],
+    };
+
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), intent)
+            .await
+            .is_err()
+    );
+
+    assert_eq!(sends.load(Ordering::SeqCst), 0);
+    let scopes = callbacks.storage.snapshot().await;
+    let queue = scopes.get("scope-a").unwrap();
+    assert!(!queue.pending.contains_key("legacy-projection"));
+    assert!(queue.failed.contains_key("legacy-projection"));
     channels.shutdown().await.unwrap();
 }
 

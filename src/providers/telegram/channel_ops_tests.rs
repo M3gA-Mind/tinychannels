@@ -141,6 +141,80 @@ async fn typed_send_receipt_uses_actual_telegram_ids_and_full_address() {
 }
 
 #[tokio::test]
+async fn typed_send_decodes_normalized_telegram_reply_ids() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 322 })),
+    )
+    .await;
+    let ch = channel_for(&server, &["*"]);
+    let mut message = typed_text("normalized-reply", "hello".into());
+    message.reply_to_id = Some("telegram_-10042_5".into());
+
+    let outcome = ch.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.error, None);
+    assert_eq!(
+        json_bodies(&server, "sendMessage").await[0]["reply_to_message_id"],
+        5
+    );
+}
+
+#[tokio::test]
+async fn typed_send_validation_accepts_normalized_reply_ids() {
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["*"]);
+    let mut message = typed_text("preflight", "hello".into());
+    message.reply_to_id = Some("telegram_-10042_5".into());
+
+    ch.validate_typed_send(&message).unwrap();
+}
+
+#[tokio::test]
+async fn typed_send_validation_rejects_unsupported_parts_and_invalid_reply_ids() {
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["*"]);
+    let mut unsupported = typed_text("unsupported", "hello".into());
+    unsupported.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: Default::default(),
+            caption: None,
+            alt_text: None,
+        },
+    }];
+    assert!(ch.validate_typed_send(&unsupported).is_err());
+
+    let mut invalid_reply = typed_text("invalid-reply", "hello".into());
+    invalid_reply.reply_to_id = Some("telegram_bad_id".into());
+    assert!(ch.validate_typed_send(&invalid_reply).is_err());
+
+    let mut empty = typed_text("empty", "hello".into());
+    empty.parts.clear();
+    assert!(ch.validate_typed_send(&empty).is_err());
+}
+
+#[tokio::test]
+async fn typed_send_receipt_rejects_non_text_parts_before_provider_io() {
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["*"]);
+    let mut message = typed_text("unsupported", "hello".into());
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: Default::default(),
+            caption: None,
+            alt_text: None,
+        },
+    }];
+
+    let error = ch.send_typed_with_receipt(&message).await.unwrap_err();
+
+    assert!(error.to_string().contains("text content only"));
+    assert!(json_bodies(&server, "sendMessage").await.is_empty());
+}
+
+#[tokio::test]
 async fn typed_send_receipt_keeps_ordered_multiple_text_parts() {
     let server = mock_api().await;
     mount_post(
@@ -224,11 +298,7 @@ async fn typed_send_rejects_non_numeric_reply_reference_before_provider_io() {
 
     let error = ch.send_typed_with_receipt(&message).await.unwrap_err();
 
-    assert!(
-        error
-            .to_string()
-            .contains("reply_to_id must be a numeric message ID")
-    );
+    assert!(error.to_string().contains("numeric message ID"));
     assert!(json_bodies(&server, "sendMessage").await.is_empty());
 }
 

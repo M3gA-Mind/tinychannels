@@ -118,6 +118,28 @@ fn supports_draft_updates_respects_stream_mode() {
     assert!(partial.silent_streaming);
 }
 
+#[test]
+fn capabilities_advertise_supported_reply_and_topic_addressing() {
+    let capabilities = TelegramChannel::new("token".into(), vec!["*".into()], false).capabilities();
+
+    assert!(capabilities.addressing.reply_to_id);
+    assert!(capabilities.addressing.thread_id);
+    assert!(
+        capabilities
+            .actions
+            .supported
+            .iter()
+            .any(|name| name == "reply")
+    );
+    assert!(
+        capabilities
+            .actions
+            .supported
+            .iter()
+            .any(|name| name == "thread-reply")
+    );
+}
+
 #[tokio::test]
 async fn send_draft_returns_none_when_stream_mode_off() {
     let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);

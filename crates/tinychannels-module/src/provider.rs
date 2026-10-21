@@ -124,6 +124,7 @@ struct SendCommand {
 
 #[derive(Debug)]
 pub(crate) enum RunningSendError {
+    ValidationFailed(String),
     NotDispatched(String),
     AfterDispatch(String),
 }
@@ -131,9 +132,9 @@ pub(crate) enum RunningSendError {
 impl std::fmt::Display for RunningSendError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotDispatched(message) | Self::AfterDispatch(message) => {
-                formatter.write_str(message)
-            }
+            Self::ValidationFailed(message)
+            | Self::NotDispatched(message)
+            | Self::AfterDispatch(message) => formatter.write_str(message),
         }
     }
 }
@@ -533,6 +534,9 @@ impl Running {
         &self,
         message: tinychannels_bus::ChannelOutboundMessage,
     ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, RunningSendError> {
+        self.channel
+            .validate_typed_send(&message)
+            .map_err(|error| RunningSendError::ValidationFailed(error.to_string()))?;
         match self.submit(ProviderOperation::SendTyped(message)).await? {
             tinychannels_bus::ChannelInteractionResult::Sent(receipt) => Ok(*receipt),
             _ => Err(RunningSendError::AfterDispatch(

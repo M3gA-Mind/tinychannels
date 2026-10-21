@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct SlowChannel {
     started: StdMutex<Option<oneshot::Sender<()>>>,
@@ -614,4 +615,63 @@ async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
             );
         }
     }
+}
+
+struct LegacyTextOnlyChannel(Arc<AtomicUsize>);
+
+#[async_trait::async_trait]
+impl Channel for LegacyTextOnlyChannel {
+    fn name(&self) -> &str {
+        "legacy-text-only"
+    }
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn typed_legacy_projection_failure_is_not_reported_as_dispatched() {
+    let sends = Arc::new(AtomicUsize::new(0));
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let running = Running::start(
+        Arc::new(LegacyTextOnlyChannel(sends.clone())),
+        Arc::new(Hooks::default()),
+        HostChannels::new(connection),
+    );
+    let message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "legacy-text-only".into(),
+        conversation_id: "room".into(),
+        channel_ref: None,
+        conversation_ref: None,
+        reply_to_id: None,
+        thread_id: None,
+        idempotency_key: "typed-non-text".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: Default::default(),
+                caption: None,
+                alt_text: None,
+            },
+        }],
+    };
+
+    let error = running.send_typed(message).await.unwrap_err();
+
+    assert!(matches!(error, RunningSendError::ValidationFailed(_)));
+    assert!(!error.to_string().is_empty());
+    assert_eq!(sends.load(Ordering::SeqCst), 0);
+    running.stop().await.unwrap();
 }
