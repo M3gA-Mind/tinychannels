@@ -19,7 +19,7 @@ Never use triple backtick code fences. Use a single blank line to separate block
 Be terse and concise. \
 Use short lines. Avoid walls of text.]\n";
 
-pub(super) struct ListenerRegistration<'a>(&'a IrcChannel);
+pub(super) struct ListenerRegistration<'a>(pub(super) &'a IrcChannel);
 
 impl Drop for ListenerRegistration<'_> {
     fn drop(&mut self) {
