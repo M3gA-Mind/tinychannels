@@ -1745,6 +1745,43 @@ impl TelegramChannel {
 }
 
 impl TelegramChannel {
+    async fn deliver_listener_event(
+        &self,
+        typed_sink: Option<&(dyn crate::channel::ChannelInboundSink + Send + Sync)>,
+        event: tinychannels_bus::ChannelEvent,
+    ) -> anyhow::Result<()> {
+        let ingress = tinychannels_bus::ChannelIngress::Event(event);
+        if let Some(sink) = typed_sink {
+            sink.push(ingress)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+        } else if let Some(events) = &self.events
+            && let Err(error) = events.publish_ingress(ingress).await
+        {
+            tracing::debug!(%error, "failed to deliver Telegram listener event");
+        }
+        Ok(())
+    }
+
+    async fn deliver_listener_inbound(
+        &self,
+        typed_sink: Option<&(dyn crate::channel::ChannelInboundSink + Send + Sync)>,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> anyhow::Result<bool> {
+        if let Some(sink) = typed_sink {
+            sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+            return Ok(true);
+        }
+        if let Some(events) = &self.events {
+            return events
+                .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await;
+        }
+        Ok(false)
+    }
+
     async fn listen_loop(
         &self,
         legacy_tx: Option<tokio::sync::mpsc::Sender<ChannelMessage>>,
@@ -1774,20 +1811,46 @@ impl TelegramChannel {
                 "allowed_updates": ["message", "edited_message", "message_reaction", "callback_query"]
             });
 
-            let resp = match self.http_client().post(&url).json(&body).send().await {
+                    let response = tokio::select! {
+                        biased;
+                        changed = cancellation.changed() => {
+                            if changed.is_err() || *cancellation.borrow() {
+                                return Ok(());
+                            }
+                            continue;
+                        }
+                        response = self.http_client().post(&url).json(&body).send() => response,
+                    };
+                    let resp = match response {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!("Telegram poll error: {e}");
-                    tokio::time::sleep(self.poll_error_backoff).await;
+                        tokio::select! {
+                            _ = cancellation.changed() => return Ok(()),
+                            _ = tokio::time::sleep(self.poll_error_backoff) => {}
+                        }
                     continue;
                 }
             };
 
-            let data: serde_json::Value = match resp.json().await {
+            let parsed = tokio::select! {
+                biased;
+                changed = cancellation.changed() => {
+                    if changed.is_err() || *cancellation.borrow() {
+                        return Ok(());
+                    }
+                    continue;
+                }
+                parsed = resp.json() => parsed,
+            };
+            let data: serde_json::Value = match parsed {
                 Ok(d) => d,
                 Err(e) => {
                     tracing::warn!("Telegram parse error: {e}");
-                    tokio::time::sleep(self.poll_error_backoff).await;
+                    tokio::select! {
+                        _ = cancellation.changed() => return Ok(()),
+                        _ = tokio::time::sleep(self.poll_error_backoff) => {}
+                    }
                     continue;
                 }
             };
