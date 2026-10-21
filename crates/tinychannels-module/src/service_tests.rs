@@ -2,6 +2,37 @@ use super::*;
 use tinychannels_bus::ChannelsConfig;
 use tinychannels_bus::config::WhatsAppConfig;
 
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn test_remote_channel_fixture_registers_and_cleans_up_without_network() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let channels = Channels::new(HostChannels::new(connection), None);
+
+    channels
+        .register_test_remote_channel("telegram".into())
+        .await
+        .unwrap();
+    assert!(
+        configured_capabilities(&channels.running, "telegram")
+            .await
+            .remote_control
+    );
+
+    channels
+        .unregister_test_remote_channel("telegram".into())
+        .await
+        .unwrap();
+    assert!(
+        !configured_capabilities(&channels.running, "telegram")
+            .await
+            .remote_control
+    );
+}
+
 /// Mirrors the predicate in `start_channel`.
 ///
 /// Extracted rather than duplicated in the test so the two cannot disagree:
