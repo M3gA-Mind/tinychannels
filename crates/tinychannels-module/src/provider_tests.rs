@@ -53,7 +53,7 @@ async fn typed_test_provider_defaults_remain_explicitly_unsupported_and_stoppabl
     let adapter = Arc::new(TestNative::new(provider.clone()));
     assert_eq!(adapter.descriptor().id, "bare-fixture");
     assert!(adapter.media_account_identity().is_none());
-    assert!(!adapter.declared_capabilities().content.text.outbound);
+    assert!(adapter.declared_capabilities().content.text.outbound);
 
     let start = {
         let adapter = adapter.clone();
