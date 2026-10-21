@@ -1112,9 +1112,16 @@ impl AdapterFixture for LongTailFixture {
         self.channel.as_ref()
     }
 
-    fn expected_scope(&self, _feature: Feature) -> ExpectedScope {
+    fn expected_scope(&self, feature: Feature) -> ExpectedScope {
         ExpectedScope {
-            channel: account(self.id),
+            channel: if self.id == "dingtalk" && feature == Feature::VoiceIn {
+                ChannelRef {
+                    id: "dingtalk".into(),
+                    account_id: Some("fixture-app-key".into()),
+                }
+            } else {
+                account(self.id)
+            },
             conversation: if self.id == "qq" {
                 ConversationRef {
                     kind: tinychannels_bus::ConversationKind::Dm,
