@@ -15,6 +15,15 @@ pub struct HostVoiceScope {
     pub turn_id: String,
 }
 
+/// Whether stored channel media arrived from a provider or was prepared for
+/// outbound delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HostVoiceMediaDirection {
+    Inbound,
+    Outbound,
+}
+
 /// Request speech recognition through the host's configured voice provider.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
