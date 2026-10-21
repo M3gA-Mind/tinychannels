@@ -641,7 +641,13 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         assert!(result.is_err(), "{key} normalizes to invalid empty parts");
     }
     client
-        .call::<()>(tinychannels_bus::methods::SHUTDOWN, ())
+        .call::<()>(
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+            tinychannels_bus::methods::SHUTDOWN.try_into().unwrap(),
+            (),
+        )
         .await
         .unwrap();
     host.shutdown().await.unwrap();
@@ -1198,13 +1204,7 @@ async fn confidential_media_bus_roundtrips_only_within_the_provider_turn_scope()
         .await
         .unwrap();
     client
-        .call::<()>(
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::methods::SHUTDOWN.try_into().unwrap(),
-            (),
-        )
+        .call::<()>(tinychannels_bus::methods::SHUTDOWN, ())
         .await
         .unwrap();
 }
