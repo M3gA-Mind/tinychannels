@@ -31,7 +31,10 @@ fn stored_delivery_round_trip_preserves_v22_scope_and_partial_receipt() {
     let restored = DeliveryQueueEntry::from(stored);
 
     assert_eq!(restored.intent.channel_ref, entry.intent.channel_ref);
-    assert_eq!(restored.intent.conversation_ref, entry.intent.conversation_ref);
+    assert_eq!(
+        restored.intent.conversation_ref,
+        entry.intent.conversation_ref
+    );
     assert_eq!(restored.partial_receipt, Some(receipt));
 }
 
