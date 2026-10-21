@@ -12,12 +12,14 @@ impl crate::channel::ChannelInboundSink for DingTalkInboundRecorder {
         &self,
         ingress: tinychannels_bus::ChannelIngress,
     ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-        self.0.send(ingress).map_err(|_| tinychannels_bus::channel::ChannelSendError {
-            kind: tinychannels_bus::channel::SendErrorKind::Transient,
-            message: "DingTalk test sink is closed".into(),
-            retryable: true,
-            ..Default::default()
-        })
+        self.0
+            .send(ingress)
+            .map_err(|_| tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "DingTalk test sink is closed".into(),
+                retryable: true,
+                ..Default::default()
+            })
     }
 }
 
@@ -141,7 +143,7 @@ async fn gateway_registration_and_webhook_replies_preserve_payloads_and_errors()
             .await
             .unwrap_err()
             .to_string()
-            .contains("No session webhook")
+            .contains("admitted App Bot conversation")
     );
 
     let webhook = MockServer::start().await;
@@ -443,9 +445,8 @@ async fn stream_file_callback_downloads_and_publishes_typed_ingress_once() {
     });
     let listening_channel = channel.clone();
     let listening_sink = sink.clone();
-    let listening = tokio::spawn(async move {
-        listening_channel.start(listening_sink.as_ref()).await
-    });
+    let listening =
+        tokio::spawn(async move { listening_channel.start(listening_sink.as_ref()).await });
 
     websocket.await.unwrap();
     assert!(
@@ -455,7 +456,8 @@ async fn stream_file_callback_downloads_and_publishes_typed_ingress_once() {
             .unwrap()
             .is_err()
     );
-    let Some(tinychannels_bus::ChannelIngress::Inbound(ingress)) = ingress_rx.try_recv().ok() else {
+    let Some(tinychannels_bus::ChannelIngress::Inbound(ingress)) = ingress_rx.try_recv().ok()
+    else {
         panic!("typed DingTalk callback should reach the supplied sink");
     };
     assert_eq!(ingress.message_id, "provider-message-42");
@@ -468,7 +470,10 @@ async fn stream_file_callback_downloads_and_publishes_typed_ingress_once() {
             ..
         } if name == "report.pdf"
     ));
-    assert!(ingress_rx.try_recv().is_err(), "one callback yields one typed event");
+    assert!(
+        ingress_rx.try_recv().is_err(),
+        "one callback yields one typed event"
+    );
     let stored = media.stored.lock().unwrap();
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].bytes, b"provider-file-bytes");
@@ -594,9 +599,8 @@ async fn stream_audio_callback_stores_provider_voice_and_acknowledges_frame() {
     });
     let listening_channel = channel.clone();
     let listening_sink = sink.clone();
-    let listening = tokio::spawn(async move {
-        listening_channel.start(listening_sink.as_ref()).await
-    });
+    let listening =
+        tokio::spawn(async move { listening_channel.start(listening_sink.as_ref()).await });
 
     websocket.await.unwrap();
     assert!(
@@ -606,13 +610,13 @@ async fn stream_audio_callback_stores_provider_voice_and_acknowledges_frame() {
             .unwrap()
             .is_err()
     );
-    let Some(tinychannels_bus::ChannelIngress::Inbound(inbound)) = ingress_rx.try_recv().ok() else {
+    let Some(tinychannels_bus::ChannelIngress::Inbound(inbound)) = ingress_rx.try_recv().ok()
+    else {
         panic!("typed DingTalk audio callback should reach the supplied sink");
     };
     assert_eq!(inbound.message_id, "voice-message-8");
     assert_eq!(inbound.conversation.id, "dm-a");
-    let [tinychannels_bus::ContentPart::VoiceNote { voice_note }] = inbound.parts.as_slice()
-    else {
+    let [tinychannels_bus::ContentPart::VoiceNote { voice_note }] = inbound.parts.as_slice() else {
         panic!("DingTalk audio must be accepted as typed voice content");
     };
     assert_eq!(voice_note.transcript.as_ref().unwrap().text, "turn left");
@@ -704,9 +708,8 @@ async fn unauthorized_attachment_callback_is_not_downloaded_or_published() {
     });
     let listening_channel = channel.clone();
     let listening_sink = sink.clone();
-    let listening = tokio::spawn(async move {
-        listening_channel.start(listening_sink.as_ref()).await
-    });
+    let listening =
+        tokio::spawn(async move { listening_channel.start(listening_sink.as_ref()).await });
     websocket.await.unwrap();
     assert!(
         tokio::time::timeout(std::time::Duration::from_secs(3), listening)
