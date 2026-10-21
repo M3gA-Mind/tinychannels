@@ -244,6 +244,7 @@ pub(super) fn base_state(
     use std::sync::atomic::AtomicBool;
     super::InboundState {
         tx,
+        typed_tx: None,
         allowed_numbers: allowed.iter().map(|value| (*value).to_owned()).collect(),
         connected: Arc::new(AtomicBool::new(false)),
         allowed_groups: Arc::new(Mutex::new(std::collections::HashSet::new())),
@@ -252,6 +253,7 @@ pub(super) fn base_state(
         voice_media_store: None,
         client: Arc::new(Mutex::new(None)),
         seen: Arc::new(Mutex::new(SeenSet::new(64))),
+        typed_delivery: Arc::new(tokio::sync::Mutex::new(())),
         authors: Arc::new(Mutex::new(BoundedMap::new(64))),
         identity: Arc::new(super::identity::LinkedIdentity::default()),
     }

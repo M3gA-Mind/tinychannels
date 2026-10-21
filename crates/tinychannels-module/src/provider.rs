@@ -215,6 +215,30 @@ async fn dispatch_interaction(
                 .await
             }
         }
+        Op::MarkRead {
+            channel: channel_ref,
+            conversation,
+            provider_message_id,
+        } => {
+            let native = native
+                .as_ref()
+                .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?;
+            if channel_ref.id != tinychannels_bus::provider_id(configured_instance)
+                || channel_ref.account_id.as_deref() != Some(configured_instance)
+                || conversation.id.trim().is_empty()
+                || provider_message_id.trim().is_empty()
+            {
+                return Err(Error::failed(
+                    "provider read receipt scope is incomplete or does not match configured account",
+                ));
+            }
+            native
+                .adapter
+                .mark_read(&conversation, &provider_message_id)
+                .await
+                .map_err(|_| Error::failed("provider read receipt failed"))?;
+            Ok(tinychannels_bus::ChannelInteractionResult::Completed)
+        }
         Op::SendReaction {
             channel: channel_ref,
             conversation,
@@ -1893,18 +1917,18 @@ impl Running {
         outbound_only: bool,
     ) -> Arc<Self>
     where
-        T: tinychannels::LongTailNative + Channel + 'static,
+        T: tinychannels::LongTailNative + 'static,
     {
-        let provider_name = channel.descriptor().id;
-        let legacy: Arc<dyn Channel> = channel.clone();
-        let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
-        let listener_mode = if matches!(provider_name.as_str(), "signal" | "email") {
-            LongTailListenerMode::Adapter
-        } else {
-            LongTailListenerMode::Legacy
+        let descriptor = channel.descriptor();
+        let provider_name = descriptor.id;
+        let listener_mode = match descriptor.metadata.get("backend").map(String::as_str) {
+            Some("cloud") => LongTailListenerMode::Webhook,
+            Some("web") => LongTailListenerMode::Adapter,
+            _ => LongTailListenerMode::Legacy,
         };
+        let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
         Self::start_inner(
-            Some(legacy),
+            None,
             provider_name,
             hooks,
             host,

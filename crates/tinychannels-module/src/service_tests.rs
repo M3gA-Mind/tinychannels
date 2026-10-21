@@ -1,5 +1,6 @@
 use super::*;
 use base64::Engine as _;
+use hmac::{KeyInit as _, Mac as _};
 use tinychannels_bus::ChannelsConfig;
 use tinychannels_bus::config::WhatsAppConfig;
 
@@ -4390,7 +4391,57 @@ async fn shutdown_refuses_preparation_and_execution_before_host_work() {
 
 #[tokio::test]
 async fn whatsapp_cloud_starts_normally_and_serves_webhook_ingress_over_the_bus() {
-    let service = inbound_preparation_service().await;
+    #[derive(Clone)]
+    struct WebhookHost;
+
+    #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
+    impl WebhookHost {
+        async fn deliver_inbound(
+            &self,
+            _channel: String,
+            _message: serde_json::Value,
+        ) -> tinybus::Result<()> {
+            Ok(())
+        }
+
+        async fn report_status(
+            &self,
+            _channel: String,
+            _state: String,
+            _detail: Option<String>,
+        ) -> tinybus::Result<()> {
+            Ok(())
+        }
+
+        async fn persist_allowed_identity(
+            &self,
+            _channel: String,
+            _identity: String,
+        ) -> tinybus::Result<()> {
+            Ok(())
+        }
+    }
+
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let host_server = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    host_server
+        .serve_at(
+            tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
+            WebhookHost,
+        )
+        .await
+        .unwrap();
+    host_server
+        .request_name(tinychannels_bus::HOST_BUS_NAME)
+        .await
+        .unwrap();
+    let module = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let service = Channels::new(HostChannels::new(module), None);
     let config = ChannelsConfig {
         whatsapp: Some(tinychannels_bus::config::WhatsAppConfig {
             access_token: Some("access-token".into()),
@@ -4408,6 +4459,36 @@ async fn whatsapp_cloud_starts_normally_and_serves_webhook_ingress_over_the_bus(
         .start_channel("whatsapp".into(), config.clone())
         .await
         .expect("the module serves the Cloud webhook ingress");
+    let running = service
+        .running
+        .lock()
+        .await
+        .get("whatsapp")
+        .cloned()
+        .expect("configured WhatsApp provider is running");
+    assert!(
+        running.channel.is_none(),
+        "Cloud webhook launch must not retain the legacy Channel trait"
+    );
+    let foreign_receipt = service
+        .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
+            channel: "whatsapp".into(),
+            interaction: tinychannels_bus::ChannelInteraction::MarkRead {
+                channel: tinychannels_bus::ChannelRef {
+                    id: "whatsapp".into(),
+                    account_id: Some("whatsapp:another-account".into()),
+                },
+                conversation: tinychannels_bus::ConversationRef {
+                    id: "15550001111".into(),
+                    kind: tinychannels_bus::ConversationKind::Dm,
+                    ..Default::default()
+                },
+                provider_message_id: "wamid.foreign".into(),
+            },
+        })
+        .await
+        .expect_err("a read receipt from another account must be refused");
+    assert!(matches!(foreign_receipt, BusError::MethodFailed { .. }));
     // The subscription handshake is answered through the interaction method.
     let challenge = service
         .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
@@ -4439,6 +4520,35 @@ async fn whatsapp_cloud_starts_normally_and_serves_webhook_ingress_over_the_bus(
     assert!(matches!(
         refused,
         BusError::MethodFailed { name, .. } if name == crate::interaction::WEBHOOK_REJECTED_ERROR
+    ));
+
+    let body = serde_json::to_vec(&serde_json::json!({
+        "object": "whatsapp_business_account",
+        "entry": [{"id": "account", "changes": [{"field": "messages", "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {"phone_number_id": "123"},
+            "contacts": [{"wa_id": "15550001111", "profile": {"name": "Ada"}}],
+            "messages": [{"from": "15550001111", "id": "wamid.typed-1", "timestamp": "1700000000", "type": "text", "text": {"body": "hello from webhook"}}]
+        }}]}]
+    }))
+    .unwrap();
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(b"secret").unwrap();
+    mac.update(&body);
+    let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
+    let accepted = service
+        .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
+            channel: "whatsapp".into(),
+            interaction: tinychannels_bus::ChannelInteraction::DeliverWebhook {
+                signature: Some(signature),
+                body_base64: base64::engine::general_purpose::STANDARD.encode(body),
+            },
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        accepted,
+        tinychannels_bus::ChannelInteractionResult::WebhookAccepted(outcome)
+            if outcome.messages == 1 && outcome.events == 0 && outcome.duplicates == 0
     ));
     service.shutdown().await.unwrap();
 }
@@ -4511,6 +4621,10 @@ async fn whatsapp_selection_follows_the_stanza_shape_and_web_binds_its_media_aut
     // An outbound-only start is network-free and still yields the native adapter.
     let service = inbound_preparation_service().await;
     let running = web.start(Arc::new(Hooks::default()), service.host.clone(), None, true);
+    assert!(
+        running.channel.is_none(),
+        "Web native launch must not retain the legacy Channel trait"
+    );
     assert_eq!(
         running
             .adapter_handle()

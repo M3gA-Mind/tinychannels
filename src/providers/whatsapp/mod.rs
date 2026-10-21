@@ -491,6 +491,26 @@ impl crate::channel::ChannelAdapter for WhatsAppChannel {
         Channel::capabilities(self)
     }
 
+    fn supports_webhook_delivery(&self) -> bool {
+        true
+    }
+
+    async fn deliver_webhook(
+        &self,
+        signature: Option<&str>,
+        body: &[u8],
+    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
+        Channel::deliver_webhook(self, signature, body).await
+    }
+
+    fn supports_webhook_verification(&self) -> bool {
+        true
+    }
+
+    fn verify_webhook(&self, mode: &str, verify_token: &str, challenge: &str) -> Option<String> {
+        Channel::verify_webhook(self, mode, verify_token, challenge)
+    }
+
     async fn start(
         &self,
         _sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
@@ -512,6 +532,16 @@ impl crate::channel::ChannelAdapter for WhatsAppChannel {
         self.send_v2(&message)
             .await
             .map_err(WaFailure::into_send_error)
+    }
+
+    async fn mark_read(
+        &self,
+        conversation: &tinychannels_bus::ConversationRef,
+        provider_message_id: &str,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        Channel::mark_read(self, conversation, provider_message_id)
+            .await
+            .map_err(|error| failure_of(&error).into_send_error())
     }
 
     async fn status(
