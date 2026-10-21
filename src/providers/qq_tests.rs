@@ -89,7 +89,7 @@ async fn oauth_cache_gateway_and_send_preserve_auth_and_routing() {
     use super::super::http_test_support::HttpsServer;
     let send_ids = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let response_ids = send_ids.clone();
-    let server = HttpsServer::start(|request| {
+    let server = HttpsServer::start(move |request| {
         if request.target == "/app/getAppAccessToken" {
             assert_eq!(request.method, "POST");
             assert_eq!(
