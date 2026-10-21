@@ -307,7 +307,7 @@ async fn gateway_listener_identifies_heartbeats_filters_and_routes_private_and_g
                     json!({"t": "C2C_MESSAGE_CREATE", "d": {"id": "closed", "content": "closed", "author": {"user_openid": "alice"}}})
                 }
                 -3 => {
-                    json!({"t": "GROUP_AT_MESSAGE_CREATE", "d": {"id": "closed", "content": "closed", "author": {"member_openid": "alice"}}})
+                    json!({"t": "GROUP_AT_MESSAGE_CREATE", "d": {"id": "closed", "content": "closed", "group_openid": "room", "author": {"member_openid": "alice"}}})
                 }
                 op => json!({"op": op}),
             };
