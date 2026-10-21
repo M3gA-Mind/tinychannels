@@ -121,15 +121,14 @@ impl NativeProvider for DingTalkChannel {
             crate::providers::long_tail::TextSpec::default(),
         );
         if let Some(_repository) = &self.native.media_repository {
-            let inbound = self.native.events.is_some();
             let image = ContentCapability {
-                inbound,
+                inbound: true,
                 accepted_types: vec!["image/jpeg".into(), "image/png".into()],
                 max_size_bytes: Some(MAX_MEDIA_BYTES),
                 ..Default::default()
             };
             let file = ContentCapability {
-                inbound,
+                inbound: true,
                 outbound: true,
                 accepted_types: vec![
                     "application/pdf".into(),
@@ -152,7 +151,7 @@ impl NativeProvider for DingTalkChannel {
             caps.content.image = image;
             caps.content.file = file;
         }
-        if self.native.events.is_some() && self.native.voice_media_store.is_some() {
+        if self.native.voice_media_store.is_some() {
             caps.content.audio = ContentCapability {
                 inbound: true,
                 accepted_types: vec![
