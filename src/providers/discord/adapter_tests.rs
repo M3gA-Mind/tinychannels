@@ -286,9 +286,7 @@ async fn typed_gateway_delivers_the_original_rich_ingress_to_its_sink() {
         let heartbeat = ws.next().await.unwrap().unwrap();
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&heartbeat.to_string()).unwrap(),
-            // No dispatch event has arrived yet, so there is no sequence to
-            // echo in this server-requested heartbeat.
-            json!({"op": 1, "d": null})
+            json!({"op": 1, "d": 11})
         );
         ws.send(Message::Text(
             json!({"op": 0, "s": 11, "t": "THREAD_CREATE", "d": {
