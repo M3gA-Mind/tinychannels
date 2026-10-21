@@ -736,10 +736,13 @@ impl LarkChannel {
         Ok(token)
     }
 
-    /// Invalidate cached token (called on 401)
-    async fn invalidate_token(&self) {
+    /// Invalidate only the token that received the explicit auth rejection.
+    /// Another request may already have refreshed the shared cache.
+    async fn invalidate_token_if_current(&self, rejected: &str) {
         let mut cached = self.tenant_token.write().await;
-        *cached = None;
+        if cached.as_deref() == Some(rejected) {
+            *cached = None;
+        }
     }
 
     /// Parse an event callback payload and extract text messages
