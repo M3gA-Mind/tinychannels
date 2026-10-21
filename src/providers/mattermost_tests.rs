@@ -645,8 +645,10 @@ async fn listener_recovers_from_invalid_json_and_delivers_posts_in_time_order() 
     tokio::time::timeout(std::time::Duration::from_secs(15), async {
         let first = rx.recv().await.unwrap();
         let second = rx.recv().await.unwrap();
-        assert_eq!((first.content.as_str(), first.reply_target.as_str()), ("first", "room:earlier"));
-        assert_eq!((second.content.as_str(), second.reply_target.as_str()), ("second", "room:later"));
+        assert_eq!((first.content.as_str(), first.reply_target.as_str()), ("first", "room"));
+        assert_eq!(first.thread_ts.as_deref(), Some("earlier"));
+        assert_eq!((second.content.as_str(), second.reply_target.as_str()), ("second", "room"));
+        assert_eq!(second.thread_ts.as_deref(), Some("later"));
         // A newer post on the next poll must terminate listening when the receiver closes.
         server.reset().await;
         Mock::given(path("/api/v4/channels/room/posts"))

@@ -393,7 +393,7 @@ fn linq_phone_number_accessor() {
 }
 
 #[tokio::test]
-async fn injected_linq_client_propagates_transport_failure_and_keeps_webhook_listener_idle() {
+async fn injected_linq_client_propagates_transport_failure_without_polling_for_webhooks() {
     let client = reqwest::Client::builder()
         .proxy(reqwest::Proxy::all("http://127.0.0.1:0").unwrap())
         .timeout(std::time::Duration::from_secs(1))
@@ -409,16 +409,14 @@ async fn injected_linq_client_propagates_transport_failure_and_keeps_webhook_lis
     assert!(channel.start_typing("chat").await.is_err());
     assert!(channel.stop_typing("chat").await.is_err());
     assert!(!crate::provider_test_support::is_healthy(&channel).await);
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_millis(10),
-            crate::provider_test_support::listen_v1(&channel, tx)
-        )
+    let sink = crate::provider_test_support::RecordingInboundSink::default();
+    crate::channel::ChannelAdapter::start(&channel, &sink)
         .await
-        .is_err()
-    );
-    assert!(rx.try_recv().is_err());
+        .expect("webhook ingress is hosted by the module, not a provider poller");
+    crate::channel::ChannelAdapter::stop(&channel)
+        .await
+        .expect("webhook adapter stop is idempotent");
+    assert!(sink.events().is_empty());
 }
 
 #[test]
