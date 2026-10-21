@@ -75,7 +75,10 @@ impl NativeProvider for QQChannel {
         );
         if self.native.media_repository.is_some() {
             let media = |types: &[&str]| ContentCapability {
-                inbound: self.native.events.is_some(),
+                // Inbound delivery is provided by ChannelAdapter::start's
+                // typed sink. A legacy EventSink is not required to receive
+                // attachments through the configured adapter.
+                inbound: true,
                 outbound: true,
                 accepted_types: types.iter().map(|mime| (*mime).to_owned()).collect(),
                 emitted_types: types.iter().map(|mime| (*mime).to_owned()).collect(),
