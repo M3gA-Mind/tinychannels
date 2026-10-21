@@ -1894,13 +1894,19 @@ impl TelegramChannel {
 Ensure only one `openhuman` process is using this bot token."
                         );
                     }
-                    tokio::time::sleep(self.poll_conflict_backoff).await;
+                    tokio::select! {
+                        _ = cancellation.changed() => return Ok(()),
+                        _ = tokio::time::sleep(self.poll_conflict_backoff) => {}
+                    }
                 } else {
                     tracing::warn!(
                         "Telegram getUpdates API error (code={}): {description}",
                         error_code
                     );
-                    tokio::time::sleep(self.poll_error_backoff).await;
+                    tokio::select! {
+                        _ = cancellation.changed() => return Ok(()),
+                        _ = tokio::time::sleep(self.poll_error_backoff) => {}
+                    }
                 }
                 continue;
             }
@@ -1936,7 +1942,10 @@ Ensure only one `openhuman` process is using this bot token."
                             continue;
                         }
                         if let Some(event) = Self::callback_event(update) {
-                            self.deliver_listener_event(typed_sink, event).await?;
+                            tokio::select! {
+                                _ = cancellation.changed() => return Ok(()),
+                                result = self.deliver_listener_event(typed_sink, event) => result?,
+                            }
                         }
                         commit_update(&mut offset);
                         continue;
@@ -2040,7 +2049,10 @@ Ensure only one `openhuman` process is using this bot token."
                                         conversation: Some(conversation),
                                         event: reaction_kind,
                                     };
-                                    self.deliver_listener_event(typed_sink, event).await?;
+                                    tokio::select! {
+                                        _ = cancellation.changed() => return Ok(()),
+                                        result = self.deliver_listener_event(typed_sink, event) => result?,
+                                    }
                                 }
                             }
                             commit_update(&mut offset);
@@ -2116,7 +2128,10 @@ Ensure only one `openhuman` process is using this bot token."
                                     }],
                                 },
                             };
-                            self.deliver_listener_event(typed_sink, event).await?;
+                            tokio::select! {
+                                _ = cancellation.changed() => return Ok(()),
+                                result = self.deliver_listener_event(typed_sink, event) => result?,
+                            }
                         }
                         commit_update(&mut offset);
                         continue;
@@ -2150,7 +2165,10 @@ Ensure only one `openhuman` process is using this bot token."
                     let ingress =
                         Self::inbound_envelope_with_media(update, &msg, voice_note, media_parts);
                     let delivered = if typed_sink.is_some() || self.events.is_some() {
-                        self.deliver_listener_inbound(typed_sink, ingress).await?
+                        tokio::select! {
+                            _ = cancellation.changed() => return Ok(()),
+                            result = self.deliver_listener_inbound(typed_sink, ingress) => result?,
+                        }
                     } else {
                         false
                     };
