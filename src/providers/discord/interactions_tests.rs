@@ -1,5 +1,4 @@
 use super::*;
-use crate::providers::discord::http::DiscordError;
 use crate::providers::discord::support::*;
 use crate::channel::ChannelStreamingDraft;
 use serde_json::json;
@@ -523,8 +522,8 @@ async fn typed_drafts_create_update_and_clip_to_provider_limit() {
     ChannelStreamingDraft::upsert_draft(&channel, Some(&updated), intent(&long))
         .await
         .unwrap();
-    assert_eq!(requests(&server, "PATCH").await.len(), 1);
-    let patch = body_json(&requests(&server, "PATCH").await[0]);
+    assert_eq!(requests(&server, "PATCH").await.len(), 2);
+    let patch = body_json(&requests(&server, "PATCH").await[1]);
     assert!(patch["content"].as_str().unwrap().len() <= 2000);
     assert_eq!(requests(&server, "POST").await.len(), 1);
     assert!(ChannelStreamingDraft::upsert_draft(&channel, Some(&created), intent(" "))

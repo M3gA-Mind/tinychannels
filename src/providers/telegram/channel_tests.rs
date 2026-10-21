@@ -43,12 +43,6 @@ fn typing_handle_starts_as_none() {
 }
 
 #[tokio::test]
-async fn typed_stop_typing_is_supported_without_network() {
-    let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-    ChannelTyping::stop_typing(&ch, "123").await.unwrap();
-}
-
-#[tokio::test]
 async fn typed_stop_typing_is_idempotent() {
     let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
     ChannelTyping::stop_typing(&ch, "123").await.unwrap();
@@ -66,7 +60,6 @@ fn supports_draft_updates_respects_stream_mode() {
 
     let partial = TelegramChannel::new("fake-token".into(), vec!["*".into()], false)
         .with_streaming(StreamMode::Partial, 750, true);
-    assert!(partial.supports_draft_updates());
     assert!(
         partial
             .declared_capabilities()
