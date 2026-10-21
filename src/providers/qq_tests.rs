@@ -87,6 +87,8 @@ fn new_constructor_stores_fields() {
 #[tokio::test]
 async fn oauth_cache_gateway_and_send_preserve_auth_and_routing() {
     use super::super::http_test_support::HttpsServer;
+    let send_ids = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let response_ids = send_ids.clone();
     let server = HttpsServer::start(|request| {
         if request.target == "/app/getAppAccessToken" {
             assert_eq!(request.method, "POST");
@@ -109,7 +111,8 @@ async fn oauth_cache_gateway_and_send_preserve_auth_and_routing() {
         if request.target.contains("blocked") {
             (403, "denied".into())
         } else {
-            (200, "{}".into())
+            let id = response_ids.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            (200, json!({"id": format!("qq-message-{id}")}).to_string())
         }
     })
     .await;
@@ -125,10 +128,17 @@ async fn oauth_cache_gateway_and_send_preserve_auth_and_routing() {
         channel.get_gateway_url("token").await.unwrap(),
         "ws://localhost/gateway"
     );
-    for recipient in ["group:room", "user:alice", "bob"] {
-        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", recipient))
+    for (index, recipient) in ["group:room", "user:alice", "bob"].into_iter().enumerate() {
+        let outcome = crate::provider_test_support::send_v1(
+            &channel,
+            &SendMessage::new("hello", recipient),
+        )
             .await
             .unwrap();
+        assert_eq!(
+            outcome.receipt.primary_platform_message_id.as_deref(),
+            Some(format!("qq-message-{}", index + 1).as_str())
+        );
     }
     assert!(
         crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "blocked"))
