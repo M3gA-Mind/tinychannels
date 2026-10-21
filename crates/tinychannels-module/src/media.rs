@@ -531,10 +531,9 @@ impl MediaUploads {
                 },
             ))
             .catch_unwind();
-            let media = match tokio::time::timeout(UPLOAD_LIFETIME, write).await {
-                Ok(Ok(result)) => result,
-                Ok(Err(_)) => Err(Error::failed("media storage failed")),
-                Err(_) => Err(Error::failed("media storage timed out")),
+            let media = match write.await {
+                Ok(result) => result,
+                Err(_) => Err(Error::failed("media storage failed")),
             };
             let mut state = owner.state.lock().await;
             Self::prune(&mut state);
