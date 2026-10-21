@@ -70,6 +70,7 @@ pub struct HostCapabilities {
     pub turn_dispatch: bool,
     pub stt: bool,
     pub tts: bool,
+    pub media_repository: bool,
     pub approvals: bool,
     pub reaction_gate: bool,
     pub conversation_store: bool,
@@ -87,6 +88,7 @@ impl HostCapabilities {
         turn_dispatch: false,
         stt: false,
         tts: false,
+        media_repository: false,
         approvals: false,
         reaction_gate: false,
         conversation_store: false,
@@ -104,6 +106,7 @@ impl HostCapabilities {
             turn_dispatch: host.dispatcher().is_some(),
             stt: host.transcriber().is_some(),
             tts: host.synthesizer().is_some(),
+            media_repository: host.media_repository().is_some(),
             approvals: host.approvals().is_some(),
             reaction_gate: host.reactions().is_some(),
             conversation_store: host.conversations().is_some(),
@@ -140,6 +143,10 @@ pub trait ChannelHost: Send + Sync {
     }
     /// Text-to-speech for spoken replies.
     fn synthesizer(&self) -> Option<Arc<dyn SpeechSynthesizer>> {
+        None
+    }
+    /// Durable media storage with opaque references scoped to a channel turn.
+    fn media_repository(&self) -> Option<Arc<dyn MediaRepository>> {
         None
     }
     /// Human-in-the-loop approval gate.
@@ -186,6 +193,7 @@ pub trait ChannelHost: Send + Sync {
             turn_dispatch: self.dispatcher().is_some(),
             stt: self.transcriber().is_some(),
             tts: self.synthesizer().is_some(),
+            media_repository: self.media_repository().is_some(),
             approvals: self.approvals().is_some(),
             reaction_gate: self.reactions().is_some(),
             conversation_store: self.conversations().is_some(),

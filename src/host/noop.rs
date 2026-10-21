@@ -8,7 +8,7 @@
 
 use super::{
     AllowlistStore, ApprovalGate, ChannelHost, ConversationStore, EventSink, LifecycleRegistry,
-    Memory, ReactionGate, RunLedger, SpeechSynthesizer, StorageProvider, Transcriber,
+    MediaRepository, Memory, ReactionGate, RunLedger, SpeechSynthesizer, StorageProvider, Transcriber,
     TurnDispatcher,
 };
 use std::sync::Arc;
@@ -39,6 +39,7 @@ pub struct ChannelHostBuilder {
     dispatcher: Option<Arc<dyn TurnDispatcher>>,
     transcriber: Option<Arc<dyn Transcriber>>,
     synthesizer: Option<Arc<dyn SpeechSynthesizer>>,
+    media_repository: Option<Arc<dyn MediaRepository>>,
     approvals: Option<Arc<dyn ApprovalGate>>,
     reactions: Option<Arc<dyn ReactionGate>>,
     conversations: Option<Arc<dyn ConversationStore>>,
@@ -65,6 +66,11 @@ impl ChannelHostBuilder {
     }
     pub fn synthesizer(mut self, value: Arc<dyn SpeechSynthesizer>) -> Self {
         self.synthesizer = Some(value);
+        self
+    }
+    /// Install durable scoped media storage for providers that receive attachments.
+    pub fn media_repository(mut self, value: Arc<dyn MediaRepository>) -> Self {
+        self.media_repository = Some(value);
         self
     }
     pub fn approvals(mut self, value: Arc<dyn ApprovalGate>) -> Self {
@@ -110,6 +116,7 @@ impl ChannelHostBuilder {
             dispatcher: self.dispatcher,
             transcriber: self.transcriber,
             synthesizer: self.synthesizer,
+            media_repository: self.media_repository,
             approvals: self.approvals,
             reactions: self.reactions,
             conversations: self.conversations,
@@ -128,6 +135,7 @@ struct CompositeHost {
     dispatcher: Option<Arc<dyn TurnDispatcher>>,
     transcriber: Option<Arc<dyn Transcriber>>,
     synthesizer: Option<Arc<dyn SpeechSynthesizer>>,
+    media_repository: Option<Arc<dyn MediaRepository>>,
     approvals: Option<Arc<dyn ApprovalGate>>,
     reactions: Option<Arc<dyn ReactionGate>>,
     conversations: Option<Arc<dyn ConversationStore>>,
@@ -148,6 +156,9 @@ impl ChannelHost for CompositeHost {
     }
     fn synthesizer(&self) -> Option<Arc<dyn SpeechSynthesizer>> {
         self.synthesizer.clone()
+    }
+    fn media_repository(&self) -> Option<Arc<dyn MediaRepository>> {
+        self.media_repository.clone()
     }
     fn approvals(&self) -> Option<Arc<dyn ApprovalGate>> {
         self.approvals.clone()
