@@ -814,3 +814,109 @@ async fn managed_features_require_a_host_callback_fixture() {
         observations
     );
 }
+
+struct NativeControllerFixtureCase {
+    capabilities: ChannelCapabilities,
+    callbacks: std::sync::atomic::AtomicUsize,
+    observations: std::sync::Mutex<Vec<NativeControllerObservation>>,
+    unsupported: bool,
+    invoke_managed: bool,
+}
+
+#[async_trait]
+impl NativeControllerFixture for NativeControllerFixtureCase {
+    fn capabilities(&self) -> ChannelCapabilities {
+        self.capabilities.clone()
+    }
+
+    fn provider(&self) -> &str {
+        "fixture-provider"
+    }
+
+    async fn managed_callback_count(&self) -> usize {
+        self.callbacks.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn clear_observations(&self) {
+        self.observations.lock().unwrap().clear();
+    }
+
+    fn observations(&self) -> Vec<NativeControllerObservation> {
+        self.observations.lock().unwrap().clone()
+    }
+
+    async fn exercise(
+        &self,
+        feature: NativeControllerFeature,
+    ) -> Result<(), NativeControllerError> {
+        if self.invoke_managed {
+            self.callbacks
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        if self.unsupported {
+            return Err(NativeControllerError {
+                unsupported: true,
+                message: "provider does not declare this operation".into(),
+            });
+        }
+        self.observations
+            .lock()
+            .unwrap()
+            .push(NativeControllerObservation {
+                feature,
+                provider: self.provider().to_owned(),
+                operation: "mocked_provider_operation".into(),
+                request: serde_json::json!({"actual": "request"}),
+                response: serde_json::json!({"actual": "response"}),
+                returned_ids: vec!["provider-id".into()],
+            });
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn native_controller_matrix_requires_declared_wire_and_no_managed_callback() {
+    let capabilities = ChannelCapabilities {
+        reactions: true,
+        ..Default::default()
+    };
+    let fixture = NativeControllerFixtureCase {
+        capabilities,
+        callbacks: std::sync::atomic::AtomicUsize::new(0),
+        observations: std::sync::Mutex::new(Vec::new()),
+        unsupported: false,
+        invoke_managed: false,
+    };
+    assert!(
+        check_native_controller_feature(&fixture, NativeControllerFeature::Reaction)
+            .await
+            .is_ok()
+    );
+
+    let unsupported = NativeControllerFixtureCase {
+        capabilities: ChannelCapabilities::default(),
+        callbacks: std::sync::atomic::AtomicUsize::new(0),
+        observations: std::sync::Mutex::new(Vec::new()),
+        unsupported: true,
+        invoke_managed: false,
+    };
+    assert!(
+        check_native_controller_feature(&unsupported, NativeControllerFeature::ThreadList)
+            .await
+            .is_ok()
+    );
+
+    let fallback = NativeControllerFixtureCase {
+        capabilities: ChannelCapabilities::default(),
+        callbacks: std::sync::atomic::AtomicUsize::new(0),
+        observations: std::sync::Mutex::new(Vec::new()),
+        unsupported: true,
+        invoke_managed: true,
+    };
+    assert!(
+        check_native_controller_feature(&fallback, NativeControllerFeature::ThreadList)
+            .await
+            .unwrap_err()
+            .contains("managed host callback")
+    );
+}

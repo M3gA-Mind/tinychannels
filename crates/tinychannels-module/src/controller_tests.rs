@@ -197,6 +197,310 @@ async fn connected_host() -> (HostChannels, BackendFixture, Connection) {
     (HostChannels::new(client), fixture, server)
 }
 
+/// Configured controller fixture shared by native provider operation cases.
+/// The adapter capability facts come from TinyChannels' configured factory,
+/// while each observation is assembled from the mock server's captured
+/// request and the actual controller result.
+struct NativeControllerFixture {
+    backend: HostBackend,
+    config: ChannelsConfig,
+    provider: String,
+    capabilities: tinychannels_bus::ChannelCapabilities,
+    backend_fixture: BackendFixture,
+    server: Arc<wiremock::MockServer>,
+    observations: std::sync::Mutex<Vec<tinychannels_conformance::NativeControllerObservation>>,
+}
+
+fn assert_native_controller_observation(
+    fixture: &NativeControllerFixture,
+    feature: tinychannels_conformance::NativeControllerFeature,
+    method: &str,
+    path_fragment: &str,
+    authorization: Option<&str>,
+    expected_body: Option<serde_json::Value>,
+    returned_id: Option<&str>,
+) {
+    use tinychannels_conformance::NativeControllerFixture as _;
+
+    let observations = fixture.observations();
+    assert_eq!(
+        observations.len(),
+        1,
+        "one operation must produce one observation"
+    );
+    let observation = &observations[0];
+    assert_eq!(observation.feature, feature);
+    assert_eq!(observation.provider, fixture.provider);
+    assert_eq!(observation.request["method"], method);
+    assert!(
+        observation.request["path"]
+            .as_str()
+            .is_some_and(|path| path.contains(path_fragment)),
+        "unexpected {} request path: {}",
+        fixture.provider,
+        observation.request["path"]
+    );
+    assert_eq!(observation.request["authorization"].as_str(), authorization);
+    if let Some(expected_body) = expected_body {
+        assert_eq!(observation.request["body"], expected_body);
+    }
+    if let Some(id) = returned_id {
+        assert_eq!(observation.returned_ids, [id]);
+    }
+}
+
+impl NativeControllerFixture {
+    fn configured_capabilities(
+        provider: &str,
+        config: &ChannelsConfig,
+    ) -> tinychannels_bus::ChannelCapabilities {
+        use tinychannels::channel::ChannelAdapter;
+        let host: Arc<dyn tinychannels::host::ChannelHost> = Arc::new(tinychannels::NoopHost);
+        let clients = tinychannels::factory::DefaultHttpClients;
+        match provider {
+            "telegram" => tinychannels::factory::build_telegram_channel(config, &host, &clients)
+                .unwrap()
+                .declared_capabilities(),
+            "discord" => tinychannels::factory::build_discord_channel(config, &host, &clients)
+                .unwrap()
+                .declared_capabilities(),
+            "slack" => tinychannels::factory::build_slack_channel(config, &host, &clients)
+                .unwrap()
+                .declared_capabilities(),
+            _ => tinychannels::factory::build_long_tail_channel(config, &clients, provider)
+                .unwrap()
+                .declared_capabilities(),
+        }
+    }
+
+    fn record(
+        &self,
+        feature: tinychannels_conformance::NativeControllerFeature,
+        operation: &str,
+        request: serde_json::Value,
+        response: serde_json::Value,
+        returned_ids: Vec<String>,
+    ) {
+        self.observations.lock().unwrap().push(
+            tinychannels_conformance::NativeControllerObservation {
+                feature,
+                provider: self.provider.clone(),
+                operation: operation.to_owned(),
+                request,
+                response,
+                returned_ids,
+            },
+        );
+    }
+
+    async fn captured_request_since(&self, before: usize) -> anyhow::Result<serde_json::Value> {
+        let requests = self
+            .server
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("failed to read provider mock requests"))?;
+        let request = requests
+            .get(before..)
+            .and_then(|fresh| fresh.last())
+            .ok_or_else(|| anyhow::anyhow!("operation made no fresh provider HTTP request"))?;
+        let body =
+            serde_json::from_slice::<serde_json::Value>(&request.body).unwrap_or_else(|_| {
+                serde_json::Value::String(String::from_utf8_lossy(&request.body).into())
+            });
+        let authorization = request
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        Ok(serde_json::json!({
+            "method": request.method.as_str(),
+            "path": request.url.path(),
+            "body": body,
+            "authorization": authorization,
+        }))
+    }
+
+    async fn wire_count(&self) -> usize {
+        self.server
+            .received_requests()
+            .await
+            .map_or(0, |requests| requests.len())
+    }
+}
+
+#[async_trait::async_trait]
+impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixture {
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.capabilities.clone()
+    }
+
+    fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    async fn managed_callback_count(&self) -> usize {
+        self.backend_fixture.0.lock().await.len()
+    }
+
+    fn clear_observations(&self) {
+        self.observations.lock().unwrap().clear();
+    }
+
+    fn observations(&self) -> Vec<tinychannels_conformance::NativeControllerObservation> {
+        self.observations.lock().unwrap().clone()
+    }
+
+    async fn exercise(
+        &self,
+        feature: tinychannels_conformance::NativeControllerFeature,
+    ) -> std::result::Result<(), tinychannels_conformance::NativeControllerError> {
+        use tinychannels_conformance::NativeControllerFeature as Feature;
+        let unsupported = |message: String| tinychannels_conformance::NativeControllerError {
+            unsupported: message.contains("unsupported")
+                || message.contains("no native")
+                || message.contains("cannot list"),
+            message,
+        };
+        macro_rules! operation_or_error {
+            ($feature:expr, $operation:expr, $before:expr, $result:expr) => {
+                match $result {
+                    Ok(value) => value,
+                    Err(error) => {
+                        if self.wire_count().await > $before {
+                            if let Ok(request) = self.captured_request_since($before).await {
+                                self.record(
+                                    $feature,
+                                    $operation,
+                                    request,
+                                    serde_json::json!({"error": error.to_string()}),
+                                    Vec::new(),
+                                );
+                            }
+                        }
+                        return Err(unsupported(error.to_string()));
+                    }
+                }
+            };
+        }
+        match feature {
+            Feature::Reaction => {
+                let reaction = match self.provider.as_str() {
+                    "telegram" => serde_json::json!({"chatId":"-100","messageId":4,"emoji":"👍"}),
+                    "discord" => {
+                        serde_json::json!({"channelId":"55","messageId":"66","emoji":"🔥"})
+                    }
+                    "slack" => {
+                        serde_json::json!({"channelId":"C1","messageId":"171.2","emoji":"👍"})
+                    }
+                    _ => {
+                        serde_json::json!({"channelId":"channel-1","messageId":"post-1","emoji":"👍"})
+                    }
+                };
+                let before = self.wire_count().await;
+                let result = operation_or_error!(
+                    feature,
+                    "reaction",
+                    before,
+                    self.backend
+                        .send_reaction(&self.config, &self.provider, reaction)
+                        .await
+                );
+                if !result.success {
+                    return Err(unsupported("native reaction was not accepted".into()));
+                }
+                let request = self
+                    .captured_request_since(before)
+                    .await
+                    .map_err(|error| unsupported(error.to_string()))?;
+                self.record(
+                    feature,
+                    "reaction",
+                    request,
+                    serde_json::json!({"success": result.success}),
+                    Vec::new(),
+                );
+            }
+            Feature::ThreadCreate => {
+                let before = self.wire_count().await;
+                let result = operation_or_error!(
+                    feature,
+                    "thread_create",
+                    before,
+                    self.backend
+                        .create_thread(&self.config, &self.provider, "conformance thread")
+                        .await
+                );
+                let request = self
+                    .captured_request_since(before)
+                    .await
+                    .map_err(|error| unsupported(error.to_string()))?;
+                self.record(
+                    feature,
+                    "thread_create",
+                    request,
+                    serde_json::json!({"thread_id": result.thread_id, "title": result.title}),
+                    vec![result.thread_id],
+                );
+            }
+            Feature::ThreadUpdate => {
+                let action = if self.provider == "telegram" {
+                    "close"
+                } else {
+                    "archive"
+                };
+                let before = self.wire_count().await;
+                let result = operation_or_error!(
+                    feature,
+                    "thread_update",
+                    before,
+                    self.backend
+                        .update_thread(&self.config, &self.provider, "77", action)
+                        .await
+                );
+                let request = self
+                    .captured_request_since(before)
+                    .await
+                    .map_err(|error| unsupported(error.to_string()))?;
+                self.record(
+                    feature,
+                    "thread_update",
+                    request,
+                    serde_json::json!({"thread_id": result.thread_id, "title": result.title}),
+                    vec![result.thread_id],
+                );
+            }
+            Feature::ThreadList => {
+                let before = self.wire_count().await;
+                let result = operation_or_error!(
+                    feature,
+                    "thread_list",
+                    before,
+                    self.backend
+                        .list_threads(&self.config, &self.provider, None)
+                        .await
+                );
+                let request = self
+                    .captured_request_since(before)
+                    .await
+                    .map_err(|error| unsupported(error.to_string()))?;
+                let ids = result
+                    .threads
+                    .iter()
+                    .map(|thread| thread.thread_id.clone())
+                    .collect();
+                self.record(
+                    feature,
+                    "thread_list",
+                    request,
+                    serde_json::json!({"threads": result.threads}),
+                    ids,
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 struct ManagedConformanceChannel(tinychannels_bus::ChannelCapabilities);
 
 #[async_trait::async_trait]
@@ -2163,6 +2467,357 @@ async fn configured_mattermost_reactions_use_native_v4_without_managed_fallback(
         fixture.0.lock().await.is_empty(),
         "no managed fallback is allowed"
     );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn native_controller_conformance_uses_mattermost_wire_and_rejects_unsupported_threads() {
+    use tinychannels_conformance::{
+        NativeControllerFeature as Feature, NativeControllerFixture as _,
+        check_native_controller_feature,
+    };
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/users/me"))
+        .and(header("authorization", "Bearer mm-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "bot-user",
+            "username": "fixture-bot"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/reactions"))
+        .and(header("authorization", "Bearer mm-token"))
+        .and(body_json(serde_json::json!({
+            "user_id": "bot-user",
+            "post_id": "post-1",
+            "emoji_name": "+1"
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "user_id": "bot-user",
+            "post_id": "post-1",
+            "emoji_name": "+1"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (host, backend_fixture, _bus_server) = connected_host().await;
+    let backend = HostBackend::new(
+        host.clone(),
+        Arc::new(FakeDiscordApi::default()),
+        Arc::new(NativeEmailVerifier),
+        None,
+    );
+    let config = ChannelsConfig {
+        mattermost: Some(tinychannels::config::MattermostConfig {
+            url: server.uri(),
+            bot_token: "mm-token".into(),
+            channel_id: Some("channel-1".into()),
+            allowed_users: vec![],
+            thread_replies: None,
+            mention_only: None,
+        }),
+        ..Default::default()
+    };
+    let capabilities = NativeControllerFixture::configured_capabilities("mattermost", &config);
+    let fixture = NativeControllerFixture {
+        backend,
+        config,
+        provider: "mattermost".into(),
+        capabilities,
+        backend_fixture,
+        server: Arc::new(server),
+        observations: std::sync::Mutex::new(Vec::new()),
+    };
+
+    check_native_controller_feature(&fixture, Feature::Reaction)
+        .await
+        .unwrap();
+    assert_native_controller_observation(
+        &fixture,
+        Feature::Reaction,
+        "POST",
+        "/api/v4/reactions",
+        Some("Bearer mm-token"),
+        Some(serde_json::json!({
+            "user_id": "bot-user", "post_id": "post-1", "emoji_name": "+1"
+        })),
+        None,
+    );
+    let completed_wire_count = fixture.wire_count().await;
+    assert!(
+        fixture
+            .captured_request_since(completed_wire_count)
+            .await
+            .is_err(),
+        "a later operation must not reuse the prior reaction request"
+    );
+    check_native_controller_feature(&fixture, Feature::ThreadCreate)
+        .await
+        .unwrap();
+    check_native_controller_feature(&fixture, Feature::ThreadUpdate)
+        .await
+        .unwrap();
+    check_native_controller_feature(&fixture, Feature::ThreadList)
+        .await
+        .unwrap();
+    assert!(fixture.observations().is_empty());
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn native_controller_conformance_covers_telegram_discord_and_slack() {
+    use tinychannels_conformance::{
+        NativeControllerFeature as Feature, NativeControllerFixture as _,
+        check_native_controller_feature,
+    };
+    use wiremock::matchers::{method, path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let (host, backend_fixture, _bus_server) = connected_host().await;
+
+    let telegram_server = Arc::new(MockServer::start().await);
+    for (name, body) in [
+        (
+            "setMessageReaction",
+            serde_json::json!({"ok": true, "result": true}),
+        ),
+        (
+            "createForumTopic",
+            serde_json::json!({"ok": true, "result": {"message_thread_id": 77, "name": "conformance thread"}}),
+        ),
+        (
+            "closeForumTopic",
+            serde_json::json!({"ok": true, "result": true}),
+        ),
+    ] {
+        Mock::given(method("POST"))
+            .and(path(format!("/bottok/{name}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&telegram_server)
+            .await;
+    }
+    let telegram_config = telegram_config(Some("-100"));
+    let mut telegram_backend = HostBackend::new(
+        host.clone(),
+        Arc::new(FakeDiscordApi::default()),
+        Arc::new(NativeEmailVerifier),
+        None,
+    );
+    telegram_backend.telegram_api_base = Some(telegram_server.uri());
+    let telegram = NativeControllerFixture {
+        capabilities: NativeControllerFixture::configured_capabilities(
+            "telegram",
+            &telegram_config,
+        ),
+        backend: telegram_backend,
+        config: telegram_config,
+        provider: "telegram".into(),
+        backend_fixture: backend_fixture.clone(),
+        server: telegram_server,
+        observations: std::sync::Mutex::new(Vec::new()),
+    };
+    for feature in [
+        Feature::Reaction,
+        Feature::ThreadCreate,
+        Feature::ThreadUpdate,
+        Feature::ThreadList,
+    ] {
+        check_native_controller_feature(&telegram, feature)
+            .await
+            .unwrap_or_else(|error| panic!("Telegram {feature:?}: {error}"));
+        match feature {
+            Feature::Reaction => assert_native_controller_observation(
+                &telegram,
+                feature,
+                "POST",
+                "/bottok/setMessageReaction",
+                None,
+                Some(serde_json::json!({
+                    "chat_id": "-100", "message_id": 4,
+                    "reaction": [{"type": "emoji", "emoji": "👍"}]
+                })),
+                None,
+            ),
+            Feature::ThreadCreate => assert_native_controller_observation(
+                &telegram,
+                feature,
+                "POST",
+                "/bottok/createForumTopic",
+                None,
+                Some(serde_json::json!({"chat_id": "-100", "name": "conformance thread"})),
+                Some("77"),
+            ),
+            Feature::ThreadUpdate => assert_native_controller_observation(
+                &telegram,
+                feature,
+                "POST",
+                "/bottok/closeForumTopic",
+                None,
+                Some(serde_json::json!({"chat_id": "-100", "message_thread_id": 77})),
+                Some("77"),
+            ),
+            Feature::ThreadList => assert!(telegram.observations().is_empty()),
+        }
+    }
+
+    let discord_server = Arc::new(MockServer::start().await);
+    Mock::given(method("PUT"))
+        .and(path_regex(r"^/channels/55/messages/66/reactions/.+/@me$"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&discord_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/channels/55/threads"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "id": "77", "name": "conformance thread"
+        })))
+        .mount(&discord_server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path("/channels/77"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "77"})))
+        .mount(&discord_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/guilds/900/threads/active"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "threads": [{"id": "77", "name": "conformance thread", "parent_id": "55", "thread_metadata": {"archived": false}}]
+        })))
+        .mount(&discord_server)
+        .await;
+    let discord_config = discord_config(Some("55"));
+    let mut discord_backend = HostBackend::new(
+        host.clone(),
+        Arc::new(FakeDiscordApi::default()),
+        Arc::new(NativeEmailVerifier),
+        None,
+    );
+    discord_backend.discord_api_base = Some(discord_server.uri());
+    let discord = NativeControllerFixture {
+        capabilities: NativeControllerFixture::configured_capabilities("discord", &discord_config),
+        backend: discord_backend,
+        config: discord_config,
+        provider: "discord".into(),
+        backend_fixture: backend_fixture.clone(),
+        server: discord_server,
+        observations: std::sync::Mutex::new(Vec::new()),
+    };
+    for feature in [
+        Feature::Reaction,
+        Feature::ThreadCreate,
+        Feature::ThreadUpdate,
+        Feature::ThreadList,
+    ] {
+        check_native_controller_feature(&discord, feature)
+            .await
+            .unwrap_or_else(|error| panic!("Discord {feature:?}: {error}"));
+        match feature {
+            Feature::Reaction => assert_native_controller_observation(
+                &discord,
+                feature,
+                "PUT",
+                "/channels/55/messages/66/reactions/",
+                Some("Bot dtok"),
+                Some(serde_json::Value::String(String::new())),
+                None,
+            ),
+            Feature::ThreadCreate => assert_native_controller_observation(
+                &discord,
+                feature,
+                "POST",
+                "/channels/55/threads",
+                Some("Bot dtok"),
+                Some(serde_json::json!({
+                    "name": "conformance thread", "auto_archive_duration": 1440, "type": 11
+                })),
+                Some("77"),
+            ),
+            Feature::ThreadUpdate => assert_native_controller_observation(
+                &discord,
+                feature,
+                "PATCH",
+                "/channels/77",
+                Some("Bot dtok"),
+                Some(serde_json::json!({"archived": true})),
+                Some("77"),
+            ),
+            Feature::ThreadList => assert_native_controller_observation(
+                &discord,
+                feature,
+                "GET",
+                "/guilds/900/threads/active",
+                Some("Bot dtok"),
+                Some(serde_json::Value::String(String::new())),
+                Some("77"),
+            ),
+        }
+    }
+
+    let slack_server = Arc::new(MockServer::start().await);
+    Mock::given(method("POST"))
+        .and(path("/reactions.add"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .mount(&slack_server)
+        .await;
+    let slack_config = ChannelsConfig {
+        slack: Some(tinychannels::config::SlackConfig {
+            bot_token: "slack-token".into(),
+            app_token: None,
+            channel_id: Some("C1".into()),
+            allowed_users: vec![],
+        }),
+        ..Default::default()
+    };
+    let mut slack_backend = HostBackend::new(
+        host.clone(),
+        Arc::new(FakeDiscordApi::default()),
+        Arc::new(NativeEmailVerifier),
+        None,
+    );
+    slack_backend.slack_api_base = Some(slack_server.uri());
+    let slack = NativeControllerFixture {
+        capabilities: NativeControllerFixture::configured_capabilities("slack", &slack_config),
+        backend: slack_backend,
+        config: slack_config,
+        provider: "slack".into(),
+        backend_fixture,
+        server: slack_server,
+        observations: std::sync::Mutex::new(Vec::new()),
+    };
+    for feature in [
+        Feature::Reaction,
+        Feature::ThreadCreate,
+        Feature::ThreadUpdate,
+        Feature::ThreadList,
+    ] {
+        check_native_controller_feature(&slack, feature)
+            .await
+            .unwrap_or_else(|error| panic!("Slack {feature:?}: {error}"));
+        match feature {
+            Feature::Reaction => assert_native_controller_observation(
+                &slack,
+                feature,
+                "POST",
+                "/reactions.add",
+                Some("Bearer slack-token"),
+                Some(serde_json::json!({
+                    "channel": "C1", "timestamp": "171.2", "name": "thumbsup"
+                })),
+                None,
+            ),
+            Feature::ThreadCreate | Feature::ThreadUpdate | Feature::ThreadList => {
+                assert!(slack.observations().is_empty())
+            }
+        }
+    }
+
     host.shutdown().await.unwrap();
 }
 
