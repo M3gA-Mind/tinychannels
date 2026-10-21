@@ -97,9 +97,6 @@ impl NativeProvider for Minimal {
     fn media_repository(&self) -> Option<&Arc<dyn MediaRepository>> {
         None
     }
-    fn voice_media_store(&self) -> Option<&Arc<dyn VoiceMediaStore>> {
-        None
-    }
     fn voice_synthesis(&self) -> bool {
         false
     }

@@ -2,7 +2,7 @@
 
 use crate::host::{
     EventSink, MediaMetadata, MediaRepository, MediaScope, MediaStoreRequest, StoredMedia,
-    Transcriber, TranscriptionRequest, TranscriptionResult, VoiceMediaRequest, VoiceMediaStore,
+    Transcriber, TranscriptionRequest, TranscriptionResult,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -14,6 +14,7 @@ use tinychannels_bus::{ChannelEvent, ChannelIngress, MediaKind, MediaReference};
 pub(crate) struct StubMedia {
     pub(crate) stored: Mutex<Vec<MediaStoreRequest>>,
     pub(crate) fail_store: bool,
+    pub(crate) empty_reference: bool,
     pub(crate) read: Mutex<Option<StoredMedia>>,
     pub(crate) scopes: Mutex<Vec<MediaScope>>,
 }
@@ -32,7 +33,7 @@ impl MediaRepository for StubMedia {
         } = request.metadata.clone();
         self.stored.lock().unwrap().push(request);
         Ok(MediaReference {
-            opaque_id: Some("media-1".into()),
+            opaque_id: (!self.empty_reference).then(|| "media-1".into()),
             kind,
             content_type: Some(content_type),
             file_name,
@@ -65,54 +66,6 @@ pub(crate) fn stored_media(kind: MediaKind, content_type: &str, bytes: &[u8]) ->
         content_type: content_type.into(),
         file_name: Some("report.pdf".into()),
         bytes: bytes.to_vec(),
-    }
-}
-
-/// Host voice store that records stored clips and serves one canned upload.
-#[derive(Default)]
-pub(crate) struct StubVoice {
-    pub(crate) stored: Mutex<Vec<VoiceMediaRequest>>,
-    pub(crate) empty_reference: bool,
-    pub(crate) fail_store: bool,
-    pub(crate) audio_base64: Mutex<Option<String>>,
-}
-
-#[async_trait]
-impl VoiceMediaStore for StubVoice {
-    async fn store_voice(
-        &self,
-        request: VoiceMediaRequest,
-    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
-        if self.fail_store {
-            anyhow::bail!("storage unavailable");
-        }
-        self.stored.lock().unwrap().push(request);
-        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
-            media: MediaReference {
-                opaque_id: (!self.empty_reference).then(|| "voice-1".into()),
-                url: Some("https://private.invalid/x".into()),
-                ..Default::default()
-            },
-            accessible_url: None,
-        })
-    }
-
-    async fn read_voice(
-        &self,
-        _scope: tinychannels_bus::HostVoiceScope,
-        _opaque_id: String,
-    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
-        let audio_base64 = self
-            .audio_base64
-            .lock()
-            .unwrap()
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("missing"))?;
-        Ok(tinychannels_bus::HostReadVoiceMediaResult {
-            audio_base64,
-            mime_type: "audio/mp4".into(),
-            file_name: Some("reply.m4a".into()),
-        })
     }
 }
 
@@ -212,7 +165,6 @@ impl EventSink for RecordingEvents {
 /// A configurable [`NativeProvider`] that records what it is asked to deliver.
 pub(crate) struct FakeProvider {
     pub(crate) media: Option<std::sync::Arc<dyn MediaRepository>>,
-    pub(crate) voice: Option<std::sync::Arc<dyn VoiceMediaStore>>,
     pub(crate) synthesis: bool,
     pub(crate) edits: bool,
     pub(crate) drafts: bool,
@@ -232,7 +184,6 @@ impl Default for FakeProvider {
         caps.addressing.thread_id = true;
         Self {
             media: None,
-            voice: None,
             synthesis: false,
             edits: true,
             drafts: true,
@@ -266,10 +217,6 @@ impl super::NativeProvider for FakeProvider {
 
     fn media_repository(&self) -> Option<&std::sync::Arc<dyn MediaRepository>> {
         self.media.as_ref()
-    }
-
-    fn voice_media_store(&self) -> Option<&std::sync::Arc<dyn VoiceMediaStore>> {
-        self.voice.as_ref()
     }
 
     fn voice_synthesis(&self) -> bool {
