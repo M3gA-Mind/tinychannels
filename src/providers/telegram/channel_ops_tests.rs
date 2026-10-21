@@ -5377,6 +5377,89 @@ async fn adapter_start_polls_and_delivers_original_typed_telegram_ingress() {
 }
 
 #[tokio::test]
+async fn typed_listener_retries_rejected_update_before_acknowledging_its_offset() {
+    use crate::channel::{ChannelInboundSink, ChannelSendError};
+
+    #[derive(Default)]
+    struct RejectOnceSink {
+        calls: AtomicUsize,
+        accepted: std::sync::Mutex<Vec<tinychannels_bus::ChannelIngress>>,
+        notified: tokio::sync::Notify,
+    }
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for RejectOnceSink {
+        async fn push(
+            &self,
+            ingress: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), ChannelSendError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                    message: "sink temporarily unavailable".into(),
+                    retryable: true,
+                    ..Default::default()
+                });
+            }
+            self.accepted.lock().unwrap().push(ingress);
+            self.notified.notify_one();
+            Ok(())
+        }
+    }
+
+    let server = mock_api().await;
+    Mock::given(method("POST"))
+        .and(path(api_path("getUpdates")))
+        .respond_with(updates(serde_json::json!([{
+            "update_id": 41,
+            "message": {
+                "message_id": 9,
+                "date": 1700000000,
+                "chat": { "id": -10042, "type": "supergroup" },
+                "from": { "id": 7, "username": "alice", "first_name": "Alice" },
+                "text": "retry this update"
+            }
+        }])))
+        .mount(&server)
+        .await;
+    let channel = Arc::new(fast_backoff(channel_for(&server, &["alice"])));
+    let sink = Arc::new(RejectOnceSink::default());
+
+    let first = crate::channel::ChannelAdapter::start(channel.as_ref(), sink.as_ref()).await;
+    assert!(
+        first.is_err(),
+        "the rejected ingress must terminate this attempt"
+    );
+    assert!(!channel.has_seen_update_id(41));
+
+    let second = crate::channel::ChannelAdapter::start(channel.as_ref(), sink.as_ref());
+    tokio::pin!(second);
+    tokio::select! {
+        result = &mut second => panic!("listener stopped before retry delivery: {result:?}"),
+        _ = tokio::time::timeout(Duration::from_secs(2), sink.notified.notified()) => {},
+    }
+    assert!(channel.has_seen_update_id(41));
+    assert_eq!(sink.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(sink.accepted.lock().unwrap().len(), 1);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(
+            body.get("offset").and_then(serde_json::Value::as_i64),
+            Some(0)
+        );
+    }
+
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), &mut second)
+        .await
+        .expect("typed listener observes stop")
+        .unwrap();
+}
+
+#[tokio::test]
 async fn native_reaction_removal_clears_reactions_and_surfaces_rejection() {
     let server = mock_api().await;
     mount_post(
