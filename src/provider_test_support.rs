@@ -57,7 +57,10 @@ pub(crate) async fn send_v1<C: ChannelAdapter>(
     message: &SendMessage,
 ) -> anyhow::Result<ChannelSendOutcome> {
     let intent = outbound_intent_from_send_message(&channel.descriptor().id, message);
-    let outcome = channel.send(intent).await?;
+    let outcome = channel
+        .send(intent)
+        .await
+        .map_err(|error| anyhow::Error::new(TypedSendTestError(error)))?;
     match outcome.error.clone() {
         Some(error) => Err(anyhow::Error::new(TypedSendTestError(error))),
         None => Ok(outcome),
