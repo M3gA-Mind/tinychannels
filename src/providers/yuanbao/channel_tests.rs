@@ -613,6 +613,47 @@ async fn finalizing_media_parts_remains_unsupported_for_yuanbao_drafts() {
 }
 
 #[tokio::test]
+async fn finalizing_dm_reply_is_rejected_before_the_disconnected_sender() {
+    let ch = YuanbaoChannel::new(good_cfg()).unwrap();
+    let intent = ChannelOutboundIntent {
+        channel_id: "yuanbao".into(),
+        conversation_id: "user:alice".into(),
+        reply_to_id: Some("message-7".into()),
+        payload: OutboundPayload::Text {
+            text: "reply".into(),
+        },
+        ..Default::default()
+    };
+
+    let error = ChannelStreamingDraft::finalize_draft(&ch, "draft", intent)
+        .await
+        .expect_err("DM replies cannot be represented by Yuanbao's protocol");
+
+    assert!(error.unsupported, "address validation runs before sender I/O");
+}
+
+#[tokio::test]
+async fn finalizing_group_reply_passes_address_validation() {
+    let ch = YuanbaoChannel::new(good_cfg()).unwrap();
+    let intent = ChannelOutboundIntent {
+        channel_id: "yuanbao".into(),
+        conversation_id: "g:group-42".into(),
+        reply_to_id: Some("message-7".into()),
+        payload: OutboundPayload::Text {
+            text: "reply".into(),
+        },
+        ..Default::default()
+    };
+
+    let error = ChannelStreamingDraft::finalize_draft(&ch, "draft", intent)
+        .await
+        .expect_err("the disconnected provider has no sender");
+
+    assert!(!error.unsupported, "group reply addressing is supported");
+    assert!(error.retryable, "the disconnected send remains retryable");
+}
+
+#[tokio::test]
 async fn heartbeat_task_exits_when_disconnected_send_fails() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
     ch.start_heartbeat_task("alice").await;
