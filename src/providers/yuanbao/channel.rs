@@ -195,6 +195,13 @@ impl Channel for YuanbaoChannel {
         "yuanbao"
     }
 
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
+
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         let chunks = self.split_message(&message.content);
         let ref_msg_id = message.thread_ts.as_deref();
@@ -215,6 +222,10 @@ impl Channel for YuanbaoChannel {
         // malformed `usage` chunks; the non-streaming parser fails the
         // whole turn when an upstream LLM returns string-typed token counts.
         true
+    }
+
+    fn supports_progressive_edits(&self) -> bool {
+        false
     }
 
     async fn send_draft(&self, message: &SendMessage) -> anyhow::Result<Option<String>> {
@@ -401,6 +412,8 @@ impl YuanbaoChannel {
                     },
                     channel: "yuanbao".into(),
                     timestamp: ctx.msg.msg_time as u64,
+                    topic_id: None,
+                    reply_to_id: None,
                     thread_ts: None,
                     sender_name: None,
                 };

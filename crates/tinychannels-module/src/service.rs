@@ -87,6 +87,18 @@ fn is_webhook_backed(name: &str, config: &ChannelsConfig) -> bool {
                 .is_some_and(|wa| wa.backend_type() == "cloud"))
 }
 
+async fn configured_capabilities(
+    running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    name: &str,
+) -> tinychannels_bus::ChannelCapabilities {
+    let running = running.lock().await;
+    running
+        .get(name)
+        .or_else(|| running.get(tinychannels_bus::provider_id(name)))
+        .map(|provider| crate::interaction::configured_capabilities(provider.channel.as_ref()))
+        .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
+}
+
 /// The served object.
 pub(crate) struct Channels {
     pub(crate) host: HostChannels,
@@ -108,12 +120,16 @@ struct ModuleDeliveryHandler {
 
 impl Channels {
     pub(crate) fn new(host: HostChannels, runtimes: Option<Arc<crate::runtime::Runtimes>>) -> Self {
+        let running = Arc::new(Mutex::new(HashMap::new()));
         Self {
-            progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
+            progressive: Arc::new(crate::progressive::Replies::new(
+                host.clone(),
+                running.clone(),
+            )),
             relays: Arc::new(Relays::new(host.clone())),
             host,
             email: EmailSender::new(),
-            running: Arc::new(Mutex::new(HashMap::new())),
+            running,
             terminal: AtomicBool::new(false),
             runtimes,
             shutdown_task: Mutex::new(None),
@@ -147,7 +163,7 @@ impl Channels {
         }
 
         let hooks = Arc::new(Hooks::default());
-        let owner_host: Arc<dyn ChannelHost> = hooks.host(self.host.clone());
+        let owner_host: Arc<dyn ChannelHost> = hooks.host(self.host.clone(), name.clone());
         let built = build_channels(&config, &owner_host, http);
         let channel = built
             .into_iter()
@@ -199,6 +215,7 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
                 error: "delivery payload could not be encoded".into(),
                 sent_before_error: false,
                 permanent: Some(true),
+                receipt: None,
             });
         };
         let running = self.running.lock().await;
@@ -211,37 +228,49 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
                 error: "delivery target is unavailable".into(),
                 sent_before_error: false,
                 permanent: None,
+                receipt: None,
             });
         };
         drop(running);
 
-        let Ok(message) = intent_to_legacy_message(&entry.intent) else {
-            return Err(DeliveryAttemptFailure {
-                error: "delivery payload could not be encoded".into(),
-                sent_before_error: false,
-                permanent: Some(true),
-            });
+        let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&entry.intent);
+        let outcome = match provider.send_typed(message).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return Err(DeliveryAttemptFailure {
+                    error: "provider send failed".into(),
+                    sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
+                    permanent: None,
+                    receipt: None,
+                });
+            }
         };
-        if let Err(error) = provider.send(message).await {
+        if let Some(error) = outcome.error {
             return Err(DeliveryAttemptFailure {
-                error: "provider send failed".into(),
-                sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
-                permanent: None,
+                error: error.message,
+                sent_before_error: error.sent_before_error
+                    || !outcome.receipt.platform_message_ids.is_empty(),
+                permanent: Some(!error.retryable),
+                receipt: Some(outcome.receipt),
             });
         }
         let result = tinychannels_bus::DeliveryTerminalResult {
             id: entry.id.clone(),
             intent_fingerprint,
             completed_at_unix_ms: now_unix_ms(),
+            receipt: Some(outcome.receipt.clone()),
         };
         if self.store.save_result(result).await.is_err() {
             return Err(DeliveryAttemptFailure {
                 error: "terminal delivery result could not be persisted".into(),
                 sent_before_error: true,
                 permanent: None,
+                receipt: Some(outcome.receipt),
             });
         }
-        Ok(DeliveryAttemptSuccess::default())
+        Ok(DeliveryAttemptSuccess {
+            receipt: Some(outcome.receipt),
+        })
     }
 
     async fn reconcile_unknown_send(
@@ -260,7 +289,7 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
             ));
         }
         Ok(Some(UnknownSendReconciliation::Sent {
-            receipt: tinychannels::channel::MessageReceipt::default(),
+            receipt: Box::new(result.receipt.unwrap_or_default()),
             message_id: None,
         }))
     }
@@ -382,11 +411,8 @@ impl Channels {
                 } else {
                     ChannelIngressKind::Listener
                 },
-                interaction: tinychannels_bus::ChannelInteractionInfo {
-                    capabilities: channel.capabilities(),
-                    proactive_target: channel.proactive_target(),
-                    supports_reactions: channel.supports_reactions(),
-                    supports_draft_updates: channel.supports_draft_updates(),
+                interaction: tinychannels_bus::ChannelInteractionInfoV2 {
+                    capabilities: crate::interaction::configured_capabilities(channel.as_ref()),
                 },
             })
             .collect())
@@ -416,7 +442,18 @@ impl Channels {
         if self.terminal.load(Ordering::Acquire) {
             return Err(BusError::failed("channel module is shutting down"));
         }
-        crate::control::prepare(&self.host, request).await
+        let name = match &request {
+            tinychannels_bus::module_control::ChannelControlRequest::Capabilities { channel }
+            | tinychannels_bus::module_control::ChannelControlRequest::CapabilitiesV2 { channel } => {
+                channel.as_str()
+            }
+            tinychannels_bus::module_control::ChannelControlRequest::Route { message, .. } => {
+                message.channel.as_str()
+            }
+            _ => "",
+        };
+        let capabilities = configured_capabilities(&self.running, name).await;
+        crate::control::prepare(&self.host, request, capabilities).await
     }
 
     /// Parse and execute remote chat commands inside the channel module.
@@ -429,7 +466,16 @@ impl Channels {
         if self.terminal.load(Ordering::Acquire) {
             return Err(BusError::failed("channel module is shutting down"));
         }
-        crate::remote::execute(&self.host, request).await
+        let name = match &request {
+            tinychannels_bus::module_remote::RemoteOperation::Execute { message, .. } => {
+                message.channel.as_str()
+            }
+            tinychannels_bus::module_remote::RemoteOperation::MarkTurn { channel, .. } => {
+                channel.as_str()
+            }
+        };
+        let capabilities = configured_capabilities(&self.running, name).await;
+        crate::remote::execute(&self.host, request, capabilities).await
     }
 
     /// Drive progressive delivery without exposing its state to the host.
@@ -531,7 +577,8 @@ impl Channels {
                 envelope,
                 timestamp,
             } => (
-                tinychannels::legacy_message_from_inbound_envelope(&envelope, timestamp),
+                tinychannels::legacy_message_from_inbound_envelope(&envelope, timestamp)
+                    .map_err(|error| BusError::failed(error.to_string()))?,
                 envelope,
             ),
         };
@@ -778,6 +825,14 @@ impl Channels {
         if intent.channel_id != name {
             return Err(BusError::failed("intent channel does not match provider"));
         }
+        if tinychannels_bus::ChannelOutboundMessage::from_intent(&intent)
+            .parts
+            .is_empty()
+        {
+            return Err(BusError::failed(
+                "outbound intent must contain at least one content part",
+            ));
+        }
         if intent.durability == tinychannels::DeliveryDurability::Required {
             return self.send_required_intent(intent).await;
         }
@@ -797,17 +852,24 @@ impl Channels {
                     message: format!("channel {name} is not running"),
                 })?
         };
-        entry
-            .send(
-                intent_to_legacy_message(&intent)
-                    .map_err(|_| BusError::failed("could not encode channel intent"))?,
-            )
+        let outcome = entry
+            .send_typed(tinychannels_bus::ChannelOutboundMessage::from_intent(
+                &intent,
+            ))
             .await
             .map_err(|error| BusError::MethodFailed {
                 name: SEND_FAILED_ERROR.to_owned(),
                 message: error.to_string(),
             })?;
-        Ok(ChannelSendMessageResult::default())
+        let has_provider_receipt = outcome.receipt.primary_platform_message_id.is_some()
+            || !outcome.receipt.platform_message_ids.is_empty()
+            || !outcome.receipt.parts.is_empty();
+        Ok(ChannelSendMessageResult {
+            message_id: outcome.receipt.primary_platform_message_id.clone(),
+            receipt: has_provider_receipt.then_some(outcome.receipt),
+            error: outcome.error,
+            raw: None,
+        })
     }
 
     async fn send_required_intent(
@@ -852,7 +914,7 @@ impl Channels {
                     .await
                     .map_err(delivery_store_error)?;
             }
-            return Ok(ChannelSendMessageResult::default());
+            return Ok(required_delivery_result(result.receipt));
         }
         if let Some(failed) = store.load_failed(&id).await.map_err(delivery_store_error)? {
             return if failed.intent == intent {
@@ -906,7 +968,7 @@ impl Channels {
                     .await
                     .map_err(delivery_store_error)?;
             }
-            return Ok(ChannelSendMessageResult::default());
+            return Ok(required_delivery_result(result.receipt));
         }
         let still_pending = store
             .load_pending(&id)
@@ -924,7 +986,12 @@ impl Channels {
                 "required delivery remains pending or failed",
             ));
         }
-        Ok(ChannelSendMessageResult::default())
+        let result = store
+            .load_result(&id)
+            .await
+            .map_err(delivery_store_error)?
+            .ok_or_else(|| BusError::failed("required delivery result was not persisted"))?;
+        Ok(required_delivery_result(result.receipt))
     }
 
     /// Send SMTP mail without requiring an active IMAP listener.
@@ -1016,6 +1083,15 @@ impl Channels {
     ) -> BusResult<tinychannels::relay::CapabilityDescriptor> {
         self.relays.start(id, config).await
     }
+    /// Start a relay through the canonical v2 per-identity capability handshake.
+    #[tinybus(confidential)]
+    async fn start_relay_v2(
+        &self,
+        id: RelayReservation,
+        config: RelayRuntimeConfig,
+    ) -> BusResult<tinychannels_bus::module_relay::RelayCapabilitiesV2> {
+        self.relays.start_v2(id, config).await
+    }
     /// Cancel pending startup and join relay/reconnect/native callback work.
     async fn stop_relay(&self, id: RelayReservation) -> BusResult<()> {
         self.relays.stop(id).await
@@ -1023,6 +1099,14 @@ impl Channels {
     /// Report safe lifecycle facts without URL, identities or credentials.
     async fn relay_status(&self, id: RelayReservation) -> BusResult<RelayStatus> {
         self.relays.status(id).await
+    }
+    /// Return identity-correlated v2 capabilities negotiated for this reservation.
+    #[tinybus(confidential)]
+    async fn relay_capabilities_v2(
+        &self,
+        id: RelayReservation,
+    ) -> BusResult<Option<tinychannels_bus::module_relay::RelayCapabilitiesV2>> {
+        self.relays.capabilities_v2(id).await
     }
     /// Enqueue one bounded, ordered relay intent.
     async fn send_relay_intent(
@@ -1201,27 +1285,22 @@ async fn setup(connection: Connection) -> BusResult<()> {
     Ok(())
 }
 
-fn intent_to_legacy_message(
-    intent: &ChannelOutboundIntent,
-) -> Result<SendMessage, serde_json::Error> {
-    let value = tinychannels::legacy_message_value_from_outbound_intent(intent);
-    let content = match &intent.payload {
-        tinychannels::OutboundPayload::Text { text } => text.clone(),
-        _ => serde_json::to_string(&value)?,
-    };
-    Ok(SendMessage {
-        content,
-        recipient: intent.conversation_id.clone(),
-        subject: None,
-        thread_ts: intent.thread_id.clone(),
-        idempotency_key: Some(intent.idempotency_key.clone()),
-    })
-}
-
 fn intent_fingerprint(intent: &ChannelOutboundIntent) -> Result<String, serde_json::Error> {
     use sha2::Digest as _;
     let encoded = serde_json::to_vec(intent)?;
     Ok(hex::encode(sha2::Sha256::digest(encoded)))
+}
+
+fn required_delivery_result(
+    receipt: Option<tinychannels_bus::channel::MessageReceipt>,
+) -> ChannelSendMessageResult {
+    let receipt = receipt.unwrap_or_default();
+    ChannelSendMessageResult {
+        message_id: receipt.primary_platform_message_id.clone(),
+        receipt: Some(receipt),
+        error: None,
+        raw: None,
+    }
 }
 
 fn now_unix_ms() -> u64 {
@@ -1261,7 +1340,7 @@ pub(crate) mod exports {
             "SendMessage",
             "ListChannels",
             "ChannelStatus",
-            "ReserveRelay", "StartRelay", "StopRelay", "RelayStatus", "SendRelayIntent", "Shutdown", "SendChannelIntent", "SendEmail",
+            "ReserveRelay", "StartRelay", "StartRelayV2", "StopRelay", "RelayStatus", "RelayCapabilitiesV2", "SendRelayIntent", "Shutdown", "SendChannelIntent", "SendEmail",
             "BeginEmailUpload", "AppendEmailUploadChunk", "SendEmailUpload", "AbortEmailUpload",
             "StartChannelConfigured",
             "ChannelController",

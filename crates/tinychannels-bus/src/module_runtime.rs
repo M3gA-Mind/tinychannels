@@ -21,7 +21,7 @@ pub struct ChannelRuntimeReservation {
 }
 
 /// Opt-in turn dispatch for a reserved runtime. Legacy `StartRuntime` retains
-/// serial `DeliverInbound` notifications; this policy uses `ProcessInbound`
+/// serial `DeliverInbound` envelope notifications; this policy uses `ProcessInbound`
 /// callbacks with module-owned bounded concurrency and stop/drain ownership.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -50,10 +50,14 @@ pub enum ChannelIngressKind {
 pub struct ConfiguredChannelInfo {
     pub name: String,
     pub ingress: ChannelIngressKind,
-    pub interaction: crate::ChannelInteractionInfo,
+    pub interaction: crate::ChannelInteractionInfoV2,
 }
 
 /// Legacy message vocabulary whose normalization and hashing stay in the module.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "message preparation variants retain their established serialized contract"
+)]
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "message", rename_all = "snake_case")]
 pub enum ChannelMessagePreparation {

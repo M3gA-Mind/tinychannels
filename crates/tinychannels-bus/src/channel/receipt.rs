@@ -1,5 +1,6 @@
 //! Outbound message receipt normalization.
 
+use crate::channel::types::{ChannelRef, ConversationRef};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -44,6 +45,12 @@ pub struct MessageReceiptPart {
     pub index: usize,
     pub thread_id: Option<String>,
     pub reply_to_id: Option<String>,
+    /// Opaque provider token for editing this part, when supported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edit_token: Option<String>,
+    /// Opaque provider token for deleting this part, when supported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delete_token: Option<String>,
     pub raw: Option<MessageReceiptSourceResult>,
 }
 
@@ -55,6 +62,8 @@ impl Default for MessageReceiptPart {
             index: 0,
             thread_id: None,
             reply_to_id: None,
+            edit_token: None,
+            delete_token: None,
             raw: None,
         }
     }
@@ -64,6 +73,13 @@ impl Default for MessageReceiptPart {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MessageReceipt {
+    /// Idempotency context for replaying a logical outbound operation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<ChannelRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<ConversationRef>,
     pub primary_platform_message_id: Option<String>,
     pub platform_message_ids: Vec<String>,
     pub parts: Vec<MessageReceiptPart>,
@@ -73,4 +89,12 @@ pub struct MessageReceipt {
     pub delete_token: Option<String>,
     pub sent_at: u64,
     pub raw: Option<Vec<MessageReceiptSourceResult>>,
+}
+
+/// Actual provider send receipt plus a typed failure for any undelivered tail.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChannelSendOutcome {
+    pub receipt: MessageReceipt,
+    pub error: Option<super::error::ChannelSendError>,
 }

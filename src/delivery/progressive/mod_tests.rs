@@ -97,7 +97,14 @@ fn unavailable() -> ProgressiveSendError {
 
 fn turn(channel: &str) -> (Arc<FakeSender>, ProgressiveReply) {
     let sender = Arc::new(FakeSender::default());
-    let reply = ProgressiveReply::new(sender.clone(), channel);
+    let capabilities = tinychannels_bus::ChannelCapabilities {
+        progressive_edits: channel.starts_with("telegram:")
+            || channel.starts_with("tg:")
+            || channel == "telegram"
+            || channel == "tg",
+        ..Default::default()
+    };
+    let reply = ProgressiveReply::new(sender.clone(), channel, capabilities);
     (sender, reply)
 }
 
@@ -105,13 +112,13 @@ fn turn(channel: &str) -> (Arc<FakeSender>, ProgressiveReply) {
 
 #[test]
 fn progressive_ui_is_an_allowlist_failing_safe_for_unknown_channels() {
-    assert!(channel_supports_progressive_ui("telegram"));
-    assert!(channel_supports_progressive_ui("tg"));
-    assert!(channel_supports_progressive_ui("tg:12345"));
-    assert!(!channel_supports_progressive_ui("discord"));
-    assert!(!channel_supports_progressive_ui("discord:guild-1"));
-    assert!(!channel_supports_progressive_ui("slack"));
-    assert!(!channel_supports_progressive_ui("whatsapp:123"));
+    let supported = tinychannels_bus::ChannelCapabilities {
+        progressive_edits: true,
+        ..Default::default()
+    };
+    let unsupported = tinychannels_bus::ChannelCapabilities::unknown();
+    assert!(channel_supports_progressive_ui(&supported));
+    assert!(!channel_supports_progressive_ui(&unsupported));
 }
 
 #[tokio::test]

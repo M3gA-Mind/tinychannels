@@ -42,10 +42,15 @@ fn relay_send_content(payload: &OutboundPayload) -> String {
     match payload {
         OutboundPayload::Text { text } => text.clone(),
         OutboundPayload::Media { text, .. } => text.clone().unwrap_or_default(),
-        OutboundPayload::Voice { media_url } => media_url.clone(),
+        OutboundPayload::Voice { voice } => match voice {
+            tinychannels_bus::OutboundVoice::Media { media, .. } => {
+                media.url.clone().unwrap_or_default()
+            }
+            tinychannels_bus::OutboundVoice::Synthesize { text, .. } => text.clone(),
+        },
         OutboundPayload::Files { file_urls } => file_urls.join("\n"),
         OutboundPayload::Poll { question, .. } => question.clone(),
-        OutboundPayload::PresentationBlocks { .. } => String::new(),
+        OutboundPayload::PresentationBlocks { .. } | OutboundPayload::Parts { .. } => String::new(),
         OutboundPayload::NativeChannelData { data } => data
             .get("content")
             .or_else(|| data.get("text"))

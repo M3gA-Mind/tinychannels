@@ -202,6 +202,56 @@ pub trait EventSink: Send + Sync {
         kind: &str,
         payload: serde_json::Value,
     ) -> anyhow::Result<()>;
+
+    /// Publish one normalized channel event. Legacy hosts keep working through
+    /// the default projection while module hosts override this with DeliverEvent.
+    async fn publish_channel_event(
+        &self,
+        event: tinychannels_bus::ChannelEvent,
+    ) -> anyhow::Result<()> {
+        let kind = match &event.event {
+            tinychannels_bus::ChannelEventKind::Typing { .. } => "typing",
+            tinychannels_bus::ChannelEventKind::ReadReceipt { .. } => "read_receipt",
+            tinychannels_bus::ChannelEventKind::DeliveredReceipt { .. } => "delivered_receipt",
+            tinychannels_bus::ChannelEventKind::ReactionAdded { .. } => "reaction_added",
+            tinychannels_bus::ChannelEventKind::ReactionRemoved { .. } => "reaction_removed",
+            tinychannels_bus::ChannelEventKind::OutboundReaction { .. } => "outbound_reaction",
+            tinychannels_bus::ChannelEventKind::MessageUpdated { .. } => "message_updated",
+            tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "message_deleted",
+            tinychannels_bus::ChannelEventKind::Presence { .. } => "presence",
+            tinychannels_bus::ChannelEventKind::Lifecycle { .. } => "lifecycle",
+        };
+        self.publish("channel", kind, serde_json::to_value(event)?)
+            .await
+    }
+
+    /// Submit an inbound message or event on one ordered provider path.
+    /// `false` asks the legacy listener adapter to use its message channel.
+    async fn publish_ingress(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> anyhow::Result<bool> {
+        match ingress {
+            tinychannels_bus::ChannelIngress::Event(event) => {
+                self.publish_channel_event(event).await?;
+                Ok(true)
+            }
+            tinychannels_bus::ChannelIngress::Inbound(_) => Ok(false),
+        }
+    }
+
+    /// Deliver one provider message on the ordered v22 ingress path.
+    /// Legacy hosts return `false` and continue receiving the v21 message.
+    #[allow(
+        deprecated,
+        reason = "this default bridge preserves the one-release ChannelMessage adapter"
+    )]
+    async fn publish_inbound(
+        &self,
+        _message: tinychannels_bus::ChannelMessage,
+    ) -> anyhow::Result<bool> {
+        Ok(false)
+    }
 }
 
 // ---------------------------------------------------------------------------

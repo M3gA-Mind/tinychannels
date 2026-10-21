@@ -28,6 +28,8 @@ pub fn create_message_receipt_from_outbound_results(
                         index: part_index,
                         thread_id: thread_id.clone(),
                         reply_to_id: reply_to_id.clone(),
+                        edit_token: None,
+                        delete_token: None,
                         raw: None,
                     });
                 }
@@ -61,12 +63,19 @@ pub fn create_message_receipt_from_outbound_results(
             continue;
         };
         append_unique(&mut platform_message_ids, Some(&platform_message_id));
+        let supports_message_operations = result.channel.as_deref() == Some("telegram");
         parts.push(MessageReceiptPart {
             platform_message_id,
             kind,
             index: result_index,
             thread_id: thread_id.clone(),
             reply_to_id: reply_to_id.clone(),
+            edit_token: supports_message_operations
+                .then(|| result.message_id.clone())
+                .flatten(),
+            delete_token: supports_message_operations
+                .then(|| result.message_id.clone())
+                .flatten(),
             raw: Some(result.clone()),
         });
     }
@@ -78,6 +87,11 @@ pub fn create_message_receipt_from_outbound_results(
             .filter(|r| has_nested_receipt_data(r))
     });
 
+    let (edit_token, delete_token) = if parts.len() == 1 {
+        (parts[0].edit_token.clone(), parts[0].delete_token.clone())
+    } else {
+        (None, None)
+    };
     MessageReceipt {
         primary_platform_message_id: platform_message_ids.first().cloned(),
         platform_message_ids,
@@ -89,6 +103,8 @@ pub fn create_message_receipt_from_outbound_results(
         } else {
             first_nested.map(|r| r.sent_at).unwrap_or_default()
         },
+        edit_token,
+        delete_token,
         raw: Some(results),
         ..Default::default()
     }

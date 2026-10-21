@@ -14,7 +14,15 @@
 //! caught panics contain ordinary misbehaviour, not a segfault. Modules are
 //! first-party code that ships separately.
 
+#[allow(
+    deprecated,
+    reason = "legacy inbound DTO adapter remains during v22 migration"
+)]
 mod control;
+#[allow(
+    deprecated,
+    reason = "legacy controller requests migrate with the owning host"
+)]
 mod controller;
 mod delivery;
 mod email;
@@ -23,10 +31,22 @@ pub mod host;
 mod interaction;
 mod prepare_connect;
 mod progressive;
+#[allow(
+    deprecated,
+    reason = "legacy provider interface migrates in issue #103"
+)]
 mod provider;
 mod relay;
+#[allow(
+    deprecated,
+    reason = "legacy outbound DTO adapter remains during v22 migration"
+)]
 mod remote;
 mod runtime;
+#[allow(
+    deprecated,
+    reason = "service retains explicit one-release v21 conversions"
+)]
 mod service;
 #[cfg(test)]
 mod storage_fixture;

@@ -1,4 +1,22 @@
 use super::*;
+async fn execute(
+    callback: &HostChannels,
+    request: RemoteOperation,
+) -> tinybus::Result<RemoteOperationResult> {
+    let remote_control = match &request {
+        RemoteOperation::Execute { message, .. } => message.channel != "email",
+        RemoteOperation::MarkTurn { channel, .. } => channel != "email",
+    };
+    super::execute(
+        callback,
+        request,
+        tinychannels_bus::ChannelCapabilities {
+            remote_control,
+            ..Default::default()
+        },
+    )
+    .await
+}
 use std::sync::Arc;
 use tinybus::{broker::Broker, transport::memory::MemoryBus};
 use tokio::sync::Mutex;
@@ -107,6 +125,8 @@ fn command(workspace: &std::path::Path, content: &str, channel: &str) -> RemoteO
             content: content.into(),
             channel: channel.into(),
             timestamp: 1,
+            topic_id: None,
+            reply_to_id: None,
             thread_ts: None,
             sender_name: None,
         },

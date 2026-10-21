@@ -216,6 +216,76 @@ fn parse_update_reaction_requires_chat_message_and_emoji() {
 }
 
 #[test]
+fn parse_update_reactions_preserves_all_changes_and_custom_emoji_identity() {
+    let ch = TelegramChannel::new("tok".into(), vec!["7".into()], false);
+    let update = serde_json::json!({
+        "update_id": 91,
+        "message_reaction": {
+            "chat": {"id": -10, "type": "supergroup"},
+            "message_id": 12,
+            "message_thread_id": 77,
+            "user": {"id": 7, "username": "alice"},
+            "old_reaction": [{"type":"emoji", "emoji":"A"}],
+            "new_reaction": [
+                {"type":"custom_emoji", "custom_emoji_id":"custom-2"},
+                {"type":"emoji", "emoji":"B"}
+            ]
+        }
+    });
+    let changes = ch.parse_update_reactions(&update);
+    assert_eq!(changes.len(), 3);
+    assert!(!changes[0].added);
+    assert_eq!(changes[0].emoji, "A");
+    assert!(changes[1..].iter().all(|change| change.added));
+    assert_eq!(changes[1].custom_emoji_id.as_deref(), Some("custom-2"));
+    assert_eq!(changes[2].emoji, "B");
+    assert_eq!(
+        changes[0].conversation_kind,
+        tinychannels_bus::ConversationKind::Group
+    );
+    assert_eq!(changes[0].thread_id.as_deref(), Some("77"));
+    let unchanged = serde_json::json!({"message_reaction": {
+        "chat":{"id":-10,"type":"supergroup"},"message_id":12,"user":{"id":7},
+        "old_reaction":[{"type":"emoji","emoji":"A"}],
+        "new_reaction":[{"type":"emoji","emoji":"A"}]
+    }});
+    assert!(ch.parse_update_reactions(&unchanged).is_empty());
+}
+
+#[test]
+fn anonymous_chat_reactions_keep_actor_identity_and_native_paid_reaction() {
+    let ch = TelegramChannel::new("tok".into(), vec!["-100".into()], false);
+    let changes = ch.parse_update_reactions(&serde_json::json!({
+        "update_id": 92,
+        "message_reaction": {
+            "chat": {"id": -10, "type": "channel"}, "message_id": 8,
+            "actor_chat": {"id": -100, "title": "moderators"},
+            "old_reaction": [],
+            "new_reaction": [{"type": "paid"}]
+        }
+    }));
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].sender_id, "-100");
+    assert_eq!(changes[0].sender, "moderators");
+    assert_eq!(changes[0].emoji, "paid");
+    assert_eq!(changes[0].custom_emoji_id, None);
+
+    let denied = TelegramChannel::new("tok".into(), vec!["alice".into()], false);
+    assert!(
+        denied
+            .parse_update_reactions(&serde_json::json!({
+                "message_reaction": {
+                    "chat": {"id": -10}, "message_id": 8,
+                    "actor_chat": {"id": -100, "title": "moderators"},
+                    "old_reaction": [], "new_reaction": [{"type": "paid"}]
+                }
+            }))
+            .is_empty(),
+        "anonymous actors still obey the configured allowlist"
+    );
+}
+
+#[test]
 fn redact_bot_token_is_identity_for_empty_token() {
     let ch = TelegramChannel::new(String::new(), vec!["*".into()], false);
     assert_eq!(ch.redact_bot_token("keep /bot/ as is"), "keep /bot/ as is");

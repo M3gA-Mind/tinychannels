@@ -1,5 +1,6 @@
 //! Relay WebSocket frame contract.
 
+use crate::ChannelCapabilities;
 use crate::relay::CapabilityDescriptor;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -9,6 +10,7 @@ use serde_json::Value;
 
 /// Gateway-to-connector frame names.
 pub const FRAME_HELLO: &str = "hello";
+pub const FRAME_HELLO_V2: &str = "hello_v2";
 pub const FRAME_OUTBOUND: &str = "outbound";
 pub const FRAME_INTERRUPT: &str = "interrupt";
 pub const FRAME_GOING_IDLE: &str = "going_idle";
@@ -16,6 +18,8 @@ pub const FRAME_INBOUND_ACK: &str = "inbound_ack";
 
 /// Connector-to-gateway frame names.
 pub const FRAME_DESCRIPTOR: &str = "descriptor";
+/// Version-2 relay descriptor frame; the v1 descriptor remains frozen.
+pub const FRAME_DESCRIPTOR_V2: &str = "descriptor_v2";
 pub const FRAME_INBOUND: &str = "inbound";
 pub const FRAME_OUTBOUND_RESULT: &str = "outbound_result";
 pub const FRAME_INTERRUPT_INBOUND: &str = "interrupt_inbound";
@@ -30,6 +34,12 @@ pub enum GatewayToConnectorFrame {
         platform: String,
         #[serde(rename = "botId")]
         bot_id: String,
+    },
+    HelloV2 {
+        platform: String,
+        #[serde(rename = "botId")]
+        bot_id: String,
+        contract_version: u32,
     },
     Outbound {
         #[serde(rename = "requestId")]
@@ -68,6 +78,12 @@ impl GatewayToConnectorFrame {
 pub enum ConnectorToGatewayFrame {
     Descriptor {
         descriptor: CapabilityDescriptor,
+    },
+    DescriptorV2 {
+        platform: String,
+        #[serde(rename = "botId")]
+        bot_id: String,
+        capabilities: Box<ChannelCapabilities>,
     },
     Inbound {
         event: Value,
@@ -143,3 +159,7 @@ mod base64_body {
         Ok(STANDARD.decode(encoded).unwrap_or_default())
     }
 }
+
+#[cfg(test)]
+#[path = "frames_tests.rs"]
+mod tests;

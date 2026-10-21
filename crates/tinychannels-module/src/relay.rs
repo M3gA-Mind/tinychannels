@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use tinybus::{Error, Result};
 use tinychannels::config::RelayRuntimeConfigExt as _;
 use tinychannels::relay::{
-    CapabilityDescriptor, RelayFrameDialer, RelayInboundHandler, RelayTransport,
+    CapabilityDescriptor, RelayFrameDialer, RelayIdentity, RelayInboundHandler, RelayTransport,
     RelayTransportError, WebSocketRelayConfig, WebSocketRelayDialer,
 };
 use tinychannels_bus::config::RelayRuntimeConfig;
@@ -22,6 +22,7 @@ enum State {
     Reserved,
     Starting,
     Connected(CapabilityDescriptor),
+    ConnectedV2(RelayCapabilitiesV2),
     Reconnecting,
     Stopping,
     Stopped,
@@ -32,7 +33,7 @@ impl State {
         match self {
             Self::Reserved => RelayPhase::Reserved,
             Self::Starting => RelayPhase::Starting,
-            Self::Connected(_) => RelayPhase::Connected,
+            Self::Connected(_) | Self::ConnectedV2(_) => RelayPhase::Connected,
             Self::Reconnecting => RelayPhase::Reconnecting,
             Self::Stopping => RelayPhase::Stopping,
             Self::Stopped => RelayPhase::Stopped,
@@ -128,6 +129,33 @@ impl Relays {
         id: RelayReservation,
         config: RelayRuntimeConfig,
     ) -> Result<CapabilityDescriptor> {
+        match self.start_mode(id, config, false).await? {
+            State::Connected(descriptor) => Ok(descriptor),
+            _ => Err(Error::failed(
+                "relay v1 handshake returned the wrong result",
+            )),
+        }
+    }
+
+    pub(crate) async fn start_v2(
+        &self,
+        id: RelayReservation,
+        config: RelayRuntimeConfig,
+    ) -> Result<RelayCapabilitiesV2> {
+        match self.start_mode(id, config, true).await? {
+            State::ConnectedV2(capabilities) => Ok(capabilities),
+            _ => Err(Error::failed(
+                "relay v2 handshake returned the wrong result",
+            )),
+        }
+    }
+
+    async fn start_mode(
+        &self,
+        id: RelayReservation,
+        config: RelayRuntimeConfig,
+        v2: bool,
+    ) -> Result<State> {
         validate_config(&config)?;
         if self.terminal.load(Ordering::SeqCst) {
             return Err(closed());
@@ -135,7 +163,8 @@ impl Relays {
         let slot = self.get(&id).await?;
         let bytes = serde_json::to_string(&config)
             .map_err(|_| Error::failed("invalid relay configuration"))?;
-        let hash = tinychannels::security::hash_token(&bytes);
+        let hash =
+            tinychannels::security::hash_token(&format!("{bytes}:v{}", if v2 { 2 } else { 1 }));
         let mut worker = slot.worker.lock().await;
         if self.terminal.load(Ordering::SeqCst) || *slot.cancel.borrow() {
             return Err(closed());
@@ -155,7 +184,7 @@ impl Relays {
                 let owner = slot.clone();
                 let host = self.host.clone();
                 *worker = Some(tokio::spawn(async move {
-                    run(owner, config, host).await;
+                    run(owner, config, host, v2).await;
                 }));
             }
         }
@@ -163,7 +192,13 @@ impl Relays {
         let mut state = slot.state.subscribe();
         loop {
             match state.borrow().clone() {
-                State::Connected(descriptor) => return Ok(descriptor),
+                State::Connected(descriptor) if !v2 => return Ok(State::Connected(descriptor)),
+                State::ConnectedV2(capabilities) if v2 => {
+                    return Ok(State::ConnectedV2(capabilities));
+                }
+                State::Connected(_) | State::ConnectedV2(_) => {
+                    return Err(Error::failed("relay handshake mode mismatch"));
+                }
                 State::Stopped | State::Stopping => return Err(closed()),
                 State::Failed => return Err(Error::failed("relay startup failed")),
                 State::Reserved | State::Starting | State::Reconnecting => {}
@@ -174,22 +209,79 @@ impl Relays {
     pub(crate) async fn status(&self, id: RelayReservation) -> Result<RelayStatus> {
         let slot = self.get(&id).await?;
         let state = slot.state.borrow().clone();
-        let state = if matches!(state, State::Connected(_))
-            && slot
-                .transport
-                .lock()
-                .await
-                .as_ref()
-                .is_some_and(|transport| transport.is_closed())
-        {
-            State::Reconnecting
-        } else {
-            state
+        let state = match &state {
+            State::ConnectedV2(capabilities) => {
+                let expected = relay_v2_identities(capabilities);
+                if self.live_v2_descriptors(&slot, &expected).await.is_some() {
+                    state
+                } else {
+                    State::Reconnecting
+                }
+            }
+            State::Connected(_) => {
+                if slot
+                    .transport
+                    .lock()
+                    .await
+                    .as_ref()
+                    .is_some_and(|transport| transport.is_closed())
+                {
+                    State::Reconnecting
+                } else {
+                    state
+                }
+            }
+            _ => state,
         };
         Ok(RelayStatus {
             contract_version: MODULE_OPERATION_VERSION,
             state: state.phase(),
         })
+    }
+    pub(crate) async fn capabilities_v2(
+        &self,
+        id: RelayReservation,
+    ) -> Result<Option<RelayCapabilitiesV2>> {
+        let slot = self.get(&id).await?;
+        let expected = match slot.state.borrow().clone() {
+            State::ConnectedV2(capabilities) => relay_v2_identities(&capabilities),
+            _ => return Ok(None),
+        };
+        let Some(descriptors) = self.live_v2_descriptors(&slot, &expected).await else {
+            return Ok(None);
+        };
+        let instances = descriptors
+            .into_iter()
+            .map(|(identity, capabilities)| RelayInstanceCapabilitiesV2 {
+                platform: identity.platform,
+                bot_id: identity.bot_id,
+                capabilities,
+            })
+            .collect();
+        Ok(Some(RelayCapabilitiesV2 {
+            contract_version: tinychannels_bus::ChannelCapabilities::VERSION,
+            instances,
+        }))
+    }
+
+    async fn live_v2_descriptors(
+        &self,
+        slot: &Slot,
+        expected: &[RelayIdentity],
+    ) -> Option<std::collections::HashMap<RelayIdentity, tinychannels_bus::ChannelCapabilities>>
+    {
+        if self.terminal.load(Ordering::SeqCst) || *slot.cancel.borrow() {
+            return None;
+        }
+        let transport = slot.transport.lock().await.as_ref().cloned()?;
+        if transport.is_closed() {
+            return None;
+        }
+        let descriptors = transport.capabilities_v2().await;
+        if transport.is_closed() || !v2_capabilities_complete(expected, &descriptors) {
+            return None;
+        }
+        Some(descriptors)
     }
     pub(crate) async fn send(
         &self,
@@ -205,7 +297,10 @@ impl Relays {
         if self.terminal.load(Ordering::SeqCst) || *slot.cancel.borrow() {
             return Err(closed());
         }
-        if !matches!(*slot.state.borrow(), State::Connected(_)) {
+        if !matches!(
+            *slot.state.borrow(),
+            State::Connected(_) | State::ConnectedV2(_)
+        ) {
             return Err(Error::failed("relay is not connected"));
         }
         let bytes =
@@ -265,8 +360,14 @@ fn closed() -> Error {
     Error::failed("relay is stopped or module is shutting down")
 }
 fn validate_config(config: &RelayRuntimeConfig) -> Result<()> {
+    let unique_identities: std::collections::BTreeSet<_> = config
+        .identities
+        .iter()
+        .map(|identity| (identity.platform.as_str(), identity.bot_id.as_str()))
+        .collect();
     if !config.is_listener_configured()
         || config.identities.len() > 32
+        || unique_identities.len() != config.identities.len()
         || config.url.len() > 4096
         || config
             .upgrade_secret
@@ -304,9 +405,7 @@ impl RelayInboundHandler for Inbound {
             envelope,
             delivered_via_authenticated_relay: event.delivered_via_authenticated_relay,
         };
-        let value = serde_json::to_value(delivery)
-            .map_err(|_| RelayTransportError::Handler("invalid inbound envelope".into()))?;
-        self.host.deliver_inbound(&channel, value).await;
+        self.host.deliver_relay_inbound(&channel, delivery).await;
         Ok(())
     }
 }
@@ -316,13 +415,14 @@ async fn canceled(cancel: &mut watch::Receiver<bool>) {
     }
     let _ = cancel.wait_for(|value| *value).await;
 }
-async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels) {
+async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels, v2: bool) {
     let mut cancel = slot.cancel.subscribe();
     let dialer = Arc::new(WebSocketRelayDialer::new_bounded(
         WebSocketRelayConfig::from(&config),
         RELAY_FRAME_BYTES,
     ));
     let mut transport = None;
+    let expected_identities = config.relay_identities();
     let start = async {
         let io = dialer.dial().await?;
         let native = Arc::new(RelayTransport::new(
@@ -335,8 +435,26 @@ async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels) {
         native
             .set_inbound_handler(Arc::new(Inbound { host: host.clone() }))
             .await;
-        native.connect().await?;
-        native.handshake().await
+        if v2 {
+            native.connect_v2().await?;
+            let instances = native
+                .negotiate_v2()
+                .await?
+                .into_iter()
+                .map(|(identity, capabilities)| RelayInstanceCapabilitiesV2 {
+                    platform: identity.platform,
+                    bot_id: identity.bot_id,
+                    capabilities,
+                })
+                .collect();
+            Ok::<_, RelayTransportError>(State::ConnectedV2(RelayCapabilitiesV2 {
+                contract_version: tinychannels_bus::ChannelCapabilities::VERSION,
+                instances,
+            }))
+        } else {
+            native.connect().await?;
+            native.handshake().await.map(State::Connected)
+        }
     };
     let outcome = tokio::select! { biased;
         ()=canceled(&mut cancel)=>Err(RelayTransportError::Closed),
@@ -344,10 +462,10 @@ async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels) {
     };
     let mut reconnect = None;
     let mut observer = None;
-    if let Ok(descriptor) = outcome
+    if let Ok(connected) = outcome
         && let Some(native) = transport.as_ref()
     {
-        slot.state.send_replace(State::Connected(descriptor));
+        slot.state.send_replace(connected);
         host.report_status("relay", "connected", None).await;
         reconnect = Some(native.spawn_reconnect_supervisor(dialer, config.reconnect));
         let observed_slot = slot.clone();
@@ -363,14 +481,37 @@ async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels) {
                 }
                 let (next, state) = if observed_native.is_closed() {
                     (RelayPhase::Reconnecting, State::Reconnecting)
-                } else if let Some(descriptor) = observed_native.descriptor().await {
+                } else if v2 {
+                    let descriptors = observed_native.capabilities_v2().await;
+                    if !observed_native.is_closed()
+                        && v2_capabilities_complete(&expected_identities, &descriptors)
+                    {
+                        let instances = descriptors
+                            .into_iter()
+                            .map(|(identity, capabilities)| RelayInstanceCapabilitiesV2 {
+                                platform: identity.platform,
+                                bot_id: identity.bot_id,
+                                capabilities,
+                            })
+                            .collect();
+                        (
+                            RelayPhase::Connected,
+                            State::ConnectedV2(RelayCapabilitiesV2 {
+                                contract_version: tinychannels_bus::ChannelCapabilities::VERSION,
+                                instances,
+                            }),
+                        )
+                    } else {
+                        (RelayPhase::Reconnecting, State::Reconnecting)
+                    }
+                } else if !v2 && let Some(descriptor) = observed_native.descriptor().await {
                     (RelayPhase::Connected, State::Connected(descriptor))
                 } else {
                     (RelayPhase::Reconnecting, State::Reconnecting)
                 };
+                observed_slot.state.send_replace(state);
                 if next != previous {
                     previous = next;
-                    observed_slot.state.send_replace(state);
                     let label = match next {
                         RelayPhase::Connected => "connected",
                         RelayPhase::Reconnecting => "reconnecting",
@@ -437,6 +578,32 @@ async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels) {
     )
     .await;
     slot.state.send_replace(phase);
+}
+
+fn relay_v2_identities(capabilities: &RelayCapabilitiesV2) -> Vec<RelayIdentity> {
+    capabilities
+        .instances
+        .iter()
+        .map(|instance| RelayIdentity {
+            platform: instance.platform.clone(),
+            bot_id: instance.bot_id.clone(),
+        })
+        .collect()
+}
+
+fn v2_capabilities_complete(
+    expected: &[RelayIdentity],
+    actual: &std::collections::HashMap<RelayIdentity, tinychannels_bus::ChannelCapabilities>,
+) -> bool {
+    let expected: std::collections::BTreeSet<_> = expected
+        .iter()
+        .map(|identity| (identity.platform.as_str(), identity.bot_id.as_str()))
+        .collect();
+    let actual: std::collections::BTreeSet<_> = actual
+        .keys()
+        .map(|identity| (identity.platform.as_str(), identity.bot_id.as_str()))
+        .collect();
+    !expected.is_empty() && expected == actual
 }
 
 #[cfg(test)]

@@ -19,9 +19,10 @@ pub use descriptor::{
 };
 pub use frames::{
     AuthenticatedRelayInboundEvent, ConnectorToGatewayFrame, ConnectorToGatewayFrameExt,
-    FRAME_DESCRIPTOR, FRAME_GOING_IDLE, FRAME_GOING_IDLE_ACK, FRAME_HELLO, FRAME_INBOUND,
-    FRAME_INBOUND_ACK, FRAME_INTERRUPT, FRAME_INTERRUPT_INBOUND, FRAME_OUTBOUND,
-    FRAME_OUTBOUND_RESULT, FRAME_PASSTHROUGH_FORWARD, GatewayToConnectorFrame, PassthroughForward,
+    FRAME_DESCRIPTOR, FRAME_DESCRIPTOR_V2, FRAME_GOING_IDLE, FRAME_GOING_IDLE_ACK, FRAME_HELLO,
+    FRAME_HELLO_V2, FRAME_INBOUND, FRAME_INBOUND_ACK, FRAME_INTERRUPT, FRAME_INTERRUPT_INBOUND,
+    FRAME_OUTBOUND, FRAME_OUTBOUND_RESULT, FRAME_PASSTHROUGH_FORWARD, GatewayToConnectorFrame,
+    PassthroughForward,
 };
 pub use transport::{
     RelayFrameDialer, RelayFrameIo, RelayIdentity, RelayInboundHandler,

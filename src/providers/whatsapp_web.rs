@@ -238,6 +238,8 @@ impl InboundState {
             reply_target,
             content: text,
             timestamp: chrono::Utc::now().timestamp_millis() as u64,
+            topic_id: None,
+            reply_to_id: None,
             thread_ts: None,
             sender_name,
         };
@@ -657,6 +659,14 @@ impl WhatsAppWebChannel {
 impl Channel for WhatsAppWebChannel {
     fn name(&self) -> &str {
         "whatsapp"
+    }
+
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+
+    fn supports_chat_approvals(&self) -> bool {
+        true
     }
 
     async fn send(&self, message: &SendMessage) -> Result<()> {

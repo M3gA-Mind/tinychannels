@@ -4,9 +4,15 @@ use super::*;
 fn cli_channel_name_and_capabilities() {
     let ch = CliChannel::new();
     assert_eq!(ch.name(), "cli");
-    assert_eq!(
-        ch.capabilities(),
-        tinychannels_bus::ChannelCapabilities::NONE
+    let capabilities = ch.capabilities();
+    assert!(capabilities.content.text.inbound);
+    assert!(capabilities.content.text.outbound);
+    assert!(
+        capabilities
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "send")
     );
 }
 

@@ -43,8 +43,39 @@ Dispatch mode and effective limit cannot change after activation. Flush waits
 for preceding accepted turns; stop freezes admission and retains pending work
 across canceled waiters. The existing module cleanup deadline reports pending
 cleanup after ten seconds while retaining the owner for a later stop retry.
+Contract version 22 carries `ChannelInboundEnvelope` content parts through
+`DeliverInbound` and `ProcessInbound`, and sends `ChannelOutboundMessage` values
+with ordered typed parts through `SendChannelIntent`. The legacy `ChannelMessage`
+and `SendMessage` conversions are deprecated, one-release compatibility
+projections. Their outbound adapter accepts text parts only; rich payloads
+remain available to providers that implement `Channel::send_typed`. Binding is
+exact-version: a v21 host cannot bind a v22 module, so this shim is for source
+migration and same-version legacy provider adapters, not cross-version callback
+compatibility.
+
 This source contract still requires a compatible published native module before
 a downstream host can claim released composition.
+
+Provider notifications use `ChannelEvent`, a versioned DTO with a `type`
+discriminator, stable event/source IDs, source time, `ChannelRef`, and the full
+optional `ConversationRef`. The module sends it through `ChannelsHost.DeliverEvent`
+in the same ordered callback queue as inbound messages. `PublishEvent` remains
+available for older, unrelated domain publications.
+
+Providers that support v22 ordered ingress submit `ChannelIngress` items through
+their `EventSink`: normalized inbound envelopes and typed events share one
+awaited path. Telegram uses this path for messages, edits and reactions, so a
+later edit/reaction cannot overtake its message. The legacy message-channel
+bridge remains for providers still migrating. Event message references retain
+the stable module message ID while `providerMessageId` preserves the source ID;
+Telegram topic IDs remain separate from chat IDs in `ConversationRef`.
+
+Typed send outcomes may carry multiple provider message IDs and per-part edit
+or delete tokens. Tokens are opaque operation inputs and are only populated
+when the provider's actual response returns the corresponding message IDs.
+Required delivery first persists the unknown-send state, then attaches any
+partial receipt in a follow-up save; both writes preserve the pre-I/O crash
+marker. Terminal receipts are included in idempotent replays.
 
 The controller vocabulary includes complete Discord guild, text-channel and
 permission DTOs. Provider APIs re-export these types at their existing paths;

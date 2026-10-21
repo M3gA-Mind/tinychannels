@@ -346,6 +346,13 @@ impl Channel for IrcChannel {
         "irc"
     }
 
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
+
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         let mut guard = self.writer.lock().await;
         let writer = guard
@@ -575,6 +582,8 @@ impl Channel for IrcChannel {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs(),
+                        topic_id: None,
+                        reply_to_id: None,
                         thread_ts: None,
                         sender_name: None,
                     };

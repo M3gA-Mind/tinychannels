@@ -9,7 +9,7 @@ fn runtime_reexports_keep_exact_bus_dto_identity() {
     let envelope: tinychannels_bus::ChannelInboundEnvelope =
         channel::ChannelInboundEnvelope::default();
     let projected: tinychannels_bus::ChannelMessage =
-        channel::legacy_message_from_inbound_envelope(&envelope, 7);
+        channel::legacy_message_from_inbound_envelope(&envelope, 7).unwrap();
     assert_eq!(projected.timestamp, 7);
 }
 

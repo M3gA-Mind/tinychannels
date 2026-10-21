@@ -173,6 +173,8 @@ impl WhatsAppChannel {
                         content,
                         channel: "whatsapp".to_string(),
                         timestamp,
+                        topic_id: None,
+                        reply_to_id: None,
                         thread_ts: None,
                         sender_name: Self::contact_name(value, from),
                     });
@@ -188,6 +190,14 @@ impl WhatsAppChannel {
 impl Channel for WhatsAppChannel {
     fn name(&self) -> &str {
         "whatsapp"
+    }
+
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+
+    fn supports_chat_approvals(&self) -> bool {
+        true
     }
 
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {

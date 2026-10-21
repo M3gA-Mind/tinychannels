@@ -5,7 +5,56 @@ use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tinychannels::relay::{ConnectorToGatewayFrame, GatewayToConnectorFrame};
 use tinychannels_bus::config::RelayRuntimeIdentityConfig;
+use tinychannels_bus::relay::RelayReconnectPolicy;
 use tokio_tungstenite::tungstenite::Message;
+
+struct IdleRelayIo;
+
+#[async_trait::async_trait]
+impl tinychannels::relay::RelayFrameIo for IdleRelayIo {
+    async fn send(
+        &self,
+        _frame: GatewayToConnectorFrame,
+    ) -> std::result::Result<(), tinychannels::relay::RelayTransportError> {
+        Ok(())
+    }
+
+    async fn recv(
+        &self,
+    ) -> std::result::Result<
+        Option<ConnectorToGatewayFrame>,
+        tinychannels::relay::RelayTransportError,
+    > {
+        std::future::pending().await
+    }
+}
+
+#[test]
+fn v2_reconnect_is_not_connected_until_every_configured_identity_replies() {
+    let identities = vec![
+        RelayIdentity {
+            platform: "telegram".into(),
+            bot_id: "first".into(),
+        },
+        RelayIdentity {
+            platform: "telegram".into(),
+            bot_id: "second".into(),
+        },
+    ];
+    let mut descriptors = std::collections::HashMap::new();
+    descriptors.insert(
+        identities[1].clone(),
+        tinychannels_bus::ChannelCapabilities::unknown(),
+    );
+    assert!(!v2_capabilities_complete(&identities, &descriptors));
+    // Responses may arrive in either order; publishing connected requires the
+    // second identity's descriptor as well.
+    descriptors.insert(
+        identities[0].clone(),
+        tinychannels_bus::ChannelCapabilities::unknown(),
+    );
+    assert!(v2_capabilities_complete(&identities, &descriptors));
+}
 
 #[derive(Clone)]
 struct Callback {
@@ -192,6 +241,198 @@ async fn required_relay_delivery_is_refused_before_socket_send() {
     assert_eq!(socket.outbound_count.load(Ordering::SeqCst), 0);
     manager.shutdown().await.unwrap();
     host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn v2_reconnect_waits_for_each_configured_identity_before_publishing_connected() {
+    let (manager, _callback, _server, _host) = manager().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    let (partial_sent, partial_seen) = oneshot::channel();
+    let (release_initial, initial_released) = oneshot::channel();
+    let (release_final, final_released) = oneshot::channel();
+    let peer = tokio::spawn(async move {
+        // Initial connection declares both accounts and becomes connected.
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut first = tokio_tungstenite::accept_async(stream).await.unwrap();
+        for _ in 0..2 {
+            let hello = first.next().await.unwrap().unwrap();
+            assert!(matches!(
+                serde_json::from_str::<GatewayToConnectorFrame>(hello.to_text().unwrap()).unwrap(),
+                GatewayToConnectorFrame::HelloV2 { .. }
+            ));
+        }
+        send_v2_descriptor(&mut first, "telegram", "first", "initial").await;
+        send_v2_descriptor(&mut first, "telegram", "second", "initial").await;
+        let _ = initial_released.await;
+        drop(first);
+
+        // On reconnect, return only the second identity first. The transport
+        // may retain neither the old set nor claim the new connection is ready.
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut second = tokio_tungstenite::accept_async(stream).await.unwrap();
+        for _ in 0..2 {
+            let hello = second.next().await.unwrap().unwrap();
+            assert!(matches!(
+                serde_json::from_str::<GatewayToConnectorFrame>(hello.to_text().unwrap()).unwrap(),
+                GatewayToConnectorFrame::HelloV2 { .. }
+            ));
+        }
+        send_v2_descriptor(&mut second, "telegram", "second", "partial").await;
+        let _ = partial_sent.send(());
+        let _ = final_released.await;
+        send_v2_descriptor(&mut second, "telegram", "first", "reconnected").await;
+        while let Some(Ok(message)) = second.next().await {
+            if message.is_close() {
+                break;
+            }
+        }
+    });
+    let identities = vec![
+        RelayRuntimeIdentityConfig {
+            platform: "telegram".into(),
+            bot_id: "first".into(),
+        },
+        RelayRuntimeIdentityConfig {
+            platform: "telegram".into(),
+            bot_id: "second".into(),
+        },
+    ];
+    let reservation = manager.reserve().await.unwrap();
+    let config = RelayRuntimeConfig {
+        url,
+        identities,
+        reconnect: RelayReconnectPolicy {
+            backoff_ms: 10,
+            max_backoff_ms: 50,
+        },
+        ..Default::default()
+    };
+    let initial = manager.start_v2(reservation.clone(), config).await.unwrap();
+    assert_eq!(initial.instances.len(), 2);
+    release_initial.send(()).unwrap();
+    partial_seen.await.unwrap();
+    assert_eq!(
+        manager.capabilities_v2(reservation.clone()).await.unwrap(),
+        None,
+        "a reconnect with only one of two configured descriptors must not expose cached facts"
+    );
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(
+        manager.status(reservation.clone()).await.unwrap().state,
+        RelayPhase::Reconnecting
+    );
+    assert_eq!(
+        manager.capabilities_v2(reservation.clone()).await.unwrap(),
+        None
+    );
+
+    release_final.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if manager.status(reservation.clone()).await.unwrap().state == RelayPhase::Connected {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("all configured identities reconnect");
+    let refreshed = manager
+        .capabilities_v2(reservation.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(refreshed.instances.len(), 2);
+    assert_eq!(
+        refreshed
+            .instances
+            .iter()
+            .find(|instance| instance.bot_id == "first")
+            .unwrap()
+            .capabilities
+            .extensions
+            .get("marker"),
+        Some(&serde_json::json!("reconnected")),
+    );
+    let ids: std::collections::BTreeSet<_> = refreshed
+        .instances
+        .iter()
+        .map(|instance| instance.bot_id.as_str())
+        .collect();
+    assert_eq!(ids, ["first", "second"].into_iter().collect());
+    manager.stop(reservation).await.unwrap();
+    peer.await.unwrap();
+}
+
+#[tokio::test]
+async fn v2_capabilities_query_hides_cached_slot_after_immediate_transport_close() {
+    let (manager, _callback, _server, host) = manager().await;
+    let reservation = manager.reserve().await.unwrap();
+    let slot = manager.get(&reservation).await.unwrap();
+    let capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+    slot.state
+        .send_replace(State::ConnectedV2(RelayCapabilitiesV2 {
+            contract_version: tinychannels_bus::ChannelCapabilities::VERSION,
+            instances: vec![RelayInstanceCapabilitiesV2 {
+                platform: "telegram".into(),
+                bot_id: "fixture".into(),
+                capabilities,
+            }],
+        }));
+    let transport = Arc::new(tinychannels::relay::RelayTransport::new(
+        vec![tinychannels::relay::RelayIdentity {
+            platform: "telegram".into(),
+            bot_id: "fixture".into(),
+        }],
+        Arc::new(IdleRelayIo),
+        tinychannels::relay::RelayTransportTimeouts::default(),
+    ));
+    *slot.transport.lock().await = Some(transport.clone());
+    assert!(!transport.is_closed());
+    assert_eq!(
+        manager.status(reservation.clone()).await.unwrap().state,
+        RelayPhase::Reconnecting,
+        "an open transport without its new descriptor snapshot is not connected"
+    );
+    assert_eq!(
+        manager.capabilities_v2(reservation.clone()).await.unwrap(),
+        None,
+        "an open transport without its new descriptor snapshot must not expose cached facts"
+    );
+    transport.shutdown().await;
+
+    assert!(transport.is_closed());
+    assert_eq!(
+        manager.capabilities_v2(reservation.clone()).await.unwrap(),
+        None
+    );
+    manager.stop(reservation).await.unwrap();
+    manager.shutdown().await.unwrap();
+    host.shutdown().await.unwrap();
+}
+
+async fn send_v2_descriptor(
+    stream: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    platform: &str,
+    bot_id: &str,
+    marker: &str,
+) {
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+    capabilities
+        .extensions
+        .insert("marker".into(), serde_json::json!(marker));
+    let frame = ConnectorToGatewayFrame::DescriptorV2 {
+        platform: platform.into(),
+        bot_id: bot_id.into(),
+        capabilities: Box::new(capabilities),
+    };
+    stream
+        .send(Message::Text(
+            format!("{}\n", serde_json::to_string(&frame).unwrap()).into(),
+        ))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

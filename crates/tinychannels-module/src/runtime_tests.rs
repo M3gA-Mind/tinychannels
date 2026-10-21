@@ -130,7 +130,13 @@ async fn held_turn_returns_pending_stop_and_retains_a_retryable_runtime_owner() 
     let child = slot.child.lock().await.as_ref().unwrap().clone();
     child
         .host
-        .deliver_inbound("telegram", serde_json::json!({"id":1}))
+        .deliver_inbound(
+            "telegram",
+            tinychannels_bus::ChannelInboundEnvelope {
+                raw: Some(serde_json::json!({"id":1})),
+                ..Default::default()
+            },
+        )
         .await;
     callback.started.notified().await;
     let owner = runtimes.clone();
