@@ -152,3 +152,7 @@ impl From<StoredResult> for DeliveryTerminalResult {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "records_tests.rs"]
+mod tests;
