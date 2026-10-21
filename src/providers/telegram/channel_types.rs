@@ -4,10 +4,10 @@ use crate::config::StreamMode;
 use crate::security::PairingGuard;
 use parking_lot::Mutex;
 use std::collections::{HashSet, VecDeque};
-use std::sync::{Arc, RwLock};
 use std::sync::atomic::AtomicBool;
-use tokio::sync::watch;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use tokio::sync::watch;
 
 pub(crate) const TELEGRAM_RECENT_UPDATE_CACHE_SIZE: usize = 4096;
 

@@ -5350,7 +5350,11 @@ async fn adapter_start_polls_and_delivers_original_typed_telegram_ingress() {
     }
 
     let requests = server.received_requests().await.unwrap();
-    assert!(requests.iter().any(|request| request.url.path() == api_path("getUpdates")));
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.url.path() == api_path("getUpdates"))
+    );
     let items = sink.items.lock().unwrap();
     let [tinychannels_bus::ChannelIngress::Inbound(envelope)] = items.as_slice() else {
         panic!("expected one original typed inbound envelope, got {items:?}");
@@ -5359,9 +5363,13 @@ async fn adapter_start_polls_and_delivers_original_typed_telegram_ingress() {
     assert_eq!(envelope.conversation.id, "-10042");
     assert_eq!(envelope.conversation.topic_id.as_deref(), Some("73"));
     assert_eq!(envelope.message_id, "telegram_-10042_9");
-    assert!(matches!(envelope.parts.as_slice(), [tinychannels_bus::ContentPart::Text { text, .. }] if text == "hello from a forum topic"));
+    assert!(
+        matches!(envelope.parts.as_slice(), [tinychannels_bus::ContentPart::Text { text, .. }] if text == "hello from a forum topic")
+    );
     drop(items);
-    crate::channel::ChannelAdapter::stop(channel.as_ref()).await.unwrap();
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

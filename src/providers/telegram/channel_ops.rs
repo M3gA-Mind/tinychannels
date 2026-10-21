@@ -1819,24 +1819,24 @@ impl TelegramChannel {
                 "allowed_updates": ["message", "edited_message", "message_reaction", "callback_query"]
             });
 
-                    let response = tokio::select! {
-                        biased;
-                        changed = cancellation.changed() => {
-                            if changed.is_err() || *cancellation.borrow() {
-                                return Ok(());
-                            }
-                            continue;
-                        }
-                        response = self.http_client().post(&url).json(&body).send() => response,
-                    };
-                    let resp = match response {
+            let response = tokio::select! {
+                biased;
+                changed = cancellation.changed() => {
+                    if changed.is_err() || *cancellation.borrow() {
+                        return Ok(());
+                    }
+                    continue;
+                }
+                response = self.http_client().post(&url).json(&body).send() => response,
+            };
+            let resp = match response {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!("Telegram poll error: {e}");
-                        tokio::select! {
-                            _ = cancellation.changed() => return Ok(()),
-                            _ = tokio::time::sleep(self.poll_error_backoff) => {}
-                        }
+                    tokio::select! {
+                        _ = cancellation.changed() => return Ok(()),
+                        _ = tokio::time::sleep(self.poll_error_backoff) => {}
+                    }
                     continue;
                 }
             };
@@ -2183,7 +2183,6 @@ Ensure only one `openhuman` process is using this bot token."
                 }
             }
         }
-    
     }
 }
 
