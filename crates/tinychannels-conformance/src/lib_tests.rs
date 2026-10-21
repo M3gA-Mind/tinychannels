@@ -833,7 +833,7 @@ impl NativeControllerFixture for NativeControllerFixtureCase {
         "fixture-provider"
     }
 
-    fn managed_callback_count(&self) -> usize {
+    async fn managed_callback_count(&self) -> usize {
         self.callbacks.load(std::sync::atomic::Ordering::SeqCst)
     }
 
@@ -911,8 +911,10 @@ async fn native_controller_matrix_requires_declared_wire_and_no_managed_callback
         unsupported: true,
         invoke_managed: true,
     };
-    assert!(check_native_controller_feature(&fallback, NativeControllerFeature::ThreadList)
-        .await
-        .unwrap_err()
-        .contains("managed host callback"));
+    assert!(
+        check_native_controller_feature(&fallback, NativeControllerFeature::ThreadList)
+            .await
+            .unwrap_err()
+            .contains("managed host callback")
+    );
 }

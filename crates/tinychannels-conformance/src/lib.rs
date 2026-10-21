@@ -108,13 +108,11 @@ pub struct NativeControllerObservation {
 pub trait NativeControllerFixture: Send + Sync {
     fn capabilities(&self) -> ChannelCapabilities;
     fn provider(&self) -> &str;
-    fn managed_callback_count(&self) -> usize;
+    async fn managed_callback_count(&self) -> usize;
     fn clear_observations(&self);
     fn observations(&self) -> Vec<NativeControllerObservation>;
-    async fn exercise(
-        &self,
-        feature: NativeControllerFeature,
-    ) -> Result<(), NativeControllerError>;
+    async fn exercise(&self, feature: NativeControllerFeature)
+    -> Result<(), NativeControllerError>;
 }
 
 /// Result classification from a native controller fixture.
@@ -131,11 +129,11 @@ pub async fn check_native_controller_feature<F: NativeControllerFixture + ?Sized
     feature: NativeControllerFeature,
 ) -> Result<(), String> {
     fixture.clear_observations();
-    let initial_callbacks = fixture.managed_callback_count();
+    let initial_callbacks = fixture.managed_callback_count().await;
     let declared = feature.declared(&fixture.capabilities());
     let result = fixture.exercise(feature).await;
     let observations = fixture.observations();
-    let callbacks = fixture.managed_callback_count();
+    let callbacks = fixture.managed_callback_count().await;
 
     if callbacks != initial_callbacks {
         return Err(format!(
@@ -178,7 +176,9 @@ pub async fn check_native_controller_feature<F: NativeControllerFixture + ?Sized
         NativeControllerFeature::ThreadCreate | NativeControllerFeature::ThreadList
             if observation.returned_ids.is_empty() =>
         {
-            Err(format!("declared {feature:?} returned no provider identifiers"))
+            Err(format!(
+                "declared {feature:?} returned no provider identifiers"
+            ))
         }
         _ => Ok(()),
     }
