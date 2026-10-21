@@ -812,7 +812,10 @@ impl WhatsAppWebChannel {
                 }
             }
         }
-        if cancellation.as_ref().is_some_and(|receiver| *receiver.borrow()) {
+        if cancellation
+            .as_ref()
+            .is_some_and(|receiver| *receiver.borrow())
+        {
             self.stop_bot().await;
         }
         tracing::info!("WhatsApp Web channel exited via shared shutdown");

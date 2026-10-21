@@ -498,7 +498,9 @@ impl InboundState {
                     .is_ok()
                     && result.await.unwrap_or(false)
             } else if let Some(sink) = &self.events {
-                sink.publish_ingress(ChannelIngress::Event(event)).await.is_ok()
+                sink.publish_ingress(ChannelIngress::Event(event))
+                    .await
+                    .is_ok()
             } else {
                 false
             };
