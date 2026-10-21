@@ -1765,7 +1765,7 @@ async fn typed_voice_rejects_missing_host_storage_reference_and_origin_turn() {
         .unwrap_err();
     assert!(
         missing_store
-            .to_string()
+            .message
             .contains("requires host media resolution")
     );
 
@@ -1776,7 +1776,7 @@ async fn typed_voice_rejects_missing_host_storage_reference_and_origin_turn() {
             .unwrap_err();
     assert!(
         missing_reference
-            .to_string()
+            .message
             .contains("no host-owned opaque reference")
     );
 
@@ -1786,7 +1786,7 @@ async fn typed_voice_rejects_missing_host_storage_reference_and_origin_turn() {
             .unwrap_err();
     assert!(
         missing_turn
-            .to_string()
+            .message
             .contains("requires originating turn identity")
     );
     assert!(server.received_requests().await.unwrap().is_empty());
@@ -1861,7 +1861,7 @@ async fn send_draft_surfaces_api_rejection() {
     let err = ChannelStreamingDraft::start_draft(&ch, draft_text_intent("x", "100", None, None))
         .await
         .unwrap_err()
-        .to_string();
+        .message;
     assert!(err.contains("sendMessage (draft) failed"), "{err}");
     assert!(err.contains("chat not found"), "{err}");
 }
@@ -2620,7 +2620,7 @@ async fn typed_media_preserves_legacy_address_and_requires_host_opaque_id() {
     let error = ChannelTypedSend::send_typed(&channel, &missing_reference)
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("before provider dispatch"));
+    assert!(error.message.contains("before provider dispatch"));
     assert_eq!(json_bodies(&server, "sendPhoto").await.len(), 1);
 }
 
@@ -2706,7 +2706,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
     let error = ChannelTypedSend::send_typed(&channel, &no_conversation)
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("before provider dispatch"));
+    assert!(error.message.contains("before provider dispatch"));
     assert!(server.received_requests().await.unwrap().is_empty());
 
     let mut no_account = scoped_typed_media_message("stored-photo-1");
@@ -2715,7 +2715,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
         ChannelTypedSend::send_typed(&channel, &no_account)
             .await
             .unwrap_err()
-            .to_string()
+            .message
             .contains("before provider dispatch")
     );
 
@@ -2725,7 +2725,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
         ChannelTypedSend::send_typed(&channel, &no_turn)
             .await
             .unwrap_err()
-            .to_string()
+            .message
             .contains("before provider dispatch")
     );
     assert!(server.received_requests().await.unwrap().is_empty());
@@ -2736,7 +2736,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
         ChannelTypedSend::send_typed(&channel, &no_reply)
             .await
             .unwrap_err()
-            .to_string()
+            .message
             .contains("before provider dispatch")
     );
 
@@ -2762,7 +2762,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
         ChannelTypedSend::send_typed(&channel, &unsupported)
             .await
             .unwrap_err()
-            .to_string()
+            .message
             .contains("before provider dispatch")
     );
 
@@ -2771,7 +2771,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
         ChannelTypedSend::send_typed(&channel, &zero_dimensions)
             .await
             .unwrap_err()
-            .to_string()
+            .message
             .contains("before provider dispatch")
     );
 
@@ -2793,7 +2793,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
         ChannelTypedSend::send_typed(&channel, &sticker)
             .await
             .unwrap_err()
-            .to_string()
+            .message
             .contains("before provider dispatch")
     );
 
@@ -3290,7 +3290,7 @@ async fn telegram_rejects_wav_audio_before_native_upload() {
 
     assert!(
         error
-            .to_string()
+            .message
             .contains("rejected before provider dispatch")
     );
     assert!(server.received_requests().await.unwrap().is_empty());
@@ -3331,7 +3331,7 @@ async fn telegram_photo_over_ten_megabytes_is_rejected_before_http() {
         .await
         .unwrap_err();
 
-    assert!(error.to_string().contains("before provider dispatch"));
+    assert!(error.message.contains("before provider dispatch"));
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -3645,7 +3645,7 @@ async fn typed_send_rejects_non_numeric_reply_reference_before_provider_io() {
 
     assert!(
         error
-            .to_string()
+            .message
             .contains("reply_to_id must be a numeric message ID")
     );
     assert!(json_bodies(&server, "sendMessage").await.is_empty());
