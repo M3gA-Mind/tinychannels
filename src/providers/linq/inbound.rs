@@ -293,11 +293,6 @@ impl LinqChannel {
         self.allowed_senders.iter().any(|n| n == "*" || n == phone)
     }
 
-    /// Get the bot's phone number
-    pub fn phone_number(&self) -> &str {
-        &self.from_phone
-    }
-
     /// Parse an incoming webhook payload from Linq and extract messages.
     ///
     /// Linq webhook envelope:

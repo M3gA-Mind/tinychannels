@@ -11,14 +11,14 @@ use std::sync::Arc;
 /// The `listen` method here is a keepalive placeholder; inbound delivery depends on
 /// your deployment wiring Linq webhooks to the app.
 pub struct LinqChannel {
-    api_token: String,
-    from_phone: String,
-    allowed_senders: Vec<String>,
-    http_client: reqwest::Client,
-    api_base: String,
+    pub(super) api_token: String,
+    pub(super) from_phone: String,
+    pub(super) allowed_senders: Vec<String>,
+    pub(super) http_client: reqwest::Client,
+    pub(super) api_base: String,
     /// Signs webhooks (`X-Webhook-Signature`); deliveries are refused without it.
-    webhook_secret: Option<String>,
-    native: NativeState,
+    pub(super) webhook_secret: Option<String>,
+    pub(super) native: NativeState,
 }
 
 const LINQ_API_BASE: &str = "https://api.linqapp.com/api/partner/v3";
@@ -29,27 +29,27 @@ impl LinqChannel {
             api_token,
             from_phone,
             allowed_senders,
-            http_client: reqwest::Client::new(),
-            api_base: LINQ_API_BASE.to_owned(),
-            webhook_secret: None,
-            native: NativeState::default(),
+            pub(super) http_client: reqwest::Client::new(),
+            pub(super) api_base: LINQ_API_BASE.to_owned(),
+            pub(super) webhook_secret: None,
+            pub(super) native: NativeState::default(),
         }
     }
 
     pub fn with_http_client(
-        api_token: String,
-        from_phone: String,
-        allowed_senders: Vec<String>,
-        http_client: reqwest::Client,
+        pub(super) api_token: String,
+        pub(super) from_phone: String,
+        pub(super) allowed_senders: Vec<String>,
+        pub(super) http_client: reqwest::Client,
     ) -> Self {
         Self {
             api_token,
             from_phone,
             allowed_senders,
             http_client,
-            api_base: LINQ_API_BASE.to_owned(),
-            webhook_secret: None,
-            native: NativeState::default(),
+            pub(super) api_base: LINQ_API_BASE.to_owned(),
+            pub(super) webhook_secret: None,
+            pub(super) native: NativeState::default(),
         }
     }
 
@@ -113,5 +113,9 @@ impl LinqChannel {
         .is_ok_and(|response| response.is_ok_and(|response| response.status().is_success()))
     }
 
-    /// Check if a sender phone number is allowed (E.164 format: +1234567890)
+
+    /// Get the bot's phone number.
+    pub fn phone_number(&self) -> &str {
+        &self.from_phone
+    }
 }
