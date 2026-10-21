@@ -4740,6 +4740,17 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
         part,
         tinychannels_bus::ContentPart::Text { text, .. } if text == "original hello"
     )));
+    tokio::time::timeout(GUARD, async {
+        loop {
+            let polls = json_bodies(&server, "getUpdates").await;
+            if polls.iter().any(|poll| poll["offset"] == 16) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("listener should poll with the accepted update offset before stop");
     ChannelAdapter::stop(ch.as_ref())
         .await
         .expect("typed listener stops");
