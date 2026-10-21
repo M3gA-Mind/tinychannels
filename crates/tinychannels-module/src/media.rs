@@ -320,6 +320,12 @@ pub(crate) struct MediaUploads {
 }
 
 impl MediaUploads {
+    pub(crate) async fn invalidate_instance(&self, instance: &str) {
+        self.state.lock().await.uploads.retain(|_, upload| {
+            upload.request.instance != instance || upload.finalizing.load(Ordering::SeqCst)
+        });
+    }
+
     pub(crate) async fn binding_handle(
         &self,
         handle: &MediaUploadHandle,

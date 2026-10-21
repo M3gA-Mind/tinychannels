@@ -789,6 +789,7 @@ impl Channels {
             }
             self.provider_activations.lock().await.remove(&name);
             self.media_reads.invalidate_instance(&name).await;
+            self.media_uploads.invalidate_instance(&name).await;
             result?;
         }
         Ok(())
