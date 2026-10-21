@@ -622,6 +622,8 @@ impl Channels {
         };
         let prepared = PreparedChannelInbound {
             history_key: tinychannels::context::conversation_history_key(&message),
+            history_key_ignores_thread:
+                tinychannels::context::legacy_v21_history_key_ignores_thread(&message.channel),
             thread_id: tinychannels::channel::derive_inbound_thread_id(
                 &message.channel,
                 Some(&message.sender),
