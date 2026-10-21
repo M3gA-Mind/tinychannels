@@ -219,6 +219,8 @@ fn assert_native_controller_observation(
     authorization: Option<&str>,
     returned_id: Option<&str>,
 ) {
+    use tinychannels_conformance::NativeControllerFixture as _;
+
     let observations = fixture.observations();
     assert_eq!(
         observations.len(),
