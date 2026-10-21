@@ -2686,7 +2686,7 @@ async fn configured_running_telegram_adapter_uploads_media_from_host_storage() {
             .with_api_base_for_test(server.uri())
             .with_media_repository(repository.clone()),
     );
-    let running = Running::start_test_outbound(channel, hooks, host);
+    let running = Running::start_telegram(channel, hooks, host, None, true);
     let adapter = running.adapter_handle();
     let result = adapter
         .send(tinychannels_bus::ChannelOutboundIntent {
@@ -2807,7 +2807,7 @@ async fn configured_adapter_marks_first_unknown_media_upload_non_retryable() {
             .with_api_base_for_test(server.uri())
             .with_media_repository(repository),
     );
-    let running = Running::start_test_outbound(channel, hooks, host);
+    let running = Running::start_telegram(channel, hooks, host, None, true);
     let adapter = running.adapter_handle();
     let error = adapter
         .send(tinychannels_bus::ChannelOutboundIntent {
@@ -5354,7 +5354,7 @@ async fn a_built_email_launch_starts_as_the_native_email_adapter() {
     assert_eq!(
         running
             .native_ports.listener_mode,
-        Some(crate::provider::LongTailListenerMode::Adapter),
+        crate::provider::LongTailListenerMode::Adapter,
         "email IMAP ingress must run through its typed adapter listener"
     );
 
@@ -5679,8 +5679,6 @@ async fn configured_qq_factory_selects_the_native_listener_owner() {
     assert_eq!(
         running
             .native_ports
-            .as_ref()
-            .expect("configured QQ uses native adapter ports")
             .listener_mode,
         LongTailListenerMode::Adapter,
         "QQ module launch must route through ChannelAdapter::start, not Channel::listen"
@@ -5714,8 +5712,6 @@ async fn configured_yuanbao_factory_selects_the_native_listener_owner() {
     assert_eq!(
         running
             .native_ports
-            .as_ref()
-            .expect("configured Yuanbao must expose native adapter ports")
             .listener_mode,
         LongTailListenerMode::Adapter,
         "Yuanbao must launch through ChannelAdapter::start, not Channel::listen"
@@ -5745,8 +5741,6 @@ async fn configured_dingtalk_factory_selects_the_native_listener_owner() {
     assert_eq!(
         running
             .native_ports
-            .as_ref()
-            .expect("configured DingTalk uses native adapter ports")
             .listener_mode,
         LongTailListenerMode::Adapter,
         "DingTalk module launch must route through ChannelAdapter::start, not Channel::listen"
