@@ -140,6 +140,22 @@ fn fixture(feature: ConformanceFeature) -> Fixture {
 }
 
 #[tokio::test]
+async fn conformance_entrypoints_accept_existing_adapter_trait_objects() {
+    let fixture = fixture(ConformanceFeature::Text);
+    let adapter: &dyn AdapterFixture = &fixture;
+
+    assert!(
+        check_feature(adapter, ConformanceFeature::Text)
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        check_all_features(adapter).await.len(),
+        ConformanceFeature::ALL.len()
+    );
+}
+
+#[tokio::test]
 async fn receiptless_platform_send_requires_real_wire_evidence_without_fabricated_ids() {
     let mut fixture = fixture(ConformanceFeature::Text);
     fixture.requires_receipt = false;
@@ -267,6 +283,16 @@ fn declare_feature(fixture: &mut Fixture, feature: ConformanceFeature) {
                 },
                 error: None,
             }));
+        }
+        ConformanceFeature::ManagedReaction => capabilities.reactions = true,
+        ConformanceFeature::ManagedThreadCreate => {
+            capabilities.actions.supported.push("thread-create".into())
+        }
+        ConformanceFeature::ManagedThreadUpdate => {
+            capabilities.actions.supported.push("thread-update".into())
+        }
+        ConformanceFeature::ManagedThreadList => {
+            capabilities.actions.supported.push("thread-list".into())
         }
     }
     if fixture.observations.is_empty() {
@@ -750,6 +776,12 @@ fn each_canonical_feature_uses_its_contract_capability() {
                 capabilities.progressive_edits = true;
                 capabilities.actions.supported.push("draft-update".into());
             }
+            ConformanceFeature::ManagedReaction
+            | ConformanceFeature::ManagedThreadCreate
+            | ConformanceFeature::ManagedThreadUpdate
+            | ConformanceFeature::ManagedThreadList => {
+                unreachable!("managed features are not part of the provider matrix")
+            }
         }
         assert!(
             feature.declared(&capabilities),
@@ -767,4 +799,18 @@ fn each_canonical_feature_uses_its_contract_capability() {
         .supported
         .push("draft-update".into());
     assert!(!ConformanceFeature::StreamingDraft.declared(&incomplete_draft));
+}
+
+#[tokio::test]
+async fn managed_features_require_a_host_callback_fixture() {
+    let adapter_fixture = fixture(ConformanceFeature::Text);
+    let observations = ConformanceFixture::observations(&adapter_fixture);
+    let result = check_feature(&adapter_fixture, ConformanceFeature::ManagedReaction)
+        .await
+        .unwrap_err();
+    assert!(result.contains("requires a managed host callback fixture"));
+    assert_eq!(
+        ConformanceFixture::observations(&adapter_fixture),
+        observations
+    );
 }

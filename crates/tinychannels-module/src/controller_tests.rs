@@ -1,4 +1,5 @@
 use super::*;
+use crate::provider::Running;
 use std::sync::Arc;
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
@@ -6,23 +7,109 @@ use tinybus::{Connection, Result};
 use tinychannels_bus::controllers::ChannelThreadResult;
 use tokio::sync::Mutex;
 
+trait FixtureFact<T> {
+    fn ok_or_default(self) -> std::result::Result<T, tinychannels_bus::channel::ChannelSendError>;
+}
+
+impl<T> FixtureFact<T> for Option<T> {
+    fn ok_or_default(self) -> std::result::Result<T, tinychannels_bus::channel::ChannelSendError> {
+        self.ok_or_else(tinychannels_bus::channel::ChannelSendError::default)
+    }
+}
+
 #[derive(Clone, Default)]
-struct BackendFixture(Arc<Mutex<Vec<ChannelBackendRequest>>>);
+struct BackendFixture(
+    Arc<Mutex<Vec<ChannelBackendRequest>>>,
+    Arc<Mutex<Vec<ChannelBackendResult>>>,
+);
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
 impl BackendFixture {
+    async fn report_status(
+        &self,
+        _channel: String,
+        _state: String,
+        _detail: Option<String>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     async fn dispatch_controller_backend(
         &self,
         request: ChannelBackendRequest,
     ) -> Result<ChannelBackendResult> {
         self.0.lock().await.push(request.clone());
-        match request {
+        let result = match request {
             ChannelBackendRequest::RemoteControl(_) => {
                 Err(tinybus::Error::failed("unexpected remote callback"))
             }
-            ChannelBackendRequest::ProgressiveTransport(_) => Err(tinybus::Error::failed(
-                "unexpected progressive transport callback",
-            )),
+            ChannelBackendRequest::ProgressiveTransport(request) => {
+                use tinychannels_bus::module_progressive::{
+                    ProgressiveTransportRequest as Request, ProgressiveTransportResult as Response,
+                };
+                match *request {
+                    Request::SendTyped {
+                        channel_ref,
+                        conversation,
+                        ..
+                    } => {
+                        let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+                        outcome.receipt.channel = channel_ref;
+                        outcome.receipt.conversation = conversation;
+                        outcome.receipt.primary_platform_message_id =
+                            Some("managed-message-1".into());
+                        outcome.receipt.platform_message_ids = vec!["managed-message-1".into()];
+                        outcome
+                            .receipt
+                            .parts
+                            .push(tinychannels_bus::channel::MessageReceiptPart {
+                                platform_message_id: "managed-message-1".into(),
+                                ..Default::default()
+                            });
+                        Ok(ChannelBackendResult::ProgressiveTransport(Box::new(
+                            Response::Outcome(Box::new(outcome)),
+                        )))
+                    }
+                    Request::Edit {
+                        channel_ref,
+                        conversation,
+                        ..
+                    } => Ok(ChannelBackendResult::ProgressiveTransport(Box::new(
+                        Response::Success(serde_json::json!({
+                            "message_id": "managed-message-1",
+                            "channel": channel_ref,
+                            "conversation": conversation,
+                        })),
+                    ))),
+                    Request::Send {
+                        channel_ref,
+                        conversation,
+                        ..
+                    } => {
+                        let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+                        outcome.receipt.channel = channel_ref;
+                        outcome.receipt.conversation = conversation;
+                        outcome.receipt.primary_platform_message_id =
+                            Some("managed-message-1".into());
+                        outcome.receipt.platform_message_ids = vec!["managed-message-1".into()];
+                        outcome
+                            .receipt
+                            .parts
+                            .push(tinychannels_bus::channel::MessageReceiptPart {
+                                platform_message_id: "managed-message-1".into(),
+                                ..Default::default()
+                            });
+                        Ok(ChannelBackendResult::ProgressiveTransport(Box::new(
+                            Response::Outcome(Box::new(outcome)),
+                        )))
+                    }
+                    Request::OutputEvent { .. }
+                    | Request::Delete { .. }
+                    | Request::Typing { .. } => Ok(ChannelBackendResult::ProgressiveTransport(
+                        Box::new(Response::Acknowledged),
+                    )),
+                }
+            }
             ChannelBackendRequest::Disconnect {
                 channel, auth_mode, ..
             } => Ok(ChannelBackendResult::Disconnected(
@@ -78,7 +165,11 @@ impl BackendFixture {
                     raw: None,
                 },
             )),
+        };
+        if let Ok(result) = &result {
+            self.1.lock().await.push(result.clone());
         }
+        result
     }
 }
 
@@ -104,6 +195,626 @@ async fn connected_host() -> (HostChannels, BackendFixture, Connection) {
         .await
         .unwrap();
     (HostChannels::new(client), fixture, server)
+}
+
+struct ManagedConformanceChannel(tinychannels_bus::ChannelCapabilities);
+
+#[async_trait::async_trait]
+#[allow(deprecated, reason = "managed fixture exposes module capability facts")]
+impl tinychannels::Channel for ManagedConformanceChannel {
+    fn name(&self) -> &str {
+        "mattermost"
+    }
+
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.0.clone()
+    }
+
+    async fn send(&self, _message: &tinychannels::SendMessage) -> anyhow::Result<()> {
+        anyhow::bail!("managed output must use the host callback")
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
+struct ManagedConformanceFixture {
+    host: HostChannels,
+    backend: BackendFixture,
+    replies: crate::progressive::Replies,
+    running: Arc<Running>,
+    observed: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
+}
+
+impl ManagedConformanceFixture {
+    async fn new() -> (Self, Connection) {
+        let (host, backend, server) = connected_host().await;
+        let mut capabilities = tinychannels_bus::ChannelCapabilities {
+            reactions: true,
+            progressive_edits: true,
+            ..Default::default()
+        };
+        capabilities
+            .actions
+            .supported
+            .extend(["edit", "thread-create", "thread-update", "thread-list"].map(str::to_owned));
+        let running = Running::start_outbound(
+            Arc::new(ManagedConformanceChannel(capabilities)),
+            Arc::new(crate::provider::Hooks::default()),
+            host.clone(),
+        );
+        let mut configured = std::collections::HashMap::new();
+        configured.insert("mattermost:managed-fixture".to_owned(), running.clone());
+        let replies =
+            crate::progressive::Replies::new(host.clone(), Arc::new(Mutex::new(configured)));
+        (
+            Self {
+                host,
+                backend,
+                replies,
+                running,
+                observed: std::sync::Mutex::new(Vec::new()),
+            },
+            server,
+        )
+    }
+
+    fn record(
+        &self,
+        feature: tinychannels_conformance::ConformanceFeature,
+        operation: &str,
+        channel: tinychannels_bus::ChannelRef,
+        conversation: tinychannels_bus::ConversationRef,
+        platform_message_ids: Vec<String>,
+        request: serde_json::Value,
+    ) {
+        self.observed
+            .lock()
+            .unwrap()
+            .push(tinychannels_conformance::WireObservation {
+                feature,
+                operation: operation.to_owned(),
+                channel,
+                conversation,
+                reply_to_id: None,
+                thread_id: None,
+                payload_kinds: Vec::new(),
+                platform_message_ids,
+                request,
+            });
+    }
+
+    async fn shutdown(self, server: Connection) {
+        self.replies.shutdown().await.unwrap();
+        self.running.stop().await.unwrap();
+        self.host.shutdown().await.unwrap();
+        drop(server);
+    }
+}
+
+#[async_trait::async_trait]
+impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture {
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.running.declared_capabilities()
+    }
+
+    fn uses_managed_host_callbacks(&self) -> bool {
+        true
+    }
+
+    fn expected_scope(
+        &self,
+        feature: tinychannels_conformance::ConformanceFeature,
+    ) -> tinychannels_conformance::ExpectedScope {
+        use tinychannels_conformance::ConformanceFeature as Feature;
+        let channel = tinychannels_bus::ChannelRef {
+            id: "mattermost".into(),
+            account_id: (feature == Feature::Edit).then(|| "mattermost:managed-fixture".into()),
+        };
+        let conversation = match feature {
+            Feature::ManagedReaction => tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Channel,
+                id: "managed-room-1".into(),
+                ..Default::default()
+            },
+            Feature::Edit => tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Channel,
+                id: "managed-room-1".into(),
+                scope_id: Some("mattermost:managed-fixture".into()),
+                ..Default::default()
+            },
+            _ => tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Channel,
+                id: "mattermost".into(),
+                ..Default::default()
+            },
+        };
+        tinychannels_conformance::ExpectedScope {
+            channel,
+            conversation,
+            reply_to_id: None,
+            thread_id: None,
+        }
+    }
+
+    fn receipt_required(&self, feature: tinychannels_conformance::ConformanceFeature) -> bool {
+        feature == tinychannels_conformance::ConformanceFeature::Edit
+    }
+
+    fn clear_observations(&self) {
+        self.observed.lock().unwrap().clear();
+    }
+
+    fn observations(&self) -> Vec<tinychannels_conformance::WireObservation> {
+        self.observed.lock().unwrap().clone()
+    }
+
+    async fn exercise(
+        &self,
+        feature: tinychannels_conformance::ConformanceFeature,
+    ) -> std::result::Result<
+        Option<tinychannels_bus::channel::ChannelSendOutcome>,
+        tinychannels_bus::channel::ChannelSendError,
+    > {
+        use tinychannels_bus::module_controller::{
+            ChannelControllerRequest as Request, ChannelControllerResult as Response,
+        };
+        use tinychannels_bus::module_progressive::{
+            ChannelOutputEvent, ProgressiveCommand, ProgressiveResult, ProgressiveTransportRequest,
+            ProgressiveTransportResult,
+        };
+        use tinychannels_conformance::ConformanceFeature as Feature;
+
+        let config = ChannelsConfig::default();
+        match feature {
+            Feature::ManagedReaction => {
+                let result = dispatch(
+                    &self.host,
+                    Request::SendReaction {
+                        config,
+                        channel: "mattermost".into(),
+                        reaction: serde_json::json!({
+                            "channel_id": "managed-room-1",
+                            "message_id": "managed-source-1",
+                            "emoji": "eyes"
+                        }),
+                    },
+                )
+                .await
+                .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let request = self
+                    .backend
+                    .0
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
+                let response = self
+                    .backend
+                    .1
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
+                let (channel, reaction) = match request {
+                    ChannelBackendRequest::SendReaction { channel, reaction } => {
+                        (channel, reaction)
+                    }
+                    _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
+                };
+                if !matches!(result, Response::SendReaction(ref result) if result.success)
+                    || !matches!(response, ChannelBackendResult::SendReaction(ref result) if result.success)
+                {
+                    return Err(tinychannels_bus::channel::ChannelSendError::default());
+                }
+                let conversation_id = reaction
+                    .get("channel_id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_default()?;
+                let message_id = reaction
+                    .get("message_id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_default()?;
+                let channel_ref = tinychannels_bus::ChannelRef {
+                    id: channel,
+                    account_id: None,
+                };
+                let conversation = tinychannels_bus::ConversationRef {
+                    kind: tinychannels_bus::ConversationKind::Channel,
+                    id: conversation_id.to_owned(),
+                    ..Default::default()
+                };
+                self.record(
+                    feature,
+                    "reaction_send",
+                    channel_ref,
+                    conversation,
+                    vec![message_id.to_owned()],
+                    serde_json::json!({"request": reaction, "response": response}),
+                );
+                Ok(None)
+            }
+            Feature::ManagedThreadCreate => {
+                let result = dispatch(
+                    &self.host,
+                    Request::CreateThread {
+                        config,
+                        channel: "mattermost".into(),
+                        title: "managed fixture thread".into(),
+                    },
+                )
+                .await
+                .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let request = self
+                    .backend
+                    .0
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
+                let response = self
+                    .backend
+                    .1
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
+                let (channel, title) = match request {
+                    ChannelBackendRequest::CreateThread { channel, title } => (channel, title),
+                    _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
+                };
+                let thread_id = match (&result, &response) {
+                    (Response::Thread(result), ChannelBackendResult::Thread(wire))
+                        if result.thread_id == wire.thread_id && result.title == wire.title =>
+                    {
+                        result.thread_id.clone()
+                    }
+                    _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
+                };
+                self.record(
+                    feature,
+                    "thread_create",
+                    tinychannels_bus::ChannelRef {
+                        id: channel.clone(),
+                        account_id: None,
+                    },
+                    tinychannels_bus::ConversationRef {
+                        kind: tinychannels_bus::ConversationKind::Channel,
+                        id: channel,
+                        ..Default::default()
+                    },
+                    vec![thread_id],
+                    serde_json::json!({"title": title, "response": response}),
+                );
+                Ok(None)
+            }
+            Feature::ManagedThreadUpdate => {
+                let result = dispatch(
+                    &self.host,
+                    Request::UpdateThread {
+                        config,
+                        channel: "mattermost".into(),
+                        thread_id: "managed-thread-1".into(),
+                        action: "close".into(),
+                    },
+                )
+                .await
+                .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let request = self
+                    .backend
+                    .0
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
+                let response = self
+                    .backend
+                    .1
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
+                let (channel, thread_id, action) = match request {
+                    ChannelBackendRequest::UpdateThread {
+                        channel,
+                        thread_id,
+                        action,
+                    } => (channel, thread_id, action),
+                    _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
+                };
+                if !matches!((&result, &response),
+                    (Response::Thread(result), ChannelBackendResult::Thread(wire))
+                        if result.thread_id == thread_id && wire.thread_id == thread_id)
+                {
+                    return Err(tinychannels_bus::channel::ChannelSendError::default());
+                }
+                self.record(
+                    feature,
+                    "thread_update",
+                    tinychannels_bus::ChannelRef {
+                        id: channel.clone(),
+                        account_id: None,
+                    },
+                    tinychannels_bus::ConversationRef {
+                        kind: tinychannels_bus::ConversationKind::Channel,
+                        id: channel,
+                        ..Default::default()
+                    },
+                    vec![thread_id],
+                    serde_json::json!({"action": action, "response": response}),
+                );
+                Ok(None)
+            }
+            Feature::ManagedThreadList => {
+                let result = dispatch(
+                    &self.host,
+                    Request::ListThreads {
+                        config,
+                        channel: "mattermost".into(),
+                        active: Some(true),
+                    },
+                )
+                .await
+                .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let request = self
+                    .backend
+                    .0
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
+                let response = self
+                    .backend
+                    .1
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
+                let (channel, active) = match request {
+                    ChannelBackendRequest::ListThreads { channel, active } => (channel, active),
+                    _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
+                };
+                let ids = match (&result, &response) {
+                    (Response::Threads(result), ChannelBackendResult::Threads(wire))
+                        if result
+                            .threads
+                            .iter()
+                            .map(|thread| &thread.thread_id)
+                            .eq(wire.threads.iter().map(|thread| &thread.thread_id)) =>
+                    {
+                        result
+                            .threads
+                            .iter()
+                            .map(|thread| thread.thread_id.clone())
+                            .collect::<Vec<_>>()
+                    }
+                    _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
+                };
+                self.record(
+                    feature,
+                    "thread_list",
+                    tinychannels_bus::ChannelRef {
+                        id: channel.clone(),
+                        account_id: None,
+                    },
+                    tinychannels_bus::ConversationRef {
+                        kind: tinychannels_bus::ConversationKind::Channel,
+                        id: channel,
+                        ..Default::default()
+                    },
+                    ids,
+                    serde_json::json!({"active": active, "response": response}),
+                );
+                Ok(None)
+            }
+            Feature::Edit => {
+                let opened = self
+                    .replies
+                    .execute(ProgressiveCommand::OpenOutput {
+                        channel: tinychannels_bus::ChannelRef {
+                            id: "mattermost".into(),
+                            account_id: Some("mattermost:managed-fixture".into()),
+                        },
+                        conversation: tinychannels_bus::ConversationRef {
+                            kind: tinychannels_bus::ConversationKind::Channel,
+                            id: "managed-room-1".into(),
+                            scope_id: Some("mattermost:managed-fixture".into()),
+                            ..Default::default()
+                        },
+                        turn_id: "managed-conformance-turn".into(),
+                        lifetime_ms: 30_000,
+                    })
+                    .await
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let ProgressiveResult::Opened { handle } = opened else {
+                    return Err(tinychannels_bus::channel::ChannelSendError::default());
+                };
+                self.replies
+                    .execute(ProgressiveCommand::FeedOutput {
+                        handle: handle.clone(),
+                        events: vec![ChannelOutputEvent::TextDelta {
+                            text: "managed draft".into(),
+                            iteration: Some(1),
+                        }],
+                    })
+                    .await
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                for _ in 0..8 {
+                    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+                    for _ in 0..5 {
+                        tokio::task::yield_now().await;
+                    }
+                    if self.backend.0.lock().await.iter().any(|request| {
+                        matches!(request,
+                        ChannelBackendRequest::ProgressiveTransport(request)
+                            if matches!(request.as_ref(), ProgressiveTransportRequest::Send { .. }))
+                    }) {
+                        break;
+                    }
+                }
+                if !self.backend.0.lock().await.iter().any(|request| {
+                    matches!(request,
+                    ChannelBackendRequest::ProgressiveTransport(request)
+                        if matches!(request.as_ref(), ProgressiveTransportRequest::Send { .. }))
+                }) {
+                    return Err(tinychannels_bus::channel::ChannelSendError::default());
+                }
+                let finalized = self
+                    .replies
+                    .execute(ProgressiveCommand::FeedOutput {
+                        handle: handle.clone(),
+                        events: vec![ChannelOutputEvent::FinalMessage {
+                            text: "managed draft finalized".into(),
+                            parts: Vec::new(),
+                            receipt: None,
+                        }],
+                    })
+                    .await
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let ProgressiveResult::DeliveryOutcome { outcome } = finalized else {
+                    return Err(tinychannels_bus::channel::ChannelSendError::default());
+                };
+                if outcome.error.is_some() {
+                    return Err(outcome.error.clone().unwrap());
+                }
+                let requests = self.backend.0.lock().await.clone();
+                let responses = self.backend.1.lock().await.clone();
+                let index = requests
+                    .iter()
+                    .rposition(|request| {
+                        matches!(request,
+                        ChannelBackendRequest::ProgressiveTransport(request)
+                            if matches!(request.as_ref(), ProgressiveTransportRequest::Edit { .. }))
+                    })
+                    .ok_or_default()?;
+                let ChannelBackendRequest::ProgressiveTransport(request) = &requests[index] else {
+                    unreachable!()
+                };
+                let ProgressiveTransportRequest::Edit {
+                    channel_ref,
+                    conversation,
+                    ..
+                } = request.as_ref()
+                else {
+                    unreachable!()
+                };
+                let response = responses.get(index).cloned().ok_or_default()?;
+                let response_value = match &response {
+                    ChannelBackendResult::ProgressiveTransport(response) => match response.as_ref()
+                    {
+                        ProgressiveTransportResult::Success(value) => value.clone(),
+                        _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
+                    },
+                    _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
+                };
+                let returned_id = response_value
+                    .get("message_id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_default()?
+                    .to_owned();
+                let channel = channel_ref.clone().ok_or_default()?;
+                let conversation = conversation.clone().ok_or_default()?;
+                if outcome.receipt.channel.as_ref() != Some(&channel)
+                    || outcome.receipt.conversation.as_ref() != Some(&conversation)
+                    || outcome.receipt.primary_platform_message_id.as_deref()
+                        != Some(returned_id.as_str())
+                    || outcome.receipt.platform_message_ids != [returned_id.clone()]
+                {
+                    return Err(tinychannels_bus::channel::ChannelSendError::default());
+                }
+                self.record(
+                    feature,
+                    "edit",
+                    channel.clone(),
+                    conversation.clone(),
+                    vec![returned_id.clone()],
+                    serde_json::json!({"request": request, "response": response}),
+                );
+                Ok(Some(*outcome))
+            }
+            _ => Err(tinychannels_bus::channel::ChannelSendError::default()),
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn managed_controller_and_progressive_paths_pass_shared_conformance_features() {
+    let (fixture, server) = ManagedConformanceFixture::new().await;
+    let results = tinychannels_conformance::check_managed_features(&fixture).await;
+    let callbacks = fixture.backend.0.lock().await.clone();
+    let callback_summary = callbacks
+        .iter()
+        .map(|request| match request {
+            ChannelBackendRequest::ProgressiveTransport(request) => match request.as_ref() {
+                tinychannels_bus::module_progressive::ProgressiveTransportRequest::SendTyped {
+                    ..
+                } => "SendTyped",
+                tinychannels_bus::module_progressive::ProgressiveTransportRequest::Edit {
+                    ..
+                } => "Edit",
+                tinychannels_bus::module_progressive::ProgressiveTransportRequest::Send {
+                    ..
+                } => "Send",
+                _ => "other progressive",
+            },
+            ChannelBackendRequest::SendReaction { .. } => "SendReaction",
+            ChannelBackendRequest::CreateThread { .. } => "CreateThread",
+            ChannelBackendRequest::UpdateThread { .. } => "UpdateThread",
+            ChannelBackendRequest::ListThreads { .. } => "ListThreads",
+            _ => "other",
+        })
+        .collect::<Vec<_>>();
+    for (feature, result) in &results {
+        assert!(
+            result.is_ok(),
+            "{feature:?}: {}; callbacks: {callback_summary:?}",
+            result.as_ref().unwrap_err(),
+        );
+    }
+    assert_eq!(
+        results
+            .iter()
+            .map(|(feature, _)| *feature)
+            .collect::<Vec<_>>(),
+        tinychannels_conformance::ConformanceFeature::MANAGED,
+    );
+    let requests = fixture.backend.0.lock().await.clone();
+    assert!(requests.iter().any(|request| matches!(request,
+        ChannelBackendRequest::SendReaction { channel, reaction }
+            if channel == "mattermost" && reaction["message_id"] == "managed-source-1"
+    )));
+    assert!(requests.iter().any(|request| matches!(request,
+        ChannelBackendRequest::CreateThread { channel, title }
+            if channel == "mattermost" && title == "managed fixture thread"
+    )));
+    assert!(requests.iter().any(|request| matches!(request,
+        ChannelBackendRequest::UpdateThread { channel, thread_id, action }
+            if channel == "mattermost" && thread_id == "managed-thread-1" && action == "close"
+    )));
+    assert!(requests.iter().any(|request| matches!(request,
+        ChannelBackendRequest::ListThreads { channel, active: Some(true) }
+            if channel == "mattermost"
+    )));
+    assert!(requests.iter().any(|request| matches!(request,
+        ChannelBackendRequest::ProgressiveTransport(request)
+            if matches!(request.as_ref(), tinychannels_bus::module_progressive::ProgressiveTransportRequest::Edit {
+                channel_ref: Some(channel), conversation: Some(conversation), text, ..
+            } if channel.account_id.as_deref() == Some("mattermost:managed-fixture")
+                && conversation.id == "managed-room-1" && text == "managed draft finalized")
+    )));
+    fixture.shutdown(server).await;
 }
 
 #[tokio::test]
