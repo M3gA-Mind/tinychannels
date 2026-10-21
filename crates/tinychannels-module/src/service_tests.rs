@@ -71,16 +71,19 @@ async fn v1_email_subject_reaches_the_configured_smtp_wire() {
         }),
         ..Default::default()
     };
-    service
-        .start_channel_inner(
-            "email:work".into(),
-            config,
-            &tinychannels::factory::DefaultHttpClients,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
+    let hooks = Arc::new(crate::provider::Hooks::default());
+    let _owner_host = hooks.host(service.host.clone(), "email:work".into(), None);
+    let launch = crate::native::build_native_v2(
+        "email:work",
+        &config,
+        &_owner_host,
+        &tinychannels::factory::DefaultHttpClients,
+    )
+    .expect("configured Email provider uses its native typed adapter");
+    service.running.lock().await.insert(
+        "email:work".into(),
+        Arc::new(launch.start(hooks, service.host.clone(), None, true)),
+    );
     service
         .send_message(
             "email:work".into(),
