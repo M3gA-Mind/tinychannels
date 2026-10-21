@@ -24,6 +24,7 @@ pub(crate) trait TestProviderBehavior: Send + Sync {
         capabilities
     }
     async fn test_start(&self, _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync)) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { std::future::pending().await }
+    async fn test_stop(&self) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { Ok(()) }
     fn test_media_account_identity(&self) -> Option<String> { None }
     async fn test_send(
         &self,
@@ -71,13 +72,24 @@ fn test_unsupported(operation: &str) -> tinychannels::channel::ChannelSendError 
 }
 
 #[cfg(test)]
-struct TestNative<T>(Arc<T>);
+struct TestNative<T> {
+    provider: Arc<T>,
+    stopped: watch::Sender<bool>,
+}
+
+#[cfg(test)]
+impl<T> TestNative<T> {
+    fn new(provider: Arc<T>) -> Self {
+        let (stopped, _) = watch::channel(false);
+        Self { provider, stopped }
+    }
+}
 
 #[cfg(test)]
 pub(crate) fn test_adapter<T: TestProviderBehavior + 'static>(
     channel: Arc<T>,
 ) -> Arc<dyn tinychannels::channel::ChannelAdapter> {
-    Arc::new(TestNative(channel))
+    Arc::new(TestNative::new(channel))
 }
 
 #[cfg(test)]
@@ -85,21 +97,29 @@ pub(crate) fn test_adapter<T: TestProviderBehavior + 'static>(
 impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelAdapter for TestNative<T> {
     fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
         tinychannels_bus::channel::ChannelDescriptor {
-            id: self.0.test_provider_id().into(),
-            display_name: self.0.test_provider_id().into(),
+            id: self.provider.test_provider_id().into(),
+            display_name: self.provider.test_provider_id().into(),
             ..Default::default()
         }
     }
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.0.test_capabilities()
+        self.provider.test_capabilities()
     }
-    fn media_account_identity(&self) -> Option<String> { self.0.test_media_account_identity() }
+    fn media_account_identity(&self) -> Option<String> { self.provider.test_media_account_identity() }
     async fn start(&self, _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync)) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
-        self.0.test_start(_sink).await
+        self.stopped.send_replace(false);
+        let mut stopped = self.stopped.subscribe();
+        tokio::select! {
+            result = self.provider.test_start(_sink) => result,
+            _ = stopped.wait_for(|value| *value) => Ok(()),
+        }
     }
-    async fn stop(&self) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { Ok(()) }
+    async fn stop(&self) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        self.stopped.send_replace(true);
+        self.provider.test_stop().await
+    }
     async fn send(&self, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<tinychannels::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
-        self.0.test_send(&tinychannels_bus::ChannelOutboundMessage::from_intent(&intent)).await
+        self.provider.test_send(&tinychannels_bus::ChannelOutboundMessage::from_intent(&intent)).await
     }
     async fn status(&self) -> std::result::Result<tinychannels::controllers::ChannelAccountSnapshot, tinychannels::channel::ChannelSendError> {
         Ok(tinychannels::controllers::ChannelAccountSnapshot { health_state: Some("healthy".into()), ..Default::default() })
@@ -110,15 +130,15 @@ impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelAdapter fo
 #[async_trait::async_trait]
 impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelTypedSend for TestNative<T> {
     async fn send_typed(&self, message: &tinychannels_bus::ChannelOutboundMessage) -> std::result::Result<tinychannels::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
-        self.0.test_send(message).await
+        self.provider.test_send(message).await
     }
 }
 
 #[cfg(test)]
 #[async_trait::async_trait]
 impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelTyping for TestNative<T> {
-    async fn start_typing(&self, recipient: &str) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { self.0.test_start_typing(recipient).await }
-    async fn stop_typing(&self, recipient: &str) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { self.0.test_stop_typing(recipient).await }
+    async fn start_typing(&self, recipient: &str) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { self.provider.test_start_typing(recipient).await }
+    async fn stop_typing(&self, recipient: &str) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { self.provider.test_stop_typing(recipient).await }
 }
 
 #[cfg(test)]
@@ -142,9 +162,9 @@ impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelDelete for
 #[cfg(test)]
 #[async_trait::async_trait]
 impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelStreamingDraft for TestNative<T> {
-    async fn start_draft(&self, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<Option<String>, tinychannels::channel::ChannelSendError> { self.0.test_start_draft(intent).await }
-    async fn update_draft(&self, id: &str, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { self.0.test_update_draft(id, intent).await }
-    async fn finalize_draft(&self, id: &str, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { self.0.test_finalize_draft(id, intent).await }
+    async fn start_draft(&self, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<Option<String>, tinychannels::channel::ChannelSendError> { self.provider.test_start_draft(intent).await }
+    async fn update_draft(&self, id: &str, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { self.provider.test_update_draft(id, intent).await }
+    async fn finalize_draft(&self, id: &str, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { self.provider.test_finalize_draft(id, intent).await }
     async fn upsert_draft(&self, _previous: Option<&tinychannels_bus::channel::MessageReceipt>, _intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, tinychannels::channel::ChannelSendError> { Err(test_unsupported("draft")) }
 }
 
