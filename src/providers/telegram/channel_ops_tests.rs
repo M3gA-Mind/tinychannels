@@ -5301,27 +5301,67 @@ fn telegram_declares_remote_control_approvals_and_proactive_defaults() {
 }
 
 #[tokio::test]
-async fn adapter_start_stop_and_stop_typing_are_noops_without_provider_io() {
-    struct NullSink;
+async fn adapter_start_polls_and_delivers_original_typed_telegram_ingress() {
+    use crate::channel::{ChannelInboundSink, ChannelSendError};
+
+    #[derive(Default)]
+    struct RecordingSink {
+        items: std::sync::Mutex<Vec<tinychannels_bus::ChannelIngress>>,
+        notified: tokio::sync::Notify,
+    }
     #[async_trait::async_trait]
-    impl crate::channel::ChannelInboundSink for NullSink {
+    impl ChannelInboundSink for RecordingSink {
         async fn push(
             &self,
-            _event: tinychannels_bus::ChannelIngress,
-        ) -> Result<(), crate::channel::ChannelSendError> {
+            item: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), ChannelSendError> {
+            self.items.lock().unwrap().push(item);
+            self.notified.notify_one();
             Ok(())
         }
     }
+
     let server = mock_api().await;
-    let ch = channel_for(&server, &["*"]);
-    crate::channel::ChannelAdapter::start(&ch, &NullSink)
-        .await
-        .unwrap();
-    crate::channel::ChannelAdapter::stop(&ch).await.unwrap();
-    crate::channel::ChannelTyping::stop_typing(&ch, "100")
-        .await
-        .unwrap();
-    assert!(server.received_requests().await.unwrap().is_empty());
+    mount_get_updates_once(
+        &server,
+        0,
+        updates(serde_json::json!([{
+            "update_id": 41,
+            "message": {
+                "message_id": 9,
+                "message_thread_id": 73,
+                "date": 1700000000,
+                "chat": { "id": -10042, "type": "supergroup" },
+                "from": { "id": 7, "username": "alice", "first_name": "Alice" },
+                "text": "hello from a forum topic"
+            }
+        }])),
+    )
+    .await;
+    let mut channel = fast_backoff(channel_for(&server, &["alice"]));
+    channel.poll_error_backoff = Duration::from_millis(1);
+    let channel = Arc::new(channel);
+    let sink = Arc::new(RecordingSink::default());
+    let start = crate::channel::ChannelAdapter::start(channel.as_ref(), sink.as_ref());
+    tokio::pin!(start);
+    tokio::select! {
+        result = &mut start => panic!("Telegram adapter stopped before delivery: {result:?}"),
+        _ = tokio::time::timeout(Duration::from_secs(2), sink.notified.notified()) => {},
+    }
+
+    let requests = server.received_requests().await.unwrap();
+    assert!(requests.iter().any(|request| request.url.path() == api_path("getUpdates")));
+    let items = sink.items.lock().unwrap();
+    let [tinychannels_bus::ChannelIngress::Inbound(envelope)] = items.as_slice() else {
+        panic!("expected one original typed inbound envelope, got {items:?}");
+    };
+    assert_eq!(envelope.channel.id, "telegram");
+    assert_eq!(envelope.conversation.id, "-10042");
+    assert_eq!(envelope.conversation.topic_id.as_deref(), Some("73"));
+    assert_eq!(envelope.provider_message_id.as_deref(), Some("9"));
+    assert!(matches!(envelope.parts.as_slice(), [tinychannels_bus::ContentPart::Text { text, .. }] if text == "hello from a forum topic"));
+    drop(items);
+    crate::channel::ChannelAdapter::stop(channel.as_ref()).await.unwrap();
 }
 
 #[tokio::test]
