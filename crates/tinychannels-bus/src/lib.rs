@@ -119,4 +119,6 @@ pub use module_web_output::{
     BeginWebTurn, EndWebTurn, ProjectWebOutput, WebOutputEvents, WebTurnHandle,
 };
 
-pub use module_runtime::{ChannelRuntimeDispatchPolicy, ChannelRuntimeReservation};
+pub use module_runtime::{
+    ChannelRuntimeDispatchPolicy, ChannelRuntimeReservation, MIN_CHANNEL_MESSAGE_TIMEOUT_SECS,
+};

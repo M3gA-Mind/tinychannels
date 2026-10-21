@@ -2,6 +2,12 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Smallest accepted channel message timeout in seconds.
+///
+/// Hosts validate the module-prepared runtime limits against this contract
+/// value instead of depending on the runtime implementation crate.
+pub const MIN_CHANNEL_MESSAGE_TIMEOUT_SECS: u64 = 30;
+
 /// Inert reservation returned before any provider, callback worker or relay starts.
 ///
 /// The host installs the same immutable identity adapter at `host_object_path`

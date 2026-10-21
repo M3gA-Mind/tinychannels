@@ -1,6 +1,11 @@
 use super::*;
 
 #[test]
+fn minimum_channel_timeout_is_a_runtime_contract_value() {
+    assert_eq!(MIN_CHANNEL_MESSAGE_TIMEOUT_SECS, 30);
+}
+
+#[test]
 fn runtime_reservation_wire_preserves_the_module_supplied_opaque_paths() {
     let value = serde_json::json!({
         "handle": "opaque",
