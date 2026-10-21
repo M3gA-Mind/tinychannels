@@ -424,7 +424,11 @@ async fn lark_image_and_message_receipt_failures_keep_delivery_certainty() {
     );
     assert!(unreadable_error.sent_before_error);
     assert_eq!(image_attempts.load(Ordering::SeqCst), 5);
-    assert_eq!(message_attempts.load(Ordering::SeqCst), 4);
+    assert_eq!(
+        message_attempts.load(Ordering::SeqCst),
+        5,
+        "each of the five outbound attempts should issue one message request"
+    );
 }
 
 #[tokio::test]
