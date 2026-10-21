@@ -1,0 +1,122 @@
+use super::*;
+
+struct MpscSink(tokio::sync::mpsc::Sender<tinychannels_bus::ChannelIngress>);
+
+#[async_trait]
+impl ChannelInboundSink for MpscSink {
+    async fn push(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), ChannelSendError> {
+        self.0.send(ingress).await.map_err(|_| ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::Transient,
+            message: "CLI test receiver closed".into(),
+            retryable: true,
+            ..Default::default()
+        })
+    }
+}
+
+#[tokio::test]
+async fn cli_adapter_reports_configured_text_capabilities_and_status() {
+    let cli = CliChannel::new();
+    let descriptor = cli.descriptor();
+    assert_eq!(descriptor.id, "cli");
+    assert_eq!(descriptor.account_id.as_deref(), Some("cli"));
+    let capabilities = cli.declared_capabilities();
+    assert!(capabilities.content.text.inbound);
+    assert!(capabilities.content.text.outbound);
+    assert!(
+        capabilities
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "send")
+    );
+    assert_eq!(cli.media_account_identity().as_deref(), Some("cli"));
+
+    let status = cli.status().await.unwrap();
+    assert_eq!(status.channel_id, "cli");
+    assert_eq!(status.account_id.as_deref(), Some("cli"));
+    assert_eq!(status.health_state.as_deref(), Some("healthy"));
+    assert!(cli.stop().await.is_ok());
+}
+
+#[tokio::test]
+async fn cli_adapter_sends_text_and_rejects_non_text_typed_content() {
+    let cli = CliChannel::new();
+    let intent = ChannelOutboundIntent {
+        channel_id: "cli".into(),
+        conversation_id: "user".into(),
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: "hello".into(),
+        },
+        ..Default::default()
+    };
+    assert!(cli.send(intent).await.is_ok());
+
+    let media = ChannelOutboundMessage {
+        channel_id: "cli".into(),
+        conversation_id: "user".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Content {
+            part: ContentPart::Image {
+                media: tinychannels_bus::MediaReference::default(),
+                caption: None,
+                alt_text: None,
+            },
+        }],
+        ..ChannelOutboundMessage::from_intent(&ChannelOutboundIntent::default())
+    };
+    let error = cli.send_typed(&media).await.unwrap_err();
+    assert!(error.unsupported);
+}
+
+async fn collect(input: &str) -> Vec<ChannelInboundEnvelope> {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let sink = MpscSink(tx);
+    forward_lines(input.as_bytes(), &sink).await;
+    drop(sink);
+    let mut out = Vec::new();
+    while let Some(ingress) = rx.recv().await {
+        let tinychannels_bus::ChannelIngress::Inbound(envelope) = ingress else {
+            panic!("CLI emits only inbound messages");
+        };
+        out.push(envelope);
+    }
+    out
+}
+
+#[tokio::test]
+async fn forward_lines_skips_blank_lines_trims_and_keeps_typed_scope() {
+    let messages = collect("  hi  \n\n   \nthere\n").await;
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].text, "hi");
+    assert_eq!(messages[1].text, "there");
+    for message in &messages {
+        assert_eq!(message.channel.id, "cli");
+        assert_eq!(message.channel.account_id.as_deref(), Some("cli"));
+        assert_eq!(message.conversation.kind, ConversationKind::Dm);
+        assert_eq!(message.conversation.id, "user");
+        assert_eq!(message.conversation.scope_id.as_deref(), Some("cli"));
+        assert_eq!(message.sender.id, "user");
+        assert!(matches!(
+            message.parts.as_slice(),
+            [ContentPart::Text { text, markdown_dialect: None }] if text == &message.text
+        ));
+        assert_eq!(message.access.dm_decision, SenderDmDecision::Allow);
+    }
+    assert_ne!(messages[0].message_id, messages[1].message_id);
+}
+
+#[tokio::test]
+async fn forward_lines_stops_at_quit_or_exit() {
+    assert_eq!(collect("a\n/quit\nb\n").await.len(), 1);
+    assert_eq!(collect("a\n/exit\nb\n").await.len(), 1);
+}
+
+#[tokio::test]
+async fn forward_lines_stops_when_receiver_closes() {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    drop(rx);
+    forward_lines("a\nb\n".as_bytes(), &MpscSink(tx)).await;
+}
