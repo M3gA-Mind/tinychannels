@@ -297,5 +297,5 @@ impl NativeProvider for IMessageChannel {
 }
 
 #[cfg(test)]
-#[path = "native_tests.rs"]
+#[path = "native/tests/mod.rs"]
 mod tests;

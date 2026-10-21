@@ -383,5 +383,5 @@ mod fixtures;
 mod conformance;
 
 #[cfg(test)]
-#[path = "imessage_tests.rs"]
+#[path = "imessage/tests/mod.rs"]
 mod tests;
