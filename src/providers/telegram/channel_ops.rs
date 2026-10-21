@@ -2688,7 +2688,13 @@ async fn send_typed_media_with_receipt(
 
 impl TelegramChannel {
     pub(super) async fn send_compat_message(&self, message: &SendMessage) -> anyhow::Result<()> {
-        let intent = crate::channel::outbound_intent_from_send_message("telegram", message);
+        let mut intent = crate::channel::outbound_intent_from_send_message("telegram", message);
+        // The frozen interaction DTO's provider-specific payload is a legacy
+        // serialization detail. Telegram's typed API accepts text parts, and
+        // the other routing fields from the converter remain authoritative.
+        intent.payload = tinychannels_bus::OutboundPayload::Text {
+            text: message.content.clone(),
+        };
         let outbound = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
         let outcome = crate::channel::ChannelTypedSend::send_typed(self, &outbound)
             .await
