@@ -490,37 +490,21 @@ fn providers_with_a_real_listen_loop_are_unaffected() {
 struct CaptureChannel(tokio::sync::mpsc::Sender<SendMessage>);
 
 #[async_trait::async_trait]
-impl tinychannels::Channel for CaptureChannel {
-    fn name(&self) -> &str {
-        "fixture"
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        self.0.send(message.clone()).await?;
-        Ok(())
-    }
-
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        std::future::pending().await
+impl crate::provider::TestProviderBehavior for CaptureChannel {
+    fn test_provider_id(&self) -> &'static str { "fixture" }
+    async fn test_send(&self, message: &tinychannels_bus::ChannelOutboundMessage) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
+        let legacy = SendMessage::new(crate::provider::test_message_text(message), message.conversation_id.clone());
+        self.0.send(legacy).await.map_err(|error| tinychannels::channel::ChannelSendError { message: error.to_string(), ..Default::default() })?;
+        Ok(Default::default())
     }
 }
 
 struct CaptureTypedChannel(tokio::sync::mpsc::Sender<tinychannels_bus::ChannelOutboundMessage>);
 
 #[async_trait::async_trait]
-impl tinychannels::Channel for CaptureTypedChannel {
-    fn name(&self) -> &str {
-        "fixture"
-    }
-
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+impl crate::provider::TestProviderBehavior for CaptureTypedChannel {
+    fn test_provider_id(&self) -> &'static str { "fixture" }
+    fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         let outbound = tinychannels_bus::ContentCapability {
             outbound: true,
             ..Default::default()
@@ -550,23 +534,12 @@ impl tinychannels::Channel for CaptureTypedChannel {
         }
     }
 
-    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
-        anyhow::bail!("typed test provider expects typed sends")
-    }
-
-    async fn send_typed(
+    async fn test_send(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<()> {
-        self.0.send(message.clone()).await?;
-        Ok(())
-    }
-
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        std::future::pending().await
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
+        self.0.send(message.clone()).await.map_err(|error| tinychannels::channel::ChannelSendError { message: error.to_string(), ..Default::default() })?;
+        Ok(Default::default())
     }
 }
 
@@ -575,12 +548,9 @@ struct CaptureVoiceReceiptChannel(
 );
 
 #[async_trait::async_trait]
-impl tinychannels::Channel for CaptureVoiceReceiptChannel {
-    fn name(&self) -> &str {
-        "fixture"
-    }
-
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+impl crate::provider::TestProviderBehavior for CaptureVoiceReceiptChannel {
+    fn test_provider_id(&self) -> &'static str { "fixture" }
+    fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         tinychannels_bus::ChannelCapabilities {
             voice_out: tinychannels_bus::VoiceCapabilities {
                 supported: true,
@@ -590,23 +560,11 @@ impl tinychannels::Channel for CaptureVoiceReceiptChannel {
         }
     }
 
-    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
-        anyhow::bail!("voice intents must stay typed")
-    }
-
-    async fn send_typed(
+    async fn test_send(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<()> {
-        self.0.send(message.clone()).await?;
-        Ok(())
-    }
-
-    async fn send_typed_with_receipt(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
-        self.0.send(message.clone()).await?;
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError> {
+        self.0.send(message.clone()).await.map_err(|error| tinychannels::channel::ChannelSendError { message: error.to_string(), ..Default::default() })?;
         let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
         outcome.receipt.primary_platform_message_id = Some("voice-message".into());
         outcome
@@ -614,13 +572,6 @@ impl tinychannels::Channel for CaptureVoiceReceiptChannel {
             .platform_message_ids
             .push("voice-message".into());
         Ok(outcome)
-    }
-
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        std::future::pending().await
     }
 }
 

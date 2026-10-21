@@ -48,6 +48,14 @@ pub(crate) trait TestProviderBehavior: Send + Sync {
 }
 
 #[cfg(test)]
+pub(crate) fn test_message_text(message: &tinychannels_bus::ChannelOutboundMessage) -> String {
+    message.parts.iter().filter_map(|part| match part {
+        tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Text { text, .. } } => Some(text.as_str()),
+        _ => None,
+    }).collect::<Vec<_>>().join("")
+}
+
+#[cfg(test)]
 fn test_unsupported(operation: &str) -> tinychannels::channel::ChannelSendError {
     tinychannels::channel::ChannelSendError {
         kind: tinychannels::channel::SendErrorKind::BadFormat,
