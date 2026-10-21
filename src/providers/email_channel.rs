@@ -816,69 +816,6 @@ impl IdleWaitResult {
 }
 
 #[cfg(feature = "email")]
-#[async_trait]
-impl Channel for EmailChannel {
-    fn name(&self) -> &str {
-        "email"
-    }
-
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.declared()
-    }
-
-    async fn send_typed_with_receipt(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> Result<crate::channel::ChannelSendOutcome> {
-        crate::providers::native::outbound::send_typed(self, message)
-            .await
-            .map_err(crate::providers::native::to_anyhow)
-    }
-
-    async fn send(&self, message: &SendMessage) -> Result<()> {
-        // Use explicit subject if provided, otherwise fall back to legacy parsing or default
-        let (subject, body) = if let Some(ref subj) = message.subject {
-            (subj.as_str(), message.content.as_str())
-        } else if message.content.starts_with("Subject: ") {
-            if let Some(pos) = message.content.find('\n') {
-                (&message.content[9..pos], message.content[pos + 1..].trim())
-            } else {
-                ("OpenHuman Message", message.content.as_str())
-            }
-        } else {
-            ("OpenHuman Message", message.content.as_str())
-        };
-
-        // The async sender, not `send_message`: this runs on a runtime
-        // worker, and the blocking transport would stall it for the whole
-        // SMTP exchange.
-        let email = OutboundEmail {
-            to: message.recipient.clone(),
-            subject: subject.to_string(),
-            body: body.to_string(),
-            attachments: Vec::new(),
-            headers: Default::default(),
-        };
-        LettreMailSender::new()
-            .send(&MailCredentials::Smtp(self.smtp_credentials()), &email)
-            .await?;
-        info!("Email sent to {}", message.recipient);
-        Ok(())
-    }
-
-    async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> Result<()> {
-        info!(
-            "Starting email channel with IDLE support on {}",
-            self.config.imap_folder
-        );
-        self.listen_with_idle(tx).await
-    }
-
-    async fn health_check(&self) -> bool {
-        self.health_check_with(self.connect_imap(), HEALTH_CHECK_TIMEOUT)
-            .await
-    }
-}
 
 #[cfg(feature = "email")]
 impl EmailChannel {
