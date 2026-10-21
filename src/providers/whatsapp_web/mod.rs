@@ -1084,8 +1084,6 @@ impl WhatsAppWebChannel {
     }
 }
 
-#[cfg(feature = "whatsapp-web")]
-
 /// The failure class of an error produced by the Web adapter.
 #[cfg(feature = "whatsapp-web")]
 fn failure_of(error: &anyhow::Error) -> WaFailure {

@@ -305,14 +305,6 @@ impl DingTalkChannel {
                         }
                     };
 
-                    // Extract message content
-                    let content = data
-                        .get("text")
-                        .and_then(|t| t.get("content"))
-                        .and_then(|c| c.as_str())
-                        .unwrap_or("")
-                        .trim();
-
                     let sender_id = data
                         .get("senderStaffId")
                         .and_then(|s| s.as_str())

@@ -817,7 +817,6 @@ impl crate::channel::ChannelInboundSink for TypedRecordingSink {
 #[tokio::test]
 #[cfg(feature = "whatsapp-web")]
 async fn typed_adapter_start_can_stop_and_restart_without_retaining_a_legacy_listener() {
-    use crate::channel::ChannelAdapter as _;
 
     let channel = Arc::new(make_channel());
     let sink = Arc::new(TypedRecordingSink {

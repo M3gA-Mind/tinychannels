@@ -1,6 +1,5 @@
 use super::*;
 use crate::channel::SendErrorKind;
-use crate::providers::discord::http::DiscordError;
 use crate::providers::discord::support::*;
 use parking_lot::Mutex;
 use serde_json::json;

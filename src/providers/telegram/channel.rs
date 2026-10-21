@@ -14,8 +14,5 @@
 #[allow(unused_imports)]
 pub use super::channel_types::TelegramChannel;
 #[cfg(test)]
-pub(super) use super::channel_types::TelegramTypingTask;
-
-#[cfg(test)]
 #[path = "channel_tests.rs"]
 mod tests;

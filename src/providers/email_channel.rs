@@ -77,8 +77,6 @@ pub use crate::config::EmailConfig;
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::mail::{ImapCredentials, MailSecret, SmtpCredentials, SmtpSecurity};
 #[cfg(feature = "email")]
-use crate::providers::mail::MailSender;
-#[cfg(feature = "email")]
 use crate::providers::native::HostPorts as NativeState;
 #[cfg(feature = "email")]
 use crate::traits::ChannelMessage;
