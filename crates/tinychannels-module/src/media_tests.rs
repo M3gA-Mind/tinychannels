@@ -685,7 +685,12 @@ async fn invalidating_instance_releases_idle_uploads_and_keeps_finalizing_upload
 
     uploads.invalidate_instance("telegram:primary").await;
 
-    assert!(uploads.binding(&MediaUploadFinish(finalizing)).await.is_ok());
+    assert!(
+        uploads
+            .binding(&MediaUploadFinish(finalizing))
+            .await
+            .is_ok()
+    );
     assert!(uploads.binding(&MediaUploadFinish(pending)).await.is_err());
     let mut other_instance = request(1);
     other_instance.instance = "other-instance".into();
