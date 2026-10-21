@@ -51,7 +51,7 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 #[cfg(feature = "email")]
 use tokio::sync::watch;
-#[cfg(test)]
+#[cfg(all(test, feature = "email"))]
 use tokio::time::timeout;
 #[cfg(feature = "email")]
 #[cfg(feature = "email")]
