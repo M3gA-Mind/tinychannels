@@ -943,7 +943,9 @@ async fn the_real_client_refuses_outbound_while_logged_out() {
         .expect("start_typing hung")
         .unwrap_err();
     assert!(
-        composing.message.starts_with("Failed to send typing state (composing): "),
+        composing
+            .message
+            .starts_with("Failed to send typing state (composing): "),
         "{composing}"
     );
     let paused = tokio::time::timeout(HANG_GUARD, ch.stop_typing("+1234567890"))
@@ -951,7 +953,9 @@ async fn the_real_client_refuses_outbound_while_logged_out() {
         .expect("stop_typing hung")
         .unwrap_err();
     assert!(
-        paused.message.starts_with("Failed to send typing state (paused): "),
+        paused
+            .message
+            .starts_with("Failed to send typing state (paused): "),
         "{paused}"
     );
 

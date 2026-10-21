@@ -3288,11 +3288,7 @@ async fn telegram_rejects_wav_audio_before_native_upload() {
         .await
         .unwrap_err();
 
-    assert!(
-        error
-            .message
-            .contains("rejected before provider dispatch")
-    );
+    assert!(error.message.contains("rejected before provider dispatch"));
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
