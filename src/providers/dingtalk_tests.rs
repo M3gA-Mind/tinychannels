@@ -156,7 +156,7 @@ async fn gateway_registration_and_webhook_replies_preserve_payloads_and_errors()
         .and(body_json(
             json!({"msgtype": "markdown", "markdown": {"title": "OpenHuman", "text": "reply"}}),
         ))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"errcode": 0})))
         .expect(1)
         .mount(&webhook)
         .await;
