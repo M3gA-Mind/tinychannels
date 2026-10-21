@@ -993,7 +993,7 @@ impl WhatsAppWebChannel {
 
 #[cfg(feature = "whatsapp-web")]
 impl WhatsAppWebChannel {
-    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+    fn provider_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         capabilities(&CapabilitySpec {
             media: self.media_repository.is_some(),
             voice_store: self.voice_media_store.is_some(),
@@ -1094,7 +1094,7 @@ impl Channel for WhatsAppWebChannel {
     }
 
     fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.declared_capabilities()
+        self.provider_capabilities()
     }
 
     fn media_account_identity(&self) -> Option<String> {
@@ -1215,7 +1215,7 @@ impl crate::channel::ChannelAdapter for WhatsAppWebChannel {
     }
 
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.declared_capabilities()
+        self.provider_capabilities()
     }
 
     async fn start(
