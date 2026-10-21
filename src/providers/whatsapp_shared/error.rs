@@ -4,8 +4,8 @@ use crate::channel::{ChannelSendError, SendErrorKind};
 
 /// Why one WhatsApp operation did not complete.
 ///
-/// The class is the retry contract: only [`WaFailure::Rejected`] and
-/// [`WaFailure::Unsupported`] are known to have left the account untouched.
+/// The class is the retry contract: rejected, malformed and unsupported
+/// operations are known to have left the account untouched.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum WaFailure {
     /// Refused before any provider call: bad scope, missing port, invalid input.

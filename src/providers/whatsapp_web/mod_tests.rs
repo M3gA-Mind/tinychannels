@@ -690,17 +690,11 @@ async fn unparseable_recipients_are_rejected() {
     );
     assert!(!empty.sent_before_error);
     let no_digits = ch.start_typing("+abc").await.unwrap_err();
-    assert!(
-        no_digits.message.contains("valid phone number"),
-        "{}",
-        no_digits.message
-    );
+    assert_eq!(no_digits.kind, crate::channel::SendErrorKind::BadFormat);
+    assert!(!no_digits.sent_before_error);
     let bad_jid = ch.stop_typing("@@").await.unwrap_err();
-    assert!(
-        bad_jid.message.contains("Invalid WhatsApp JID"),
-        "{}",
-        bad_jid.message
-    );
+    assert_eq!(bad_jid.kind, crate::channel::SendErrorKind::BadFormat);
+    assert!(!bad_jid.sent_before_error);
     assert!(fake.calls().is_empty());
 }
 
@@ -976,24 +970,14 @@ async fn the_real_client_refuses_outbound_while_logged_out() {
         .await
         .expect("start_typing hung")
         .unwrap_err();
-    assert!(
-        composing
-            .message
-            .starts_with("Failed to send typing state (composing): "),
-        "{}",
-        composing.message
-    );
+    assert_eq!(composing.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!composing.sent_before_error);
     let paused = tokio::time::timeout(HANG_GUARD, ch.stop_typing("+1234567890"))
         .await
         .expect("stop_typing hung")
         .unwrap_err();
-    assert!(
-        paused
-            .message
-            .starts_with("Failed to send typing state (paused): "),
-        "{}",
-        paused.message
-    );
+    assert_eq!(paused.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!paused.sent_before_error);
 
     let (_, hook) = lifecycle.hooks.lock().pop().expect("hook registered");
     hook().await;

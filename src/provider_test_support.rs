@@ -24,6 +24,23 @@ impl Error for TypedSendTestError {}
 /// for tests that still assert the historical message fields.
 pub(crate) struct LegacyMessageSink(tokio::sync::mpsc::Sender<ChannelMessage>);
 
+#[derive(Default)]
+pub(crate) struct RecordingInboundSink(std::sync::Mutex<Vec<ChannelIngress>>);
+
+impl RecordingInboundSink {
+    pub(crate) fn events(&self) -> Vec<ChannelIngress> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl ChannelInboundSink for RecordingInboundSink {
+    async fn push(&self, ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
+        self.0.lock().unwrap().push(ingress);
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl ChannelInboundSink for LegacyMessageSink {
     async fn push(&self, ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
