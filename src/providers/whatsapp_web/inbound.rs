@@ -184,11 +184,15 @@ impl InboundState {
         sender_name: Option<String>,
         is_group: bool,
     ) -> Result<bool, WaFailure> {
-        let Some(sink) = self.events.as_ref() else {
+        if self.events.is_none() && self.typed_tx.is_none() {
             return Ok(false);
-        };
+        }
         let info = &inbound.info;
-        let id = info.id.clone();
+        let id = if info.id.is_empty() && self.typed_tx.is_some() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            info.id.clone()
+        };
         if id.is_empty() {
             return Ok(false);
         }
@@ -315,9 +319,29 @@ impl InboundState {
                 ..Default::default()
             })
         };
-        let delivered = sink.publish_ingress(ingress).await.map_err(|_| {
-            WaFailure::uncertain("WhatsApp ingress could not be delivered to the host")
-        })?;
+        let delivered = if let Some(typed_tx) = &self.typed_tx {
+            let (accepted, result) = tokio::sync::oneshot::channel();
+            typed_tx
+                .send(super::TypedIngressDelivery { ingress, accepted })
+                .await
+                .map_err(|_| {
+                    WaFailure::uncertain("WhatsApp ingress queue is no longer available")
+                })?;
+            result.await.map_err(|_| {
+                WaFailure::uncertain("WhatsApp ingress acknowledgement was cancelled")
+            })?
+        } else if let Some(sink) = &self.events {
+            sink.publish_ingress(ingress).await.map_err(|_| {
+                WaFailure::uncertain("WhatsApp ingress could not be delivered to the host")
+            })?
+        } else {
+            false
+        };
+        if self.typed_tx.is_some() && !delivered {
+            return Err(WaFailure::uncertain(
+                "WhatsApp ingress was not accepted by the host",
+            ));
+        }
         if delivered {
             self.seen.lock().insert(id);
         }
@@ -407,9 +431,9 @@ impl InboundState {
     /// Publish delivery and read receipts for messages we sent.
     pub(super) async fn publish_receipt(&self, receipt: &wacore::types::events::Receipt) {
         use wacore::types::presence::ReceiptType;
-        let Some(sink) = self.events.as_ref() else {
+        if self.events.is_none() && self.typed_tx.is_none() {
             return;
-        };
+        }
         if receipt.source.is_from_me {
             return;
         }
@@ -463,11 +487,22 @@ impl InboundState {
                 }),
                 event: kind,
             };
-            if sink
-                .publish_ingress(ChannelIngress::Event(event))
-                .await
-                .is_err()
-            {
+            let delivered = if let Some(typed_tx) = &self.typed_tx {
+                let (accepted, result) = tokio::sync::oneshot::channel();
+                typed_tx
+                    .send(super::TypedIngressDelivery {
+                        ingress: ChannelIngress::Event(event),
+                        accepted,
+                    })
+                    .await
+                    .is_ok()
+                    && result.await.unwrap_or(false)
+            } else if let Some(sink) = &self.events {
+                sink.publish_ingress(ChannelIngress::Event(event)).await.is_ok()
+            } else {
+                false
+            };
+            if !delivered {
                 tracing::debug!("[whatsapp_web] receipt event could not be delivered");
             }
         }
