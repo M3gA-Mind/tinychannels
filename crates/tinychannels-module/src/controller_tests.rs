@@ -259,7 +259,8 @@ impl NativeControllerFixture {
         let request = self
             .server
             .received_requests()
-            .await?
+            .await
+            .ok_or_else(|| anyhow::anyhow!("failed to read provider mock requests"))?
             .into_iter()
             .last()
             .ok_or_else(|| anyhow::anyhow!("provider made no HTTP request"))?;
@@ -300,7 +301,7 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
     async fn exercise(
         &self,
         feature: tinychannels_conformance::NativeControllerFeature,
-    ) -> Result<(), tinychannels_conformance::NativeControllerError> {
+    ) -> std::result::Result<(), tinychannels_conformance::NativeControllerError> {
         use tinychannels_conformance::NativeControllerFeature as Feature;
         let unsupported = |message: String| tinychannels_conformance::NativeControllerError {
             unsupported: message.contains("unsupported")
