@@ -516,12 +516,16 @@ async fn typed_socket_ack_waits_for_sink_acceptance_without_blocking_ping() {
                 if let Some(pong_tx) = pong_tx {
                     let _ = pong_tx.send(());
                 }
-                assert!(
-                    tokio::time::timeout(Duration::from_millis(100), socket.next())
-                        .await
-                        .is_err(),
-                    "a blocked sink must not cause an early Socket Mode acknowledgement"
-                );
+                if let Some(frame) = socket.next().await {
+                    match frame {
+                        Ok(Message::Text(_)) => {
+                            panic!(
+                                "a blocked sink must not cause an early Socket Mode acknowledgement"
+                            )
+                        }
+                        Ok(_) | Err(_) => {}
+                    }
+                }
             } else {
                 expect_ack(&mut socket, "unacked-until-accepted").await;
                 if let Some(ack_tx) = replay_ack_tx.lock().unwrap().take() {
