@@ -171,6 +171,7 @@ impl MattermostChannel {
 }
 
 impl MattermostChannel {
+    #[cfg(test)]
     async fn inbound_envelope(
         &self,
         post: &serde_json::Value,
@@ -464,52 +465,6 @@ impl MattermostChannel {
         }
     }
 
-    /// Post one message and return the id Mattermost assigned to it.
-    async fn post_message(&self, message: &SendMessage) -> Result<Vec<String>> {
-        // Mattermost supports threading via 'root_id'.
-        // We pack 'channel_id:root_id' into recipient if it's a thread.
-        let (channel_id, root_id) = if let Some((c, r)) = message.recipient.split_once(':') {
-            (c, Some(r))
-        } else {
-            (message.recipient.as_str(), None)
-        };
-
-        let mut body_map = serde_json::json!({
-            "channel_id": channel_id,
-            "message": message.content
-        });
-
-        if let Some(root) = root_id {
-            body_map.as_object_mut().unwrap().insert(
-                "root_id".to_string(),
-                serde_json::Value::String(root.to_string()),
-            );
-        }
-
-        let resp = self
-            .http_client()
-            .post(format!("{}/api/v4/posts", self.base_url))
-            .bearer_auth(&self.bot_token)
-            .json(&body_map)
-            .send()
-            .await?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp
-                .text()
-                .await
-                .unwrap_or_else(|e| format!("<failed to read response: {e}>"));
-            bail!("Mattermost post failed ({status}): {body}");
-        }
-
-        let ids = resp
-            .json::<serde_json::Value>()
-            .await
-            .ok()
-            .and_then(|post| post.get("id").and_then(|id| id.as_str()).map(str::to_owned));
-        Ok(ids.into_iter().collect())
-    }
 }
 
 fn valid_file_id(file_id: &str) -> bool {
