@@ -4,6 +4,7 @@ use crate::providers::whatsapp_shared::fakes::{
 };
 use crate::providers::whatsapp_web::client::OutboundClient;
 use crate::providers::whatsapp_web::fakes::{RecordingClient, base_state};
+use crate::channel::ChannelAdapter as _;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use tinychannels_bus::{ChannelIngress, ContentPart};
