@@ -398,3 +398,7 @@ pub enum ProgressiveTransportResult {
     MessageGone,
     Failed,
 }
+
+#[cfg(test)]
+#[path = "module_progressive_tests.rs"]
+mod tests;
