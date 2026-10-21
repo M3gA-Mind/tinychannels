@@ -1,6 +1,8 @@
 use crate::channel::{ChannelStreamingDraft, ChannelTyping};
 use std::sync::Arc;
 use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
+use tinychannels_bus::channel::{ContentPart, MediaReference, OutboundContentPart};
+use crate::traits::SendMessage;
 
 use super::*;
 use crate::channel::ChannelAdapter;
@@ -587,12 +589,16 @@ async fn finalizing_media_parts_remains_unsupported_for_yuanbao_drafts() {
         channel_id: "yuanbao".into(),
         conversation_id: "user-42".into(),
         payload: OutboundPayload::Parts {
-            parts: vec![tinychannels_bus::OutboundContentPart::Content {
-                part: tinychannels_bus::ContentPart::Image {
-                    url: "https://example.invalid/image.png".into(),
-                    mime_type: Some("image/png".into()),
-                    filename: None,
+            parts: vec![OutboundContentPart::Content {
+                part: ContentPart::Image {
+                    media: MediaReference {
+                        url: Some("https://example.invalid/image.png".into()),
+                        content_type: Some("image/png".into()),
+                        kind: tinychannels_bus::MediaKind::Image,
+                        ..Default::default()
+                    },
                     caption: None,
+                    alt_text: None,
                 },
             }],
         },
