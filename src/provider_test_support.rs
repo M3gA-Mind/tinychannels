@@ -1,6 +1,8 @@
 //! Test-only helpers for exercising providers through their typed ports.
 
-use crate::channel::{ChannelAdapter, ChannelSendOutcome, SendMessage, outbound_intent_from_send_message};
+use crate::channel::{
+    ChannelAdapter, ChannelSendOutcome, SendMessage, outbound_intent_from_send_message,
+};
 
 /// Exercise a typed adapter with a one-release wire DTO converted at its edge.
 pub(crate) async fn send_v1<C: ChannelAdapter>(
@@ -15,10 +17,27 @@ pub(crate) async fn send_v1<C: ChannelAdapter>(
     }
 }
 
-pub(crate) async fn is_healthy<C: ChannelAdapter>(channel: &C) -> bool {
+pub(crate) async fn is_healthy<C: ChannelAdapter + ?Sized>(channel: &C) -> bool {
     ChannelAdapter::status(channel)
         .await
         .ok()
         .and_then(|snapshot| snapshot.health_state)
         .is_some_and(|state| state == "healthy")
+}
+
+pub(crate) fn supports_action<C: ChannelAdapter + ?Sized>(channel: &C, action: &str) -> bool {
+    channel
+        .declared_capabilities()
+        .actions
+        .supported
+        .iter()
+        .any(|supported| supported == action)
+}
+
+pub(crate) fn supports_reply<C: ChannelAdapter + ?Sized>(channel: &C) -> bool {
+    channel.declared_capabilities().addressing.reply_to_id
+}
+
+pub(crate) fn supports_threads<C: ChannelAdapter + ?Sized>(channel: &C) -> bool {
+    channel.declared_capabilities().addressing.thread_id
 }
