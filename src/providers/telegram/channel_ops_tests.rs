@@ -4,7 +4,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tinychannels_runtime::channel::{
-    ChannelAdapter, ChannelInboundSink, ChannelStreamingDraft,
+    ChannelAdapter, ChannelInboundSink, ChannelStreamingDraft, ChannelTyping,
 };
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -3967,7 +3967,13 @@ async fn update_draft_edits_message_and_records_edit_time() {
     mount_post(&server, "editMessageText", ok()).await;
     let ch = streaming(&server);
 
-    ch.update_draft("100:3", "12", "partial").await.unwrap();
+    ChannelStreamingDraft::update_draft(
+        &ch,
+        "12",
+        draft_text_intent("partial", "100:3", None, Some("3")),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         json_bodies(&server, "editMessageText").await,
@@ -3983,7 +3989,13 @@ async fn update_draft_truncates_oversized_text_to_limit() {
     let ch = streaming(&server);
     let text = "é".repeat(TELEGRAM_MAX_MESSAGE_LENGTH);
 
-    ch.update_draft("100", "12", &text).await.unwrap();
+    ChannelStreamingDraft::update_draft(
+        &ch,
+        "12",
+        draft_text_intent(&text, "100", None, None),
+    )
+    .await
+    .unwrap();
 
     let sent = json_bodies(&server, "editMessageText").await[0]["text"]
         .as_str()
@@ -4008,7 +4020,13 @@ async fn update_draft_rejection_is_swallowed_and_not_recorded() {
     .await;
     let ch = streaming(&server);
 
-    ch.update_draft("100", "12", "same").await.unwrap();
+    ChannelStreamingDraft::update_draft(
+        &ch,
+        "12",
+        draft_text_intent("same", "100", None, None),
+    )
+    .await
+    .unwrap();
     assert!(!ch.last_draft_edit.lock().contains_key("100"));
 }
 
@@ -4016,7 +4034,13 @@ async fn update_draft_rejection_is_swallowed_and_not_recorded() {
 async fn update_draft_invalid_message_id_skips_network() {
     let server = mock_api().await;
     let ch = streaming(&server);
-    ch.update_draft("100", "abc", "text").await.unwrap();
+    ChannelStreamingDraft::update_draft(
+        &ch,
+        "abc",
+        draft_text_intent("text", "100", None, None),
+    )
+    .await
+    .unwrap();
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -4029,7 +4053,11 @@ async fn finalize_draft_edits_with_markdown_and_clears_rate_limit() {
         .lock()
         .insert("100".into(), std::time::Instant::now());
 
-    ch.finalize_draft("100", "8", "done <tool_call>{}</tool_call>", None)
+    ChannelStreamingDraft::finalize_draft(
+        &ch,
+        "8",
+        draft_text_intent("done <tool_call>{}</tool_call>", "100", None, None),
+    )
         .await
         .unwrap();
 
@@ -4056,7 +4084,11 @@ async fn finalize_draft_retries_plain_edit_when_markdown_rejected() {
     mount_post(&server, "editMessageText", ok()).await;
     let ch = streaming(&server);
 
-    ch.finalize_draft("100", "8", "final *text", None)
+    ChannelStreamingDraft::finalize_draft(
+        &ch,
+        "8",
+        draft_text_intent("final *text", "100", None, None),
+    )
         .await
         .unwrap();
 
@@ -4073,7 +4105,11 @@ async fn finalize_draft_falls_back_to_new_message_when_edits_fail() {
     mount_post(&server, "sendMessage", ok()).await;
     let ch = streaming(&server);
 
-    ch.finalize_draft("100:4", "8", "final", Some("77"))
+    ChannelStreamingDraft::finalize_draft(
+        &ch,
+        "8",
+        draft_text_intent("final", "100:4", Some("77"), Some("4")),
+    )
         .await
         .unwrap();
 
@@ -4091,7 +4127,11 @@ async fn finalize_draft_short_text_with_invalid_id_sends_new_message() {
     mount_post(&server, "sendMessage", ok()).await;
     let ch = streaming(&server);
 
-    ch.finalize_draft("100", "nope", "final", None)
+    ChannelStreamingDraft::finalize_draft(
+        &ch,
+        "nope",
+        draft_text_intent("final", "100", None, None),
+    )
         .await
         .unwrap();
 
@@ -4107,7 +4147,13 @@ async fn finalize_draft_oversized_text_deletes_draft_and_sends_chunks() {
     let ch = streaming(&server);
     let text = "y".repeat(TELEGRAM_MAX_MESSAGE_LENGTH + 1);
 
-    ch.finalize_draft("100", "8", &text, None).await.unwrap();
+    ChannelStreamingDraft::finalize_draft(
+        &ch,
+        "8",
+        draft_text_intent(&text, "100", None, None),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         json_bodies(&server, "deleteMessage").await,
@@ -4123,7 +4169,13 @@ async fn finalize_draft_oversized_text_with_invalid_id_sends_chunks_only() {
     let ch = streaming(&server);
     let text = "y".repeat(TELEGRAM_MAX_MESSAGE_LENGTH + 1);
 
-    ch.finalize_draft("100", "bad", &text, None).await.unwrap();
+    ChannelStreamingDraft::finalize_draft(
+        &ch,
+        "bad",
+        draft_text_intent(&text, "100", None, None),
+    )
+    .await
+    .unwrap();
 
     assert!(json_bodies(&server, "deleteMessage").await.is_empty());
     assert_eq!(json_bodies(&server, "sendMessage").await.len(), 2);
