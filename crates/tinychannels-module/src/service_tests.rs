@@ -154,6 +154,7 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         conversation_ref: None,
         reply_to_id: Some("message-3".to_owned()),
         thread_id: Some("thread-9".to_owned()),
+        turn_id: None,
         durability: tinychannels::DeliveryDurability::BestEffort,
         payload: tinychannels::OutboundPayload::Text {
             text: "hello".to_owned(),
@@ -472,6 +473,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                         }),
                         reply_to_id: Some("source-message".into()),
                         thread_id: Some("thread".into()),
+                        turn_id: None,
                         durability: tinychannels_bus::DeliveryDurability::BestEffort,
                         payload,
                     },
