@@ -49,6 +49,6 @@ mod tests;
 #[path = "listen_tests.rs"]
 mod listen_tests;
 
-#[cfg(any(test, debug_assertions))]
-#[path = "test_support.rs"]
+#[cfg(test)]
+#[path = "test_support_tests.rs"]
 pub mod test_support;
