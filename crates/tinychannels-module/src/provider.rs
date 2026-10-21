@@ -1367,10 +1367,7 @@ struct NativeAdapter {
 
 impl NativeAdapter {
     fn provider(&self) -> &'static str {
-        self.running
-            .native_ports
-            .as_ref()
-            .map_or("Provider", |ports| ports.provider)
+        self.running.native_ports.provider
     }
 }
 
@@ -1390,13 +1387,7 @@ fn adapter_operation_error(
 #[async_trait::async_trait]
 impl tinychannels::channel::ChannelAdapter for NativeAdapter {
     fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
-        let mut descriptor = self
-            .running
-            .native_ports
-            .as_ref()
-            .expect("native ports")
-            .adapter
-            .descriptor();
+        let mut descriptor = self.running.native_ports.adapter.descriptor();
         descriptor.account_id = Some(self.running.configured_instance.clone());
         descriptor.metadata.insert(
             "configuredInstance".into(),
@@ -1406,12 +1397,7 @@ impl tinychannels::channel::ChannelAdapter for NativeAdapter {
     }
 
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.running
-            .native_ports
-            .as_ref()
-            .expect("native ports")
-            .adapter
-            .declared_capabilities()
+        self.running.native_ports.adapter.declared_capabilities()
     }
 
     fn proactive_target(&self) -> Option<String> {
@@ -1704,7 +1690,7 @@ impl Running {
             host,
             supervision,
             outbound_only,
-            Some(NativePorts::telegram(channel)),
+            NativePorts::telegram(channel),
         )
     }
     /// Start a configured provider with typed operations and its provider-owned
@@ -1734,7 +1720,7 @@ impl Running {
             host,
             supervision,
             outbound_only,
-            Some(NativePorts::long_tail(adapter, provider, listener_mode)),
+            NativePorts::long_tail(adapter, provider, listener_mode),
         )
     }
 
@@ -1755,7 +1741,7 @@ impl Running {
             host,
             supervision,
             outbound_only,
-            Some(NativePorts::long_tail(channel, provider, listener_mode)),
+            NativePorts::long_tail(channel, provider, listener_mode),
         )
     }
 
@@ -1773,7 +1759,7 @@ impl Running {
             host,
             supervision,
             outbound_only,
-            Some(NativePorts::slack(channel)),
+            NativePorts::slack(channel),
         )
     }
 
@@ -2410,11 +2396,7 @@ impl tinychannels::channel::ChannelAdapter for Running {
             let sent_before_error = matches!(error, RunningSendError::AfterDispatch(_));
             tinychannels::channel::ChannelSendError {
                 kind: tinychannels::channel::SendErrorKind::Unknown,
-                message: if self.native_ports.is_some() {
-                    format!("{} send failed", self.native_provider())
-                } else {
-                    error.to_string()
-                },
+                message: format!("{} send failed", self.native_provider()),
                 retryable: !sent_before_error,
                 sent_before_error,
                 ..Default::default()
