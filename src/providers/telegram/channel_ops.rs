@@ -2689,13 +2689,13 @@ async fn send_typed_media_with_receipt(
 
 impl TelegramChannel {
     pub(super) async fn send_compat_message(&self, message: &SendMessage) -> anyhow::Result<()> {
-        let intent = crate::channel::outbound_intent_from_send_message(message);
+        let intent = crate::channel::outbound_intent_from_send_message("telegram", message);
         let outbound = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
         let outcome = crate::channel::ChannelTypedSend::send_typed(self, &outbound)
             .await
-            .map_err(anyhow::Error::new)?;
+            .map_err(|error| anyhow::anyhow!(error.message))?;
         if let Some(error) = outcome.error {
-            return Err(anyhow::Error::new(error));
+            return Err(anyhow::anyhow!(error.message));
         }
         Ok(())
     }

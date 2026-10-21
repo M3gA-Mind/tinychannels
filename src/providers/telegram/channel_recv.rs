@@ -5,7 +5,7 @@ use super::channel_types::{
     APPROVAL_PROMPT_DEBOUNCE_SECS, TELEGRAM_MAX_VOICE_FILE_BYTES, TelegramChannel,
     TelegramReactionEvent, TelegramVoiceAttachment,
 };
-use crate::traits::{ChannelMessage, ChannelSendExt, SendMessage};
+use crate::traits::{ChannelMessage, SendMessage};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::time::Instant;
 
