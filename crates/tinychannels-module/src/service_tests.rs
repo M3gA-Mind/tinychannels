@@ -82,7 +82,7 @@ async fn v1_email_subject_reaches_the_configured_smtp_wire() {
     .expect("configured Email provider uses its native typed adapter");
     service.running.lock().await.insert(
         "email:work".into(),
-        Arc::new(launch.start(hooks, service.host.clone(), None, true)),
+        launch.start(hooks, service.host.clone(), None, true),
     );
     service
         .send_message(
@@ -129,9 +129,10 @@ async fn v1_send_preserves_provider_specific_subjects_for_qualified_instances() 
     assert_eq!(dingtalk.channel_id, "dingtalk");
     assert_eq!(dingtalk.conversation_id, "room-1");
     assert!(matches!(
-        dingtalk.payload,
-        tinychannels_bus::OutboundPayload::Text { text }
-            if text == "Subject: OpenHuman\ncustom body"
+        dingtalk.parts.as_slice(),
+        [tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text { text, .. }
+        }] if text == "Subject: OpenHuman\ncustom body"
     ));
     channels.shutdown().await.unwrap();
 
@@ -153,8 +154,10 @@ async fn v1_send_preserves_provider_specific_subjects_for_qualified_instances() 
         .unwrap();
     let telegram = received.recv().await.unwrap();
     assert!(matches!(
-        telegram.payload,
-        tinychannels_bus::OutboundPayload::Text { text } if text == "visible body"
+        telegram.parts.as_slice(),
+        [tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text { text, .. }
+        }] if text == "visible body"
     ));
     channels.shutdown().await.unwrap();
 }
