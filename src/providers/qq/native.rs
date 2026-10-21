@@ -633,6 +633,15 @@ fn status_error(
         unknown("QQ may have accepted the message but returned a server error")
     } else if status.is_server_error() {
         transient(&format!("QQ {operation} failed"), false)
+    } else if matches!(
+        status,
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+    ) {
+        ChannelSendError {
+            kind: SendErrorKind::Forbidden,
+            message: format!("QQ {operation} was rejected with HTTP {status}"),
+            ..Default::default()
+        }
     } else {
         ChannelSendError {
             kind: SendErrorKind::BadFormat,
