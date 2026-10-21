@@ -579,11 +579,14 @@ fn the_descriptor_status_and_capabilities_identify_the_native_adapter() {
         Some("C1")
     );
     assert_eq!(descriptor.id, "slack");
-    assert!(channel.supports_remote_control() && channel.supports_chat_approvals());
+    let capabilities = ChannelAdapter::declared_capabilities(&channel);
+    assert!(capabilities.remote_control && capabilities.chat_approvals);
     assert!(
-        channel.supports_reactions() && channel.supports_edit() && channel.supports_draft_updates()
+        capabilities.reactions
+            && capabilities.content.presentation.supports_edit
+            && capabilities.actions.supported.iter().any(|action| action == "draft-update")
     );
-    assert!(channel.supports_reply_to_id() && channel.supports_thread_id());
+    assert!(capabilities.addressing.reply_to_id && capabilities.addressing.thread_id);
 }
 
 #[tokio::test]
@@ -653,8 +656,10 @@ async fn typed_sends_post_text_and_keep_provider_errors_recoverable() {
         .unwrap_err();
     assert_eq!(error.kind, SendErrorKind::NotFound);
 
-    let outcome = channel
-        .send_typed_with_receipt(&ChannelOutboundMessage::from_intent(&text_intent("typed")))
+    let outcome = crate::channel::ChannelTypedSend::send_typed(
+        &channel,
+        &ChannelOutboundMessage::from_intent(&text_intent("typed")),
+    )
         .await
         .unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["1.1"]);
@@ -669,7 +674,9 @@ async fn typed_sends_post_text_and_keep_provider_errors_recoverable() {
         question: "q".into(),
         options: vec![],
     }));
-    assert!(channel.send_typed_with_receipt(&bad).await.is_err());
+    assert!(crate::channel::ChannelTypedSend::send_typed(&channel, &bad)
+        .await
+        .is_err());
 }
 
 #[tokio::test]
