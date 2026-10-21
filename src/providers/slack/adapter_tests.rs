@@ -584,7 +584,11 @@ fn the_descriptor_status_and_capabilities_identify_the_native_adapter() {
     assert!(
         capabilities.reactions
             && capabilities.content.presentation.supports_edit
-            && capabilities.actions.supported.iter().any(|action| action == "draft-update")
+            && capabilities
+                .actions
+                .supported
+                .iter()
+                .any(|action| action == "draft-update")
     );
     assert!(capabilities.addressing.reply_to_id && capabilities.addressing.thread_id);
 }
@@ -660,8 +664,8 @@ async fn typed_sends_post_text_and_keep_provider_errors_recoverable() {
         &channel,
         &ChannelOutboundMessage::from_intent(&text_intent("typed")),
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["1.1"]);
     let outcome = ChannelTypedSend::send_typed(
         &channel,
@@ -674,9 +678,11 @@ async fn typed_sends_post_text_and_keep_provider_errors_recoverable() {
         question: "q".into(),
         options: vec![],
     }));
-    assert!(crate::channel::ChannelTypedSend::send_typed(&channel, &bad)
-        .await
-        .is_err());
+    assert!(
+        crate::channel::ChannelTypedSend::send_typed(&channel, &bad)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

@@ -334,12 +334,16 @@ async fn stop_typing_clears_handle() {
 async fn stop_typing_is_idempotent() {
     let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
         .with_api_base("http://127.0.0.1:9");
-    assert!(crate::channel::ChannelTyping::stop_typing(&ch, "123456")
-        .await
-        .is_ok());
-    assert!(crate::channel::ChannelTyping::stop_typing(&ch, "123456")
-        .await
-        .is_ok());
+    assert!(
+        crate::channel::ChannelTyping::stop_typing(&ch, "123456")
+            .await
+            .is_ok()
+    );
+    assert!(
+        crate::channel::ChannelTyping::stop_typing(&ch, "123456")
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]

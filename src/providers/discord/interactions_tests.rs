@@ -177,10 +177,7 @@ async fn edit_patches_the_message_content_and_returns_the_receipt() {
     let original = receipt(&["10"]);
 
     let channel = channel_for(&server);
-    let edited = channel
-        .edit(&original, intent("new text"))
-        .await
-        .unwrap();
+    let edited = channel.edit(&original, intent("new text")).await.unwrap();
 
     assert_eq!(edited, original);
     let sent = requests(&server, "PATCH").await;
@@ -214,24 +211,14 @@ async fn edit_rejects_mismatched_scope_oversize_and_non_text_before_dispatch() {
         kind: ConversationKind::Dm,
         ..Default::default()
     });
-    assert!(
-        channel
-            .edit(&original, other_ref)
-            .await
-            .is_err()
-    );
+    assert!(channel.edit(&original, other_ref).await.is_err());
 
     let mut other_account = intent("x");
     other_account.channel_ref = Some(ChannelRef {
         id: "discord".into(),
         account_id: Some("other".into()),
     });
-    assert!(
-        channel
-            .edit(&original, other_account)
-            .await
-            .is_err()
-    );
+    assert!(channel.edit(&original, other_account).await.is_err());
 
     let too_long = channel
         .edit(&original, intent(&"a".repeat(2001)))
@@ -251,12 +238,7 @@ async fn edit_rejects_mismatched_scope_oversize_and_non_text_before_dispatch() {
 
     let mut unscoped = receipt(&["10"]);
     unscoped.conversation = None;
-    assert!(
-        channel
-            .edit(&unscoped, intent("x"))
-            .await
-            .is_err()
-    );
+    assert!(channel.edit(&unscoped, intent("x")).await.is_err());
     assert!(requests(&server, "PATCH").await.is_empty());
 }
 
@@ -293,17 +275,10 @@ async fn delete_surfaces_real_failures() {
         .await;
 
     let channel = channel_for(&server);
-    let error = channel
-        .delete(&receipt(&["10"]))
-        .await
-        .unwrap_err();
+    let error = channel.delete(&receipt(&["10"])).await.unwrap_err();
 
     assert_eq!(error.kind, SendErrorKind::Forbidden);
-    assert!(
-        channel.delete(&receipt(&[]))
-            .await
-            .is_err()
-    );
+    assert!(channel.delete(&receipt(&[])).await.is_err());
 }
 
 // ── reactions and typing ──────────────────────────────────────
