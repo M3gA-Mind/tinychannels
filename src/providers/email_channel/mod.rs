@@ -8,9 +8,6 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::unnecessary_map_or)]
 
-mod config;
-mod outbound;
-
 use anyhow::Result;
 #[cfg(feature = "email")]
 use anyhow::anyhow;
@@ -159,7 +156,635 @@ enum EmailDelivery<'a> {
 struct InboundSinkRejected;
 
 impl EmailChannel {
-/ Internal struct for parsed email data
+    #[cfg(feature = "email")]
+    pub(crate) async fn health_probe(&self) -> bool {
+        self.health_check_with(self.connect_imap(), HEALTH_CHECK_TIMEOUT)
+            .await
+    }
+
+    pub fn new(config: EmailConfig) -> Self {
+        Self {
+            config,
+            #[cfg(feature = "email")]
+            seen_messages: Arc::new(Mutex::new(HashSet::new())),
+            #[cfg(feature = "email")]
+            reconnect_backoff: Duration::from_secs(1),
+            #[cfg(feature = "email")]
+            max_reconnect_backoff: Duration::from_secs(60),
+            #[cfg(feature = "email")]
+            native: NativeState::default(),
+            #[cfg(feature = "email")]
+            subjects: native::Subjects::default(),
+            #[cfg(feature = "email")]
+            listener_cancel: Arc::new(StdMutex::new(None)),
+            #[cfg(feature = "email")]
+            listener_generation: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Scoped media storage; enables typed attachments in both directions.
+    #[cfg(feature = "email")]
+    pub fn with_media_repository(mut self, repository: Arc<dyn MediaRepository>) -> Self {
+        self.native.media_repository = Some(repository);
+        self
+    }
+
+    /// Durable voice storage; enables voice attachments in both directions.
+    #[cfg(feature = "email")]
+    pub fn with_voice_media_store(mut self, store: Arc<dyn VoiceMediaStore>) -> Self {
+        self.native.voice_media_store = Some(store);
+        self
+    }
+
+    /// Host speech-to-text for inbound voice attachments.
+    #[cfg(feature = "email")]
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
+        self.native.transcriber = Some(transcriber);
+        self
+    }
+
+    /// Enable shared final-turn synthesis when the host provides TTS, a codec
+    /// and durable voice storage.
+    #[cfg(feature = "email")]
+    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
+        self.native.voice_synthesis = enabled;
+        self
+    }
+
+    /// Ordered ingress for typed inbound messages.
+    #[cfg(feature = "email")]
+    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
+        self.native.events = Some(events);
+        self
+    }
+
+    /// Check if a sender email is in the allowlist
+    pub fn is_sender_allowed(&self, email: &str) -> bool {
+        if self.config.allowed_senders.is_empty() {
+            return false; // Empty = deny all
+        }
+        if self.config.allowed_senders.iter().any(|a| a == "*") {
+            return true; // Wildcard = allow all
+        }
+        let email_lower = email.to_lowercase();
+        self.config.allowed_senders.iter().any(|allowed| {
+            if allowed.starts_with('@') {
+                // Domain match with @ prefix: "@example.com"
+                email_lower.ends_with(&allowed.to_lowercase())
+            } else if allowed.contains('@') {
+                // Full email address match
+                allowed.eq_ignore_ascii_case(email)
+            } else {
+                // Domain match without @ prefix: "example.com"
+                email_lower.ends_with(&format!("@{}", allowed.to_lowercase()))
+            }
+        })
+    }
+
+    /// Strip HTML tags from content (basic)
+    pub fn strip_html(html: &str) -> String {
+        let mut result = String::new();
+        let mut in_tag = false;
+        for ch in html.chars() {
+            match ch {
+                '<' => in_tag = true,
+                '>' => in_tag = false,
+                _ if !in_tag => result.push(ch),
+                _ => {}
+            }
+        }
+        let mut normalized = String::with_capacity(result.len());
+        for word in result.split_whitespace() {
+            if !normalized.is_empty() {
+                normalized.push(' ');
+            }
+            normalized.push_str(word);
+        }
+        normalized
+    }
+
+    /// Extract the sender address from a parsed email
+    #[cfg(feature = "email")]
+    fn extract_sender(parsed: &mail_parser::Message) -> String {
+        parsed
+            .from()
+            .and_then(|addr| addr.first())
+            .and_then(|a| a.address())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "unknown".into())
+    }
+
+    /// Extract readable text from a parsed email
+    #[cfg(feature = "email")]
+    fn extract_text(parsed: &mail_parser::Message) -> String {
+        if let Some(text) = parsed.body_text(0) {
+            return text.to_string();
+        }
+        if let Some(html) = parsed.body_html(0) {
+            return Self::strip_html(html.as_ref());
+        }
+        for part in parsed.attachments() {
+            let part: &mail_parser::MessagePart = part;
+            if let Some(ct) = MimeHeaders::content_type(part)
+                && ct.ctype() == "text"
+                && let Ok(text) = std::str::from_utf8(part.contents())
+            {
+                return text.to_string();
+            }
+        }
+        "(no readable content)".to_string()
+    }
+
+    /// Connect to IMAP server with TLS and authenticate
+    #[cfg(feature = "email")]
+    async fn connect_imap(&self) -> Result<ImapSession> {
+        let addr = format!("{}:{}", self.config.imap_host, self.config.imap_port);
+        debug!("Connecting to IMAP server at {}", addr);
+
+        // Connect TCP
+        let tcp = TcpStream::connect(&addr).await?;
+
+        // Establish TLS using rustls
+        let certs = RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.into(),
+        };
+        let config = ClientConfig::builder()
+            .with_root_certificates(certs)
+            .with_no_client_auth();
+        let tls_stream: TlsConnector = Arc::new(config).into();
+        let sni: DnsName = self.config.imap_host.clone().try_into()?;
+        let stream = tls_stream.connect(sni.into(), tcp).await?;
+        self.login_imap(stream).await
+    }
+
+    /// Log in over an already-connected stream.
+    #[cfg(feature = "email")]
+    async fn login_imap<S: ImapStream>(&self, stream: S) -> Result<Session<S>> {
+        let client = async_imap::Client::new(stream);
+
+        // Login
+        let session = client
+            .login(&self.config.username, &self.config.password)
+            .await
+            .map_err(|(e, _)| anyhow!("IMAP login failed: {}", e))?;
+
+        debug!("IMAP login successful");
+        Ok(session)
+    }
+
+    /// Fetch and process unseen messages from the selected mailbox
+    #[cfg(feature = "email")]
+    async fn fetch_unseen<S: ImapStream>(
+        &self,
+        session: &mut Session<S>,
+        uid_validity: u32,
+    ) -> Result<Vec<ParsedEmail>> {
+        // Search for unseen messages
+        let uids = session.uid_search("UNSEEN").await?;
+        if uids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        debug!("Found {} unseen messages", uids.len());
+
+        let mut results = Vec::new();
+        let uid_set: String = uids
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        // Fetch message bodies
+        let messages = session.uid_fetch(&uid_set, "(UID BODY.PEEK[])").await?;
+        let messages: Vec<Fetch> = messages.try_collect().await?;
+
+        for msg in messages {
+            let uid = msg.uid.unwrap_or(0);
+            if let Some(body) = msg.body()
+                && let Some(parsed) = MessageParser::default().parse(body)
+            {
+                let sender = Self::extract_sender(&parsed);
+                #[cfg(test)]
+                let subject = parsed.subject().unwrap_or("(no subject)").to_string();
+                #[cfg(test)]
+                let body_text = Self::extract_text(&parsed);
+                #[cfg(test)]
+                let content = format!("Subject: {}\n\n{}", subject, body_text);
+                let msg_id = parsed
+                    .message_id()
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| {
+                        let identity = format!(
+                            "{}:{}:{}:{}:{}",
+                            self.config.imap_host.to_ascii_lowercase(),
+                            self.config.username.to_ascii_lowercase(),
+                            self.config.imap_folder,
+                            uid_validity,
+                            uid
+                        );
+                        format!("email:{}", hex::encode(sha2::Sha256::digest(identity)))
+                    });
+
+                #[allow(clippy::cast_sign_loss)]
+                let ts = parsed
+                    .date()
+                    .map(|d| {
+                        let naive = chrono::NaiveDate::from_ymd_opt(
+                            d.year as i32,
+                            u32::from(d.month),
+                            u32::from(d.day),
+                        )
+                        .and_then(|date| {
+                            date.and_hms_opt(
+                                u32::from(d.hour),
+                                u32::from(d.minute),
+                                u32::from(d.second),
+                            )
+                        });
+                        naive.map_or(0, |n| n.and_utc().timestamp() as u64)
+                    })
+                    .unwrap_or_else(|| {
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0)
+                    });
+
+                results.push(ParsedEmail {
+                    _uid: uid,
+                    msg_id,
+                    sender,
+                    #[cfg(test)]
+                    content,
+                    timestamp: ts,
+                    raw: body.to_vec(),
+                });
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Run the IDLE loop, returning when a new message arrives or timeout
+    /// Note: IDLE consumes the session and returns it via done()
+    #[cfg(feature = "email")]
+    async fn wait_for_changes<S: ImapStream>(
+        &self,
+        session: Session<S>,
+    ) -> Result<(IdleWaitResult, Session<S>)> {
+        let idle_timeout = Duration::from_secs(self.config.idle_timeout_secs);
+
+        // Start IDLE mode - this consumes the session
+        let mut idle = session.idle();
+        idle.init().await?;
+
+        debug!("Entering IMAP IDLE mode");
+
+        // wait() returns (future, stop_source) - we only need the future
+        let (wait_future, _stop_source) = idle.wait();
+
+        // Wait for server notification or timeout
+        let result = timeout(idle_timeout, wait_future).await;
+
+        match result {
+            Ok(Ok(response)) => {
+                debug!("IDLE response: {:?}", response);
+                // Done with IDLE, return session to normal mode
+                let session = idle.done().await?;
+                Ok((IdleWaitResult::from_response(&response), session))
+            }
+            Ok(Err(e)) => {
+                // Try to clean up IDLE state
+                let _ = idle.done().await;
+                Err(anyhow!("IDLE error: {}", e))
+            }
+            Err(_) => {
+                // Timeout - RFC 2177 recommends restarting IDLE every 29 minutes
+                debug!("IDLE timeout reached, will re-establish");
+                let session = idle.done().await?;
+                Ok((IdleWaitResult::Timeout, session))
+            }
+        }
+    }
+
+    #[cfg(feature = "email")]
+    async fn listen_typed_with<S, F, Fut>(
+        &self,
+        sink: &(dyn ChannelInboundSink + Send + Sync),
+        connect: F,
+    ) -> std::result::Result<(), ChannelSendError>
+    where
+        S: ImapStream,
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<Session<S>>>,
+    {
+        let (cancel, mut cancellation) = watch::channel(false);
+        let generation = self
+            .listener_generation
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
+        {
+            let mut active = self
+                .listener_cancel
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if active.is_some() {
+                return Err(ChannelSendError {
+                    message: "Email listener is already running".into(),
+                    retryable: true,
+                    ..Default::default()
+                });
+            }
+            *active = Some((generation, cancel));
+        }
+        let _registration = ListenerRegistration {
+            slot: self.listener_cancel.clone(),
+            generation,
+        };
+
+        let result = tokio::select! {
+            biased;
+            _ = cancellation.wait_for(|stopped| *stopped) => Ok(()),
+            result = self.listen_with_reconnect_to(EmailDelivery::Typed(sink), connect) => result,
+        };
+        result.map_err(|_| ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::Transient,
+            message: "Email listener stopped after an inbound delivery error".into(),
+            retryable: true,
+            ..Default::default()
+        })
+    }
+
+    /// The reconnect loop over any session source, so it is testable without
+    /// a TLS server.
+    #[cfg(all(feature = "email", test))]
+    async fn listen_with_reconnect<S, F, Fut>(
+        &self,
+        tx: &mpsc::Sender<ChannelMessage>,
+        connect: F,
+    ) -> Result<()>
+    where
+        S: ImapStream,
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<Session<S>>>,
+    {
+        self.listen_with_reconnect_to(EmailDelivery::Legacy(tx), connect)
+            .await
+    }
+
+    #[cfg(feature = "email")]
+    async fn listen_with_reconnect_to<S, F, Fut>(
+        &self,
+        delivery: EmailDelivery<'_>,
+        connect: F,
+    ) -> Result<()>
+    where
+        S: ImapStream,
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<Session<S>>>,
+    {
+        let mut backoff = self.reconnect_backoff;
+        let max_backoff = self.max_reconnect_backoff;
+
+        loop {
+            match self.run_idle_session(&delivery, connect()).await {
+                Ok(()) => {
+                    // Clean exit (channel closed)
+                    return Ok(());
+                }
+                Err(error) if error.downcast_ref::<InboundSinkRejected>().is_some() => {
+                    return Err(error);
+                }
+                Err(e) => {
+                    error!(
+                        "IMAP session error: {}. Reconnecting in {:?}...",
+                        e, backoff
+                    );
+                    sleep(backoff).await;
+                    // Exponential backoff with cap
+                    backoff = std::cmp::min(backoff * 2, max_backoff);
+                }
+            }
+        }
+    }
+
+    /// Run a single IDLE session until error or clean shutdown
+    #[cfg(feature = "email")]
+    async fn run_idle_session<S: ImapStream>(
+        &self,
+        delivery: &EmailDelivery<'_>,
+        connect: impl std::future::Future<Output = Result<Session<S>>>,
+    ) -> Result<()> {
+        // Connect and authenticate
+        let mut session = connect.await?;
+
+        // Select the mailbox
+        let uid_validity = session
+            .select(&self.config.imap_folder)
+            .await?
+            .uid_validity
+            .unwrap_or_default();
+        info!(
+            "Email IDLE listening on {} (instant push enabled)",
+            self.config.imap_folder
+        );
+
+        // Check for existing unseen messages first
+        self.process_unseen_to(&mut session, delivery, uid_validity)
+            .await?;
+
+        loop {
+            // Enter IDLE and wait for changes (consumes session, returns it via result)
+            match self.wait_for_changes(session).await {
+                Ok((IdleWaitResult::NewMail, returned_session)) => {
+                    debug!("New mail notification received");
+                    session = returned_session;
+                    self.process_unseen_to(&mut session, delivery, uid_validity)
+                        .await?;
+                }
+                Ok((IdleWaitResult::Timeout, returned_session)) => {
+                    // Re-check for mail after IDLE timeout (defensive)
+                    session = returned_session;
+                    self.process_unseen_to(&mut session, delivery, uid_validity)
+                        .await?;
+                }
+                Ok((IdleWaitResult::Interrupted, _)) => {
+                    info!("IDLE interrupted, exiting");
+                    return Ok(());
+                }
+                Err(e) => {
+                    // Connection likely broken, need to reconnect
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    /// Fetch unseen messages and send to channel
+    #[cfg(feature = "email")]
+    #[cfg(test)]
+    async fn process_unseen<S: ImapStream>(
+        &self,
+        session: &mut Session<S>,
+        tx: &mpsc::Sender<ChannelMessage>,
+    ) -> Result<()> {
+        self.process_unseen_to(session, &EmailDelivery::Legacy(tx), 0)
+            .await
+    }
+
+    #[cfg(feature = "email")]
+    async fn process_unseen_to<S: ImapStream>(
+        &self,
+        session: &mut Session<S>,
+        delivery: &EmailDelivery<'_>,
+        uid_validity: u32,
+    ) -> Result<()> {
+        let messages = self.fetch_unseen(session, uid_validity).await?;
+
+        for email in messages {
+            let uid = email._uid;
+            let message_id = email.msg_id.clone();
+            // Check allowlist
+            if !self.is_sender_allowed(&email.sender) {
+                warn!("Blocked email from {}", email.sender);
+                self.mark_uid_seen(session, uid).await?;
+                continue;
+            }
+
+            if self.seen_messages.lock().await.contains(&email.msg_id) {
+                self.mark_uid_seen(session, uid).await?;
+                continue;
+            }
+
+            let accepted = match delivery {
+                #[cfg(test)]
+                EmailDelivery::Legacy(tx) => self.dispatch_email(email, tx).await,
+                EmailDelivery::Typed(sink) => {
+                    self.dispatch_typed_email(&email, *sink).await?;
+                    true
+                }
+            };
+            if !accepted {
+                // Channel closed, exit cleanly
+                return Ok(());
+            }
+
+            self.seen_messages.lock().await.insert(message_id);
+            self.mark_uid_seen(session, uid).await?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "email")]
+    async fn mark_uid_seen<S: ImapStream>(&self, session: &mut Session<S>, uid: u32) -> Result<()> {
+        if uid == 0 {
+            return Ok(());
+        }
+        session
+            .run_command_and_check_ok(format!("UID STORE {uid} +FLAGS (\\Seen)"))
+            .await?;
+        Ok(())
+    }
+
+    fn create_smtp_transport(&self) -> Result<SmtpTransport> {
+        let creds = Credentials::new(self.config.username.clone(), self.config.password.clone());
+        let transport = if self.config.smtp_tls {
+            SmtpTransport::relay(&self.config.smtp_host)?
+                .port(self.config.smtp_port)
+                .credentials(creds)
+                .build()
+        } else {
+            SmtpTransport::builder_dangerous(&self.config.smtp_host)
+                .port(self.config.smtp_port)
+                .credentials(creds)
+                .build()
+        };
+        Ok(transport)
+    }
+
+    /// This channel's SMTP account as per-call [`SmtpCredentials`], for the
+    /// async [`crate::providers::mail::MailSender`] seam.
+    ///
+    /// `smtp_tls` maps to implicit TLS ([`SmtpSecurity::Ssl`]) and its absence to
+    /// a plaintext connection ([`SmtpSecurity::None`]) — the same two transports
+    /// the blocking [`Self::send_message`] path builds. `from_address` is used
+    /// as given, so a `Name <addr>` form keeps its display name.
+    pub fn smtp_credentials(&self) -> SmtpCredentials {
+        SmtpCredentials {
+            host: self.config.smtp_host.clone(),
+            port: self.config.smtp_port,
+            security: if self.config.smtp_tls {
+                SmtpSecurity::Ssl
+            } else {
+                SmtpSecurity::None
+            },
+            username: self.config.username.clone(),
+            password: MailSecret::new(self.config.password.clone()),
+            from_name: String::new(),
+            from_email: self.config.from_address.clone(),
+        }
+    }
+
+    /// This channel's IMAP login as per-call [`ImapCredentials`], for the
+    /// [`MailReceiver`](crate::providers::mail::MailReceiver) seam.
+    pub fn imap_credentials(&self) -> ImapCredentials {
+        ImapCredentials {
+            host: self.config.imap_host.clone(),
+            port: self.config.imap_port,
+            username: self.config.username.clone(),
+            password: MailSecret::new(self.config.password.clone()),
+        }
+    }
+
+    pub fn send_message(&self, email: Message) -> Result<()> {
+        let transport = self.create_smtp_transport()?;
+        transport.send(&email)?;
+        info!("Email sent");
+        Ok(())
+    }
+
+    pub fn build_plain_message(
+        &self,
+        recipient: &str,
+        subject: &str,
+        body: &str,
+    ) -> Result<Message> {
+        Message::builder()
+            .from(self.config.from_address.parse()?)
+            .to(recipient.parse()?)
+            .subject(subject)
+            .singlepart(SinglePart::plain(body.to_string()))
+            .map_err(Into::into)
+    }
+
+    pub fn build_message_with_attachment(
+        &self,
+        recipient: &str,
+        subject: &str,
+        body: &str,
+        attachment_name: &str,
+        content_type: ContentType,
+        attachment_bytes: Vec<u8>,
+    ) -> Result<Message> {
+        let attachment =
+            Attachment::new(attachment_name.to_string()).body(attachment_bytes, content_type);
+        Message::builder()
+            .from(self.config.from_address.parse()?)
+            .to(recipient.parse()?)
+            .subject(subject)
+            .multipart(
+                MultiPart::mixed()
+                    .singlepart(SinglePart::plain(body.to_string()))
+                    .singlepart(attachment),
+            )
+            .map_err(Into::into)
+    }
+}
+
+/// Internal struct for parsed email data
 #[cfg(feature = "email")]
 struct ParsedEmail {
     _uid: u32,
@@ -195,6 +820,48 @@ impl IdleWaitResult {
 #[cfg(feature = "email")]
 #[cfg(feature = "email")]
 impl EmailChannel {
+    /// Translate the bounded IMAP probe into the status vocabulary used by
+    /// native adapters, keeping Email's real health semantics on the typed
+    /// path as well as the legacy compatibility path.
+    async fn typed_health_state<S: ImapStream>(
+        &self,
+        connect: impl std::future::Future<Output = Result<Session<S>>>,
+        limit: Duration,
+    ) -> &'static str {
+        if self.health_check_with(connect, limit).await {
+            "healthy"
+        } else {
+            "unhealthy"
+        }
+    }
+
+    /// Bounded IMAP login probe over any session source.
+    async fn health_check_with<S: ImapStream>(
+        &self,
+        connect: impl std::future::Future<Output = Result<Session<S>>>,
+        limit: Duration,
+    ) -> bool {
+        // One deadline covers connection, authentication, and best-effort
+        // logout. A server that accepts credentials but stalls during logout
+        // must not make typed status hang indefinitely.
+        let deadline = Instant::now() + limit;
+        match timeout_at(deadline, connect).await {
+            Ok(Ok(mut session)) => {
+                // A successful login is healthy even if cleanup cannot finish
+                // before the deadline; logout is only resource cleanup.
+                let _ = timeout_at(deadline, session.logout()).await;
+                true
+            }
+            Ok(Err(e)) => {
+                debug!("Health check failed: {}", e);
+                false
+            }
+            Err(_) => {
+                debug!("Health check timed out");
+                false
+            }
+        }
+    }
 }
 
 #[cfg(feature = "email")]
