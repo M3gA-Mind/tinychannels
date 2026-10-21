@@ -359,7 +359,7 @@ async fn lark_image_and_message_receipt_failures_keep_delivery_certainty() {
         } else if request.target.starts_with("/open-apis/im/v1/messages?") {
             match server_message_attempts.fetch_add(1, Ordering::SeqCst) {
                 0 => (200, r#"{"code":0,"data":{}}"#.into()),
-                1 => (400, r#"{"code":99991663,"msg":"rejected"}"#.into()),
+                1 => (400, r#"{"code":230001,"msg":"rejected"}"#.into()),
                 2 => (500, r#"{"code":99991663,"msg":"server error"}"#.into()),
                 _ => (200, "not-json".into()),
             }
@@ -1249,9 +1249,9 @@ async fn a_second_token_expired_response_is_known_unsent() {
     .await
     .unwrap_err();
     let typed = typed_send_error(&error);
-    assert_eq!(typed.kind, tinychannels_bus::channel::SendErrorKind::BadFormat);
+    assert_eq!(typed.kind, tinychannels_bus::channel::SendErrorKind::Transient);
     assert!(!typed.sent_before_error);
-    assert!(!typed.retryable);
+    assert!(typed.retryable);
     assert_eq!(tokens.load(Ordering::SeqCst), 2);
     assert_eq!(sends.load(Ordering::SeqCst), 2);
 }
