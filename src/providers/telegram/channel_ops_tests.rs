@@ -380,9 +380,10 @@ impl TelegramWireFixture {
         self.events.inbounds.lock().unwrap().clear();
         let channel = self.channel.clone();
         let events = self.events.clone();
-        let listener = tokio::spawn(async move {
-            ChannelAdapter::start(channel.as_ref(), events.as_ref()).await
-        });
+        let listener =
+            tokio::spawn(
+                async move { ChannelAdapter::start(channel.as_ref(), events.as_ref()).await },
+            );
         let capture = tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
                 self.events.notified.notified().await;
@@ -1089,7 +1090,8 @@ fn outbound_voice_message(
 
 #[test]
 fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() {
-    let without_store = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).declared_capabilities();
+    let without_store =
+        TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).declared_capabilities();
     assert!(!without_store.voice_in.supported);
     assert!(!without_store.voice_out.supported);
     assert!(!without_store.voice_out.synthesis);
@@ -1138,7 +1140,8 @@ fn telegram_voice_capabilities_preserve_base_text_and_stream_descriptor() {
 
 #[test]
 fn telegram_advertises_typed_media_only_with_scoped_storage() {
-    let unavailable = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).declared_capabilities();
+    let unavailable =
+        TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).declared_capabilities();
     assert!(!unavailable.content.image.outbound);
     assert!(!unavailable.content.file.inbound);
 
@@ -1825,12 +1828,10 @@ async fn send_draft_without_message_id_in_result_returns_none() {
     mount_post(&server, "sendMessage", ok_with(serde_json::json!({}))).await;
     let ch = streaming(&server);
 
-    let id = ChannelStreamingDraft::start_draft(
-        &ch,
-        draft_text_intent("thinking", "100", None, None),
-    )
-    .await
-    .unwrap();
+    let id =
+        ChannelStreamingDraft::start_draft(&ch, draft_text_intent("thinking", "100", None, None))
+            .await
+            .unwrap();
     assert_eq!(id, None);
     assert_eq!(
         json_bodies(&server, "sendMessage").await[0]["text"],
@@ -1849,10 +1850,7 @@ async fn send_draft_surfaces_api_rejection() {
     .await;
     let ch = streaming(&server);
 
-    let err = ChannelStreamingDraft::start_draft(
-        &ch,
-        draft_text_intent("x", "100", None, None),
-    )
+    let err = ChannelStreamingDraft::start_draft(&ch, draft_text_intent("x", "100", None, None))
         .await
         .unwrap_err()
         .to_string();
@@ -3989,13 +3987,9 @@ async fn update_draft_truncates_oversized_text_to_limit() {
     let ch = streaming(&server);
     let text = "é".repeat(TELEGRAM_MAX_MESSAGE_LENGTH);
 
-    ChannelStreamingDraft::update_draft(
-        &ch,
-        "12",
-        draft_text_intent(&text, "100", None, None),
-    )
-    .await
-    .unwrap();
+    ChannelStreamingDraft::update_draft(&ch, "12", draft_text_intent(&text, "100", None, None))
+        .await
+        .unwrap();
 
     let sent = json_bodies(&server, "editMessageText").await[0]["text"]
         .as_str()
@@ -4020,13 +4014,9 @@ async fn update_draft_rejection_is_swallowed_and_not_recorded() {
     .await;
     let ch = streaming(&server);
 
-    ChannelStreamingDraft::update_draft(
-        &ch,
-        "12",
-        draft_text_intent("same", "100", None, None),
-    )
-    .await
-    .unwrap();
+    ChannelStreamingDraft::update_draft(&ch, "12", draft_text_intent("same", "100", None, None))
+        .await
+        .unwrap();
     assert!(!ch.last_draft_edit.lock().contains_key("100"));
 }
 
@@ -4034,13 +4024,9 @@ async fn update_draft_rejection_is_swallowed_and_not_recorded() {
 async fn update_draft_invalid_message_id_skips_network() {
     let server = mock_api().await;
     let ch = streaming(&server);
-    ChannelStreamingDraft::update_draft(
-        &ch,
-        "abc",
-        draft_text_intent("text", "100", None, None),
-    )
-    .await
-    .unwrap();
+    ChannelStreamingDraft::update_draft(&ch, "abc", draft_text_intent("text", "100", None, None))
+        .await
+        .unwrap();
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -4058,8 +4044,8 @@ async fn finalize_draft_edits_with_markdown_and_clears_rate_limit() {
         "8",
         draft_text_intent("done <tool_call>{}</tool_call>", "100", None, None),
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
 
     let bodies = json_bodies(&server, "editMessageText").await;
     assert_eq!(bodies.len(), 1);
@@ -4089,8 +4075,8 @@ async fn finalize_draft_retries_plain_edit_when_markdown_rejected() {
         "8",
         draft_text_intent("final *text", "100", None, None),
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
 
     let bodies = json_bodies(&server, "editMessageText").await;
     assert_eq!(bodies.len(), 2);
@@ -4110,8 +4096,8 @@ async fn finalize_draft_falls_back_to_new_message_when_edits_fail() {
         "8",
         draft_text_intent("final", "100:4", Some("77"), Some("4")),
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
 
     assert_eq!(json_bodies(&server, "editMessageText").await.len(), 2);
     let sent = json_bodies(&server, "sendMessage").await;
@@ -4132,8 +4118,8 @@ async fn finalize_draft_short_text_with_invalid_id_sends_new_message() {
         "nope",
         draft_text_intent("final", "100", None, None),
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
 
     assert!(json_bodies(&server, "editMessageText").await.is_empty());
     assert_eq!(sent_texts(&server).await, vec!["final".to_string()]);
@@ -4147,13 +4133,9 @@ async fn finalize_draft_oversized_text_deletes_draft_and_sends_chunks() {
     let ch = streaming(&server);
     let text = "y".repeat(TELEGRAM_MAX_MESSAGE_LENGTH + 1);
 
-    ChannelStreamingDraft::finalize_draft(
-        &ch,
-        "8",
-        draft_text_intent(&text, "100", None, None),
-    )
-    .await
-    .unwrap();
+    ChannelStreamingDraft::finalize_draft(&ch, "8", draft_text_intent(&text, "100", None, None))
+        .await
+        .unwrap();
 
     assert_eq!(
         json_bodies(&server, "deleteMessage").await,
@@ -4169,13 +4151,9 @@ async fn finalize_draft_oversized_text_with_invalid_id_sends_chunks_only() {
     let ch = streaming(&server);
     let text = "y".repeat(TELEGRAM_MAX_MESSAGE_LENGTH + 1);
 
-    ChannelStreamingDraft::finalize_draft(
-        &ch,
-        "bad",
-        draft_text_intent(&text, "100", None, None),
-    )
-    .await
-    .unwrap();
+    ChannelStreamingDraft::finalize_draft(&ch, "bad", draft_text_intent(&text, "100", None, None))
+        .await
+        .unwrap();
 
     assert!(json_bodies(&server, "deleteMessage").await.is_empty());
     assert_eq!(json_bodies(&server, "sendMessage").await.len(), 2);
@@ -5384,10 +5362,7 @@ fn telegram_declares_remote_control_approvals_and_proactive_defaults() {
     assert!(capabilities.remote_control);
     assert!(capabilities.chat_approvals);
     assert!(capabilities.history_key_ignores_thread);
-    assert_eq!(
-        ChannelAdapter::proactive_target(&ch),
-        ch.proactive_target()
-    );
+    assert_eq!(ChannelAdapter::proactive_target(&ch), ch.proactive_target());
 }
 
 #[tokio::test]

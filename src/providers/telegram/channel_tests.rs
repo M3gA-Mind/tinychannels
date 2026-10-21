@@ -3,8 +3,8 @@ use super::super::text::{
     TELEGRAM_MAX_MESSAGE_LENGTH, split_message_for_telegram, strip_tool_call_tags,
 };
 use super::TelegramChannel;
-use crate::config::StreamMode;
 use crate::channel::{ChannelAdapter, ChannelStreamingDraft, ChannelTyping};
+use crate::config::StreamMode;
 use std::path::Path;
 use std::time::Duration;
 
@@ -39,7 +39,12 @@ fn proactive_target_uses_configured_chat_id() {
 #[test]
 fn typing_handle_starts_as_none() {
     let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-    assert!(ch.declared_capabilities().actions.supported.contains(&"typing".into()));
+    assert!(
+        ch.declared_capabilities()
+            .actions
+            .supported
+            .contains(&"typing".into())
+    );
 }
 
 #[tokio::test]
@@ -51,12 +56,13 @@ async fn typed_stop_typing_is_idempotent() {
 #[test]
 fn supports_draft_updates_respects_stream_mode() {
     let off = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-    assert!(!off
-        .declared_capabilities()
-        .actions
-        .supported
-        .iter()
-        .any(|action| action == "draft-update"));
+    assert!(
+        !off.declared_capabilities()
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "draft-update")
+    );
 
     let partial = TelegramChannel::new("fake-token".into(), vec!["*".into()], false)
         .with_streaming(StreamMode::Partial, 750, true);
@@ -100,12 +106,9 @@ async fn update_draft_rate_limit_short_circuits_network() {
         .lock()
         .insert("123".to_string(), std::time::Instant::now());
 
-    let result = ChannelStreamingDraft::update_draft(
-        &ch,
-        "42",
-        draft_intent("delta text", "123", None),
-    )
-    .await;
+    let result =
+        ChannelStreamingDraft::update_draft(&ch, "42", draft_intent("delta text", "123", None))
+            .await;
     assert!(result.is_ok());
 }
 

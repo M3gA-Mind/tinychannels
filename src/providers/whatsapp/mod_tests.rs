@@ -984,8 +984,10 @@ mod v2 {
             .expect(1)
             .mount(&server)
             .await;
-        #[allow(deprecated, reason = "the v21 text send is under test")]
-        Channel::send(&channel(&server), &SendMessage::new("hi", "+15551234567"))
+        crate::provider_test_support::send_v1(
+            &channel(&server),
+            &SendMessage::new("hi", "+15551234567"),
+        )
             .await
             .unwrap();
     }
@@ -1044,7 +1046,7 @@ mod v2 {
             .await;
         let channel = channel(&server);
         // No inbound message yet: nothing to anchor the indicator to.
-        let error = Channel::start_typing(&channel, "+15550001111")
+        let error = crate::channel::ChannelTyping::start_typing(&channel, "+15550001111")
             .await
             .unwrap_err();
         assert!(error.downcast_ref::<WaFailure>().is_some());
@@ -1056,13 +1058,15 @@ mod v2 {
             .anchors
             .lock()
             .insert("+15550001111", "wamid.anchor");
-        Channel::start_typing(&channel, "+15550001111")
+        crate::channel::ChannelTyping::start_typing(&channel, "+15550001111")
             .await
             .unwrap();
-        Channel::stop_typing(&channel, "+15550001111")
+        crate::channel::ChannelTyping::stop_typing(&channel, "+15550001111")
             .await
             .unwrap();
-        assert!(Channel::start_typing(&channel, "no digits").await.is_err());
+        assert!(crate::channel::ChannelTyping::start_typing(&channel, "no digits")
+            .await
+            .is_err());
         crate::channel::ChannelTyping::stop_typing(&channel, "+15550001111")
             .await
             .unwrap();
@@ -1077,10 +1081,24 @@ mod v2 {
             value: "👍".into(),
             custom_emoji_id: None,
         };
-        Channel::send_reaction(&channel, &conversation(), "wamid.t", &thumbs, false)
+        crate::channel::ChannelReaction::send_reaction(
+            &channel,
+            &ChannelRef { id: "whatsapp".into(), account_id: None },
+            &conversation(),
+            "wamid.t",
+            &thumbs,
+            false,
+        )
             .await
             .unwrap();
-        Channel::send_reaction(&channel, &conversation(), "wamid.t", &thumbs, true)
+        crate::channel::ChannelReaction::send_reaction(
+            &channel,
+            &ChannelRef { id: "whatsapp".into(), account_id: None },
+            &conversation(),
+            "wamid.t",
+            &thumbs,
+            true,
+        )
             .await
             .unwrap();
         let bodies: Vec<serde_json::Value> = server
@@ -1101,15 +1119,23 @@ mod v2 {
         let blank = tinychannels_bus::ChannelReaction::default();
         for (reaction, unsupported) in [(&custom, true), (&blank, false)] {
             let error =
-                Channel::send_reaction(&channel, &conversation(), "wamid.t", reaction, false)
+                crate::channel::ChannelReaction::send_reaction(
+                    &channel,
+                    &ChannelRef { id: "whatsapp".into(), account_id: None },
+                    &conversation(),
+                    "wamid.t",
+                    reaction,
+                    false,
+                )
                     .await
                     .unwrap_err();
             let failure = error.downcast_ref::<WaFailure>().unwrap();
             assert_eq!(matches!(failure, WaFailure::Unsupported(_)), unsupported);
         }
         assert!(
-            Channel::send_reaction(
+            crate::channel::ChannelReaction::send_reaction(
                 &channel,
+                &ChannelRef { id: "whatsapp".into(), account_id: None },
                 &ConversationRef {
                     id: "name".into(),
                     ..Default::default()
@@ -1170,7 +1196,7 @@ mod v2 {
         let server = MockServer::start().await;
         accept_messages(&server).await;
         let channel = channel(&server);
-        Channel::mark_read(&channel, &conversation(), "wamid.in")
+        crate::channel::ChannelAdapter::mark_read(&channel, &conversation(), "wamid.in")
             .await
             .unwrap();
         let body: serde_json::Value =
@@ -1178,7 +1204,7 @@ mod v2 {
         assert_eq!(body["status"], "read");
         assert!(body.get("typing_indicator").is_none());
         assert!(
-            Channel::mark_read(&channel, &conversation(), " ")
+            crate::channel::ChannelAdapter::mark_read(&channel, &conversation(), " ")
                 .await
                 .is_err()
         );

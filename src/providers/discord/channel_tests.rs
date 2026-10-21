@@ -623,8 +623,17 @@ fn channel_at(base: &str, channel_id: Option<&str>) -> DiscordChannel {
 
 fn outbound(content: &str, recipient: &str) -> tinychannels_bus::ChannelOutboundIntent {
     tinychannels_bus::ChannelOutboundIntent {
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "discord".into(),
+            account_id: None,
+        }),
         channel_id: "discord".into(),
         conversation_id: recipient.into(),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Channel,
+            id: recipient.into(),
+            ..Default::default()
+        }),
         payload: tinychannels_bus::OutboundPayload::Text {
             text: content.into(),
         },
