@@ -130,6 +130,11 @@ impl NativeProvider for QQChannel {
                 }
                 _ => {}
             }
+        } else if target.conversation.kind == ConversationKind::Unknown {
+            // The one-release v1 send shape used an unprefixed recipient for
+            // direct messages. Keep that boundary behavior while requiring
+            // typed callers to identify groups explicitly.
+            target.conversation.kind = ConversationKind::Dm;
         }
         Ok(target)
     }
