@@ -503,26 +503,10 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
 
 struct ManagedConformanceChannel(tinychannels_bus::ChannelCapabilities);
 
-#[async_trait::async_trait]
-#[allow(deprecated, reason = "managed fixture exposes module capability facts")]
-impl tinychannels::Channel for ManagedConformanceChannel {
-    fn name(&self) -> &str {
-        "mattermost"
-    }
-
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+impl crate::provider::TestProviderBehavior for ManagedConformanceChannel {
+    fn test_provider_id(&self) -> &'static str { "mattermost" }
+    fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         self.0.clone()
-    }
-
-    async fn send(&self, _message: &tinychannels::SendMessage) -> anyhow::Result<()> {
-        anyhow::bail!("managed output must use the host callback")
-    }
-
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        std::future::pending().await
     }
 }
 
@@ -546,7 +530,7 @@ impl ManagedConformanceFixture {
             .actions
             .supported
             .extend(["edit", "thread-create", "thread-update", "thread-list"].map(str::to_owned));
-        let running = Running::start_outbound(
+        let running = Running::start_test_outbound(
             Arc::new(ManagedConformanceChannel(capabilities)),
             Arc::new(crate::provider::Hooks::default()),
             host.clone(),
