@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tinychannels_bus::ChannelCapabilities;
 use tinychannels_bus::channel::ChannelSendError;
 #[cfg(test)]
-use tinychannels_bus::{ChannelRef, ConversationRef};
+use tinychannels_bus::{ChannelRef, ConversationRef, MediaKind};
 
 #[async_trait]
 impl NativeProvider for LarkChannel {

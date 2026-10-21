@@ -1,11 +1,6 @@
 //! Native typed attachment delivery for Mattermost's v4 files and posts API.
 
 use super::super::long_tail::LongTail;
-#[cfg(test)]
-use super::outbound::{
-    channel_id, http_error, mattermost_emoji_name, mattermost_request_error,
-    mattermost_status_error,
-};
 use super::{MAX_FILE_BYTES, MAX_VOICE_BYTES, MattermostChannel};
 use crate::host::{MediaRepository, VoiceMediaStore};
 use crate::providers::native::{Address, Limits, NativeProvider, Sent, Step, Target};
