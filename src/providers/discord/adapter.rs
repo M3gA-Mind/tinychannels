@@ -81,6 +81,8 @@ impl DiscordChannel {
             "reply",
             "thread-reply",
             "thread-create",
+            "thread-update",
+            "thread-list",
             "react",
             "reactions",
         ]

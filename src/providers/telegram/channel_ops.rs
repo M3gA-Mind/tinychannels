@@ -1769,6 +1769,9 @@ impl Channel for TelegramChannel {
         if thread_id {
             actions.push("thread-reply".into());
         }
+        // The module controller also exposes Bot API forum-topic lifecycle
+        // operations for configured chats. Telegram cannot list topics.
+        actions.extend(["thread-create".into(), "thread-update".into()]);
         actions.extend(["react".into(), "reactions".into()]);
         let mut parts = vec!["text".into()];
         parts.extend([
