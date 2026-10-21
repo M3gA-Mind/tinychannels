@@ -429,7 +429,12 @@ impl SlackChannel {
         };
         let conversation = Self::conversation_ref(channel, None, None);
         self.publish_event(
-            Self::channel_event(event_id, ts_to_ms(event_ts), Some(conversation), kind),
+            Self::channel_event(
+                event_id.clone(),
+                ts_to_ms(event_ts),
+                Some(conversation),
+                kind,
+            ),
             typed_sink,
         )
         .await?;
