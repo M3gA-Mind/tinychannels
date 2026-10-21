@@ -640,7 +640,7 @@ async fn stream_audio_callback_stores_provider_voice_and_acknowledges_frame() {
 #[tokio::test]
 async fn unauthorized_attachment_callback_is_not_downloaded_or_published() {
     use super::super::http_test_support::HttpsServer;
-    use crate::providers::native::fixtures::{RecordingEvents, StubMedia};
+    use crate::providers::native::fixtures::StubMedia;
     use serde_json::json;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -659,7 +659,7 @@ async fn unauthorized_attachment_callback_is_not_downloaded_or_published() {
     )
     .await;
     let media = Arc::new(StubMedia::default());
-    let events = Arc::new(RecordingEvents::delivering());
+    let (sink, mut ingress_rx) = dingtalk_inbound_sink();
     let channel = Arc::new(
         DingTalkChannel::with_http_client(
             "id".into(),
@@ -668,8 +668,7 @@ async fn unauthorized_attachment_callback_is_not_downloaded_or_published() {
             server.client.clone(),
         )
         .with_attachment_http_client(server.client.clone())
-        .with_media_repository(media.clone())
-        .with_events(events.clone()),
+        .with_media_repository(media.clone()),
     );
     let websocket = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
@@ -703,10 +702,10 @@ async fn unauthorized_attachment_callback_is_not_downloaded_or_published() {
         .unwrap();
         ws.close(None).await.unwrap();
     });
-    let (tx, _legacy) = tokio::sync::mpsc::channel(1);
     let listening_channel = channel.clone();
+    let listening_sink = sink.clone();
     let listening = tokio::spawn(async move {
-        crate::provider_test_support::listen_v1(listening_channel.as_ref(), tx).await
+        listening_channel.start(listening_sink.as_ref()).await
     });
     websocket.await.unwrap();
     assert!(
@@ -716,7 +715,7 @@ async fn unauthorized_attachment_callback_is_not_downloaded_or_published() {
             .unwrap()
             .is_err()
     );
-    assert!(events.inbound().is_empty());
+    assert!(ingress_rx.try_recv().is_err());
     assert!(media.stored.lock().unwrap().is_empty());
     let requests = server.requests.lock().unwrap();
     assert_eq!(requests.len(), 1, "only gateway registration is expected");
