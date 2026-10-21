@@ -1922,13 +1922,8 @@ Ensure only one `openhuman` process is using this bot token."
                             tracing::debug!("dropped Telegram callback from a disallowed user");
                             continue;
                         }
-                        if let (Some(event), Some(events)) =
-                            (Self::callback_event(update), &self.events)
-                            && let Err(error) = events
-                                .publish_ingress(tinychannels_bus::ChannelIngress::Event(event))
-                                .await
-                        {
-                            tracing::debug!(%error, "failed to deliver Telegram button callback");
+                        if let Some(event) = Self::callback_event(update) {
+                            self.deliver_listener_event(typed_sink, event).await?;
                         }
                         continue;
                     }
@@ -1944,7 +1939,7 @@ Ensure only one `openhuman` process is using this bot token."
                                     emoji = reaction.emoji,
                                     "Telegram reaction received"
                                 );
-                                if let Some(events) = &self.events {
+                                if typed_sink.is_some() || self.events.is_some() {
                                     let source_id = reaction.update_id.clone();
                                     let conversation = tinychannels_bus::ConversationRef {
                                         kind: reaction.conversation_kind,
@@ -2031,14 +2026,7 @@ Ensure only one `openhuman` process is using this bot token."
                                         conversation: Some(conversation),
                                         event: reaction_kind,
                                     };
-                                    if let Err(error) = events
-                                        .publish_ingress(tinychannels_bus::ChannelIngress::Event(
-                                            event,
-                                        ))
-                                        .await
-                                    {
-                                        tracing::debug!(%error, "failed to deliver Telegram reaction event");
-                                    }
+                                    self.deliver_listener_event(typed_sink, event).await?;
                                 }
                             }
                             continue;
@@ -2051,7 +2039,7 @@ Ensure only one `openhuman` process is using this bot token."
                     // host event sink is installed.
                     if let Some(edited) = update.get("edited_message") {
                         if let Some(message) = self.parse_update_message(update)
-                            && let Some(events) = &self.events
+                            && (typed_sink.is_some() || self.events.is_some())
                         {
                             let source_id = update
                                 .get("update_id")
@@ -2112,12 +2100,7 @@ Ensure only one `openhuman` process is using this bot token."
                                     }],
                                 },
                             };
-                            if let Err(error) = events
-                                .publish_ingress(tinychannels_bus::ChannelIngress::Event(event))
-                                .await
-                            {
-                                tracing::debug!(%error, "failed to deliver Telegram edit event");
-                            }
+                            self.deliver_listener_event(typed_sink, event).await?;
                         }
                         continue;
                     }
@@ -2148,22 +2131,17 @@ Ensure only one `openhuman` process is using this bot token."
                     };
                     let ingress =
                         Self::inbound_envelope_with_media(update, &msg, voice_note, media_parts);
-                    let delivered_by_event_sink = if let Some(events) = &self.events {
-                        match events
-                            .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(ingress))
-                            .await
-                        {
-                            Ok(delivered) => delivered,
-                            Err(error) => {
-                                tracing::debug!(%error, "failed to deliver Telegram inbound through module ingress");
-                                return Err(error);
-                            }
-                        }
+                    let delivered = if typed_sink.is_some() || self.events.is_some() {
+                        self.deliver_listener_inbound(typed_sink, ingress).await?
                     } else {
                         false
                     };
-                    if !delivered_by_event_sink && legacy_tx.as_ref().expect("legacy listener has a sender").send(msg).await.is_err() {
-                        return Ok(());
+                    if !delivered {
+                        if let Some(tx) = &legacy_tx {
+                            if tx.send(msg).await.is_err() {
+                                return Ok(());
+                            }
+                        }
                     }
                 }
             }
