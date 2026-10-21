@@ -3758,7 +3758,8 @@ async fn configured_telegram_native_adapter_owns_polling_typing_drafts_and_scope
     let instance = "telegram:account-b".to_owned();
     let channel = Arc::new(
         tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
-            .with_api_base_for_test(server.uri()),
+            .with_api_base_for_test(server.uri())
+            .with_streaming(tinychannels_bus::config::StreamMode::Partial, 0, true),
     );
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
