@@ -104,7 +104,7 @@ pub use tinychannels_runtime::channel::{
     deprecated,
     reason = "re-export one-release v21 send compatibility adapter"
 )]
-pub use tinychannels_runtime::{Channel, ChannelSendExt, SendMessageExt, WebhookRejected};
+pub use tinychannels_runtime::WebhookRejected;
 // Re-exported separately so each can follow its provider's feature gate.
 #[cfg(feature = "email-send")]
 pub use providers::EmailChannel;

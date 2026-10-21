@@ -9,7 +9,7 @@ pub mod receipt;
 pub mod session;
 pub use tinychannels_bus::channel::types;
 
-pub use crate::traits::{Channel, ChannelMessage, ChannelSendExt, SendMessage, SendMessageExt};
+pub use crate::traits::{ChannelMessage, SendMessage};
 pub use adapter::{
     ChannelAdapter, ChannelDelete, ChannelDirectory, ChannelEdit, ChannelInboundSink,
     ChannelReaction, ChannelReceiveAckPolicy, ChannelResolver, ChannelSetup, ChannelStreamingDraft,
