@@ -594,7 +594,7 @@ async fn heartbeat_task_exits_when_disconnected_send_fails() {
 #[tokio::test]
 async fn listener_dispatches_push_then_stops_on_kickout_and_second_listen_is_noop() {
     use crate::channel::ChannelAdapter;
-    use crate::providers::yuanbao::connection::test_support::{MockGateway, gateway_config};
+    use crate::providers::yuanbao::connection::test_support::MockGateway;
 
     let mut config = good_cfg();
     let gateway = MockGateway::bind().await;
@@ -653,10 +653,7 @@ async fn listener_dispatches_push_then_stops_on_kickout_and_second_listen_is_noo
 }
 
 #[tokio::test]
-async fn listener_stops_when_inbound_channel_closes() {
-    // The old receiver-close condition was private to the legacy listener
-    // seam. The typed adapter owns that receiver; exercise its equivalent
-    // public shutdown and verify the connection is joined.
+async fn listener_reconnects_when_gateway_connection_closes() {
     use crate::channel::ChannelAdapter;
     use crate::providers::yuanbao::connection::test_support::{MockGateway, gateway_config};
 
@@ -669,10 +666,17 @@ async fn listener_stops_when_inbound_channel_closes() {
         let sink = Arc::clone(&sink);
         tokio::spawn(async move { channel.start(sink.as_ref()).await })
     };
-    let _session =
+    let mut first_session =
         tokio::time::timeout(Duration::from_secs(3), gateway.accept_authed("disconnect"))
             .await
             .expect("typed listener should connect");
+    first_session
+        .send(tokio_tungstenite::tungstenite::Message::Close(None))
+        .await;
+    let _reconnected =
+        tokio::time::timeout(Duration::from_secs(3), gateway.accept_authed("reconnected"))
+            .await
+            .expect("typed listener should reconnect after a gateway disconnect");
     channel.stop().await.unwrap();
     tokio::time::timeout(Duration::from_secs(3), listener)
         .await
@@ -684,9 +688,28 @@ async fn listener_stops_when_inbound_channel_closes() {
 
 #[tokio::test]
 async fn listener_stops_when_shutdown_is_signaled() {
-    // `stop` is the supported typed shutdown signal; direct watch-channel
-    // mutation belonged to the removed compatibility listener.
-    listener_stops_when_inbound_channel_closes().await;
+    use crate::channel::ChannelAdapter;
+    use crate::providers::yuanbao::connection::test_support::{MockGateway, gateway_config};
+
+    let gateway = MockGateway::bind().await;
+    let channel = Arc::new(YuanbaoChannel::new(gateway_config(&gateway.url)).unwrap());
+    let (events, _received) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Arc::new(PublicAdapterSink(events));
+    let listener = {
+        let channel = Arc::clone(&channel);
+        let sink = Arc::clone(&sink);
+        tokio::spawn(async move { channel.start(sink.as_ref()).await })
+    };
+    let _session = tokio::time::timeout(Duration::from_secs(3), gateway.accept_authed("shutdown"))
+        .await
+        .expect("typed listener should connect");
+    channel.stop().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), listener)
+        .await
+        .expect("typed shutdown should join the listener")
+        .expect("listener should not panic")
+        .expect("listener should stop cleanly");
+    assert!(!channel.connection.is_connected());
 }
 
 #[derive(Clone)]
