@@ -729,6 +729,7 @@ impl WhatsAppWebChannel {
     /// transport the bot connects through and the HTTP client it fetches the
     /// app version with. Production passes the WebSocket transport and the
     /// ureq client; tests pass offline doubles.
+    #[cfg(test)]
     async fn listen_with<T, H>(
         &self,
         tx: tokio::sync::mpsc::Sender<ChannelMessage>,

@@ -28,6 +28,7 @@ pub(crate) const TELEGRAM_POLL_ERROR_BACKOFF: Duration = Duration::from_secs(5);
 /// Delay before re-polling `getUpdates` after an unresolved 409 conflict.
 pub(crate) const TELEGRAM_POLL_CONFLICT_BACKOFF: Duration = Duration::from_secs(2);
 
+#[cfg(test)]
 pub(crate) struct TelegramTypingTask {
     pub(crate) recipient: String,
     pub(crate) handle: tokio::task::JoinHandle<()>,
@@ -92,6 +93,7 @@ pub struct TelegramChannel {
     /// still applied but no event is published. Set via
     /// [`TelegramChannel::with_events`].
     pub(crate) events: Option<Arc<dyn crate::host::EventSink>>,
+    #[cfg(test)]
     pub(crate) typing_handle: Mutex<Option<TelegramTypingTask>>,
     pub(crate) stream_mode: StreamMode,
     pub(crate) draft_update_interval_ms: u64,

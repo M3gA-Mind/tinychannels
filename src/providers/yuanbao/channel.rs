@@ -388,6 +388,7 @@ impl YuanbaoChannel {
         }
         Ok(())
     }
+    #[cfg(test)]
     async fn dispatch_push(&self, frame: types::ConnFrame, tx: &mpsc::Sender<ChannelMessage>) {
         // The Yuanbao gateway pushes inbound messages with `cmd_type=Push`;
         // the actual `cmd` word is decided server-side and varies (mirrors
@@ -581,6 +582,7 @@ impl YuanbaoChannel {
         Ok(())
     }
 
+    #[cfg(test)]
     async fn publish_voice(&self, ctx: &super::inbound::PipelineCtx) -> bool {
         use crate::providers::native::inbound::publish;
         let Some(events) = self.native.events.as_ref() else {

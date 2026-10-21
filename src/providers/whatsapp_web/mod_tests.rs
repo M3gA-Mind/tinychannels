@@ -1096,7 +1096,6 @@ async fn without_usable_host_storage_the_session_falls_back_to_memory() {
 
 mod v2 {
     use super::*;
-    use crate::channel::ChannelAdapter as _;
     use crate::providers::whatsapp_shared::fakes::{CollectingSink, MemoryMedia, MemoryVoices};
     use crate::providers::whatsapp_web::fakes::{Call, RecordingClient, base_state};
     use tinychannels_bus::channel::{ChannelRef, ConversationRef};

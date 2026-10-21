@@ -603,6 +603,7 @@ impl TelegramChannel {
     /// One iteration of the background typing refresher: post the chat action
     /// and log (never fail) on rejection or transport error. Returns whether
     /// Telegram accepted the refresh.
+    #[cfg(test)]
     pub(crate) async fn refresh_typing_once(
         client: &reqwest::Client,
         url: &str,
