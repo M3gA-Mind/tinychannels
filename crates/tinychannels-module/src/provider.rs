@@ -19,7 +19,9 @@ use tokio::task::JoinHandle;
 pub(crate) trait TestProviderBehavior: Send + Sync {
     fn test_provider_id(&self) -> &'static str;
     fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        tinychannels_bus::ChannelCapabilities::unknown()
+        let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+        capabilities.content.text.outbound = true;
+        capabilities
     }
     async fn test_start(&self, _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync)) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { std::future::pending().await }
     fn test_media_account_identity(&self) -> Option<String> { None }

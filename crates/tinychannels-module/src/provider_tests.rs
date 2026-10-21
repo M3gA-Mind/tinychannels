@@ -2234,7 +2234,10 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
             })
             .await
     });
-    let command = commands.recv().await.expect("adapter dispatch");
+    let command = tokio::time::timeout(Duration::from_secs(2), commands.recv())
+        .await
+        .expect("adapter send dispatch timed out")
+        .expect("adapter dispatch");
     let outcome = Box::new(tinychannels_bus::channel::ChannelSendOutcome {
         receipt: tinychannels_bus::channel::MessageReceipt {
             primary_platform_message_id: Some("msg-1".into()),
@@ -3194,7 +3197,8 @@ fn a_fixed_media_scope_is_returned_as_configured_and_never_printed() {
 fn a_linked_session_binds_the_media_scope_only_once_it_knows_its_account() {
     let channel = Arc::new(IdentityChannel(std::sync::Mutex::new(None)));
     let scope = MediaScope::fixed(None);
-    scope.bind_source(&crate::provider::test_adapter(channel.clone()));
+    let adapter = crate::provider::test_adapter(channel.clone());
+    scope.bind_source(&adapter);
     // Linking has not happened: media fails closed.
     assert_eq!(scope.current(), None);
     *channel.0.lock().unwrap() = Some("15550001111@s.whatsapp.net".into());
@@ -3204,9 +3208,10 @@ fn a_linked_session_binds_the_media_scope_only_once_it_knows_its_account() {
     // and the same account always gets the same one.
     assert_eq!(scope.current().as_deref(), Some(first.as_str()));
     let other = MediaScope::fixed(None);
-    other.bind_source(&crate::provider::test_adapter(Arc::new(IdentityChannel(
+    let other_adapter = crate::provider::test_adapter(Arc::new(IdentityChannel(
         std::sync::Mutex::new(Some("15550002222@s.whatsapp.net".into())),
-    ))));
+    )));
+    other.bind_source(&other_adapter);
     assert_ne!(other.current().unwrap(), first);
     // If the provider withdraws the identity (a re-link to another account),
     // every later use fails closed again.
@@ -3217,9 +3222,10 @@ fn a_linked_session_binds_the_media_scope_only_once_it_knows_its_account() {
 #[test]
 fn a_configured_scope_wins_over_any_bound_source() {
     let scope = MediaScope::fixed(Some("fixed".into()));
-    scope.bind_source(&crate::provider::test_adapter(Arc::new(IdentityChannel(
+    let adapter = crate::provider::test_adapter(Arc::new(IdentityChannel(
         std::sync::Mutex::new(Some("someone".into())),
-    ))));
+    )));
+    scope.bind_source(&adapter);
     assert_eq!(scope.current().as_deref(), Some("fixed"));
 }
 
