@@ -75,41 +75,49 @@ async fn typed_test_provider_defaults_remain_explicitly_unsupported_and_stoppabl
         ..Default::default()
     };
     assert!(
-        ChannelAdapter::send(&adapter, intent.clone())
+        ChannelAdapter::send(adapter.as_ref(), intent.clone())
             .await
             .is_err()
     );
     let message = ChannelOutboundMessage::from_intent(&intent);
     assert!(
-        ChannelTypedSend::send_typed(&adapter, &message)
-            .await
-            .is_err()
-    );
-    assert!(ChannelTyping::start_typing(&adapter, "room").await.is_err());
-    assert!(ChannelTyping::stop_typing(&adapter, "room").await.is_err());
-    assert!(
-        ChannelStreamingDraft::start_draft(&adapter, intent.clone())
+        ChannelTypedSend::send_typed(adapter.as_ref(), &message)
             .await
             .is_err()
     );
     assert!(
-        ChannelStreamingDraft::update_draft(&adapter, "draft", intent.clone())
+        ChannelTyping::start_typing(adapter.as_ref(), "room")
             .await
             .is_err()
     );
     assert!(
-        ChannelStreamingDraft::finalize_draft(&adapter, "draft", intent.clone())
+        ChannelTyping::stop_typing(adapter.as_ref(), "room")
             .await
             .is_err()
     );
     assert!(
-        ChannelStreamingDraft::upsert_draft(&adapter, None, intent.clone())
+        ChannelStreamingDraft::start_draft(adapter.as_ref(), intent.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelStreamingDraft::update_draft(adapter.as_ref(), "draft", intent.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelStreamingDraft::finalize_draft(adapter.as_ref(), "draft", intent.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        ChannelStreamingDraft::upsert_draft(adapter.as_ref(), None, intent.clone())
             .await
             .is_err()
     );
     assert!(
         ChannelReaction::send_reaction(
-            &adapter,
+            adapter.as_ref(),
             &Default::default(),
             &Default::default(),
             "message",
@@ -120,12 +128,12 @@ async fn typed_test_provider_defaults_remain_explicitly_unsupported_and_stoppabl
         .is_err()
     );
     assert!(
-        ChannelEdit::edit(&adapter, &Default::default(), intent.clone())
+        ChannelEdit::edit(adapter.as_ref(), &Default::default(), intent.clone())
             .await
             .is_err()
     );
     assert!(
-        ChannelDelete::delete(&adapter, &Default::default())
+        ChannelDelete::delete(adapter.as_ref(), &Default::default())
             .await
             .is_err()
     );
