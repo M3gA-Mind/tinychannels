@@ -440,7 +440,7 @@ impl LongTailFixture {
                         .into_bytes(),
                 ),
                 ("POST", "/v1.0/oauth2/accessToken") => {
-                    (200, r#"{"accessToken":"fixture-token"}"#.into())
+                    (200, r#"{"accessToken":"fixture-token"}"#.as_bytes().to_vec())
                 }
                 ("POST", "/v1.0/robot/messageFiles/download") => (
                     200,
@@ -453,21 +453,22 @@ impl LongTailFixture {
                     include_bytes!("../../tests/fixtures/dingtalk/amrnb_mode0.amr").to_vec(),
                 ),
                 ("POST", target) if target.starts_with("/media/upload?") => {
-                    (200, r#"{"media_id":"dingtalk-uploaded-media"}"#.into())
+                    (200, r#"{"media_id":"dingtalk-uploaded-media"}"#.as_bytes().to_vec())
                 }
                 ("POST", "/v1.0/robot/groupMessages/send") => {
                     let id = counter.fetch_add(1, Ordering::SeqCst).to_string();
                     response_ids_for_server.lock().push(id.clone());
                     (200, json!({"processQueryKey":id}).to_string().into_bytes())
                 }
-                _ => (404, r#"{"message":"unexpected request}"#.into()),
+                _ => (404, r#"{"message":"unexpected request"}"#.as_bytes().to_vec()),
             },
             "audio/amr",
         )
         .await;
 
         let (callback_ready_tx, callback_ready_rx) = tokio::sync::oneshot::channel();
-        let (voice_tx, mut voice_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (voice_tx, mut voice_rx) =
+            tokio::sync::mpsc::unbounded_channel::<tokio::sync::oneshot::Sender<()>>();
         let stream = tokio::spawn(async move {
             let (socket, _) =
                 tokio::time::timeout(std::time::Duration::from_secs(8), stream_listener.accept())
@@ -1023,7 +1024,9 @@ impl AdapterFixture for LongTailFixture {
     fn observations(&self) -> Vec<WireObservation> {
         self.observed.lock().clone()
     }
+}
 
+impl LongTailFixture {
     async fn receive_dingtalk_voice_in(
         &self,
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
@@ -1107,10 +1110,8 @@ impl AdapterFixture for LongTailFixture {
             Some("turn left")
         );
         let server = self.fixed_server.as_ref().expect("DingTalk HTTPS fixture");
-        let download = server
-            .requests
-            .lock()
-            .unwrap()
+        let requests = server.requests.lock().unwrap();
+        let download = requests
             .iter()
             .find(|request| request.target == "/v1.0/robot/messageFiles/download")
             .expect("the configured adapter must fetch the incoming voice bytes");
@@ -1141,7 +1142,10 @@ impl AdapterFixture for LongTailFixture {
         });
         Ok(None)
     }
+}
 
+#[async_trait]
+impl AdapterFixture for LongTailFixture {
     async fn exercise(
         &self,
         feature: Feature,
