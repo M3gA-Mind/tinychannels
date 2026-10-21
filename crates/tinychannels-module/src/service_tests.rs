@@ -2692,10 +2692,7 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
         Request::Route {
         workspace_dir: ".".into(),
         message: serde_json::from_value(serde_json::json!({"id":"fixture","sender":"sender","reply_target":"chat","content":content,"channel":channel,"timestamp":1})).unwrap(),
-        capabilities: Some(tinychannels_bus::ChannelCapabilities {
-            remote_control: true,
-            ..Default::default()
-        }),
+        capabilities: None,
         route: RemoteRoute { provider: "old".into(), model: "model".into() }, history_len: 3,
         providers: vec![ProviderDescriptor { name: "approved".into(), aliases: vec!["alias".into()] }],
     }
