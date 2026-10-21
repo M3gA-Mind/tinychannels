@@ -1,4 +1,4 @@
-use crate::channel::ChannelStreamingDraft;
+use crate::channel::{ChannelStreamingDraft, ChannelTyping};
 use std::sync::Arc;
 use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
 

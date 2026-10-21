@@ -1,5 +1,5 @@
 use super::*;
-use crate::channel::ChannelAdapter;
+use crate::channel::{ChannelAdapter, ChannelTyping};
 
 #[cfg(feature = "whatsapp-web")]
 fn make_channel() -> WhatsAppWebChannel {

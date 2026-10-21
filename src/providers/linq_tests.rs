@@ -1,4 +1,5 @@
 use super::*;
+use crate::channel::{ChannelAdapter, ChannelTyping};
 
 fn make_channel() -> LinqChannel {
     LinqChannel::new(
