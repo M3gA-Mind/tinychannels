@@ -216,7 +216,8 @@ struct DingTalkStream {
     listener: tokio::task::JoinHandle<Result<(), ChannelSendError>>,
     stream: tokio::task::JoinHandle<()>,
     voice_tx: tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
-    ingress_rx: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<tinychannels_bus::ChannelIngress>>,
+    ingress_rx:
+        tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<tinychannels_bus::ChannelIngress>>,
 }
 
 struct FixtureHttpClients(reqwest::Client);
@@ -1016,12 +1017,15 @@ impl AdapterFixture for LongTailFixture {
     async fn receive_dingtalk_voice_in(
         &self,
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
-        let stream = self.dingtalk_stream.as_ref().ok_or_else(|| ChannelSendError {
-            kind: SendErrorKind::BadFormat,
-            message: "DingTalk voice ingress fixture is not configured".into(),
-            unsupported: true,
-            ..Default::default()
-        })?;
+        let stream = self
+            .dingtalk_stream
+            .as_ref()
+            .ok_or_else(|| ChannelSendError {
+                kind: SendErrorKind::BadFormat,
+                message: "DingTalk voice ingress fixture is not configured".into(),
+                unsupported: true,
+                ..Default::default()
+            })?;
         let (acknowledged_tx, acknowledged_rx) = tokio::sync::oneshot::channel();
         stream
             .voice_tx
@@ -1067,17 +1071,29 @@ impl AdapterFixture for LongTailFixture {
             });
         };
         assert_eq!(envelope.channel.id, "dingtalk");
-        assert_eq!(envelope.channel.account_id.as_deref(), Some("fixture-app-key"));
+        assert_eq!(
+            envelope.channel.account_id.as_deref(),
+            Some("fixture-app-key")
+        );
         assert_eq!(envelope.conversation.id, "chan1");
         assert_eq!(envelope.message_id, "voice-message-1");
-        let note = envelope.parts.iter().find_map(|part| match part {
-            tinychannels_bus::ContentPart::VoiceNote { voice_note } => Some(voice_note),
-            _ => None,
-        }).expect("configured DingTalk voice should be stored as a typed voice note");
-        assert_eq!(note.media.opaque_id.as_deref(), Some("dingtalk-conformance-voice"));
+        let note = envelope
+            .parts
+            .iter()
+            .find_map(|part| match part {
+                tinychannels_bus::ContentPart::VoiceNote { voice_note } => Some(voice_note),
+                _ => None,
+            })
+            .expect("configured DingTalk voice should be stored as a typed voice note");
+        assert_eq!(
+            note.media.opaque_id.as_deref(),
+            Some("dingtalk-conformance-voice")
+        );
         assert_eq!(note.media.kind, tinychannels_bus::MediaKind::Audio);
         assert_eq!(
-            note.transcript.as_ref().map(|transcript| transcript.text.as_str()),
+            note.transcript
+                .as_ref()
+                .map(|transcript| transcript.text.as_str()),
             Some("turn left")
         );
         let server = self.fixed_server.as_ref().expect("DingTalk HTTPS fixture");
