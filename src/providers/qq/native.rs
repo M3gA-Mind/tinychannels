@@ -262,7 +262,7 @@ impl NativeProvider for QQChannel {
             ..Default::default()
         })?;
         let _registration = super::ListenerRegistration { channel: self, id };
-        self.listen_owned(super::QQIngress::Typed(sink), Some(cancellation))
+        self.listen_owned(sink, Some(cancellation))
             .await
             .map_err(|error| {
                 tracing::debug!(%error, "QQ typed listener stopped");

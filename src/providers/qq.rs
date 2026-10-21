@@ -1,4 +1,3 @@
-use crate::traits::ChannelMessage;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::collections::HashSet;
