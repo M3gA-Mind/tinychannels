@@ -3,8 +3,8 @@ use tinychannels::factory::DefaultHttpClients;
 use tinychannels::host::NoopHost;
 use tinychannels_bus::config::{EmailConfig, IMessageConfig, LinqConfig, SignalConfig};
 
-#[test]
-fn a_configured_discord_account_builds_a_native_launch() {
+#[tokio::test]
+async fn a_configured_discord_account_starts_without_retaining_legacy_channel() {
     let host = NoopHost::arc();
     let config = ChannelsConfig {
         discord: Some(tinychannels_bus::config::DiscordConfig {
@@ -21,6 +21,30 @@ fn a_configured_discord_account_builds_a_native_launch() {
     let launch = build_native_v2("discord:work", &config, &host, &DefaultHttpClients)
         .expect("a configured Discord provider must start through its native adapter");
     assert_eq!(launch.provider_id, "discord");
+
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let _server = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let client = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let running = launch.start(
+        Arc::new(crate::provider::Hooks::default()),
+        crate::host::HostChannels::new(client),
+        None,
+        true,
+    );
+    assert!(
+        running.channel.is_none(),
+        "configured Discord launch must retain only its typed adapter"
+    );
+    assert_eq!(
+        running.adapter_handle().mode,
+        crate::provider::AdapterMode::DiscordNativeV2
+    );
+    running.stop().await.unwrap();
 }
 
 fn signal_config() -> ChannelsConfig {

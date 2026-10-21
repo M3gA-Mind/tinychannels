@@ -6,6 +6,11 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
+pub(super) enum GatewaySink {
+    Legacy(tokio::sync::mpsc::Sender<ChannelMessage>),
+    Typed(tokio::sync::mpsc::Sender<tinychannels_bus::ChannelIngress>),
+}
+
 /// GUILDS | GUILD_MESSAGES | GUILD_MESSAGE_REACTIONS | DIRECT_MESSAGES |
 /// DIRECT_MESSAGE_REACTIONS | MESSAGE_CONTENT.
 pub(super) const GATEWAY_INTENTS: u64 =
@@ -17,6 +22,17 @@ impl DiscordChannel {
         &self,
         tx: tokio::sync::mpsc::Sender<ChannelMessage>,
     ) -> anyhow::Result<()> {
+        self.run_gateway_to(GatewaySink::Legacy(tx)).await
+    }
+
+    pub(super) async fn run_gateway_typed(
+        &self,
+        tx: tokio::sync::mpsc::Sender<tinychannels_bus::ChannelIngress>,
+    ) -> anyhow::Result<()> {
+        self.run_gateway_to(GatewaySink::Typed(tx)).await
+    }
+
+    async fn run_gateway_to(&self, sink: GatewaySink) -> anyhow::Result<()> {
         let bot_user_id = Self::bot_user_id_from_token(&self.bot_token).unwrap_or_default();
 
         // Get Gateway URL
@@ -141,7 +157,7 @@ impl DiscordChannel {
                     let Some(d) = event.get("d") else {
                         continue;
                     };
-                    if !self.handle_dispatch(event_type, d, &bot_user_id, &tx).await {
+                    if !self.handle_dispatch_to(event_type, d, &bot_user_id, &sink).await {
                         break;
                     }
                 }
@@ -153,6 +169,7 @@ impl DiscordChannel {
 
     /// Route one dispatch event. Returns `false` once the legacy receiver is
     /// gone and the session should end.
+    #[cfg(test)]
     pub(super) async fn handle_dispatch(
         &self,
         event_type: &str,
@@ -160,22 +177,71 @@ impl DiscordChannel {
         bot_user_id: &str,
         tx: &tokio::sync::mpsc::Sender<ChannelMessage>,
     ) -> bool {
+        self.handle_dispatch_to(event_type, d, bot_user_id, &GatewaySink::Legacy(tx.clone()))
+            .await
+    }
+
+    async fn handle_dispatch_to(
+        &self,
+        event_type: &str,
+        d: &Value,
+        bot_user_id: &str,
+        sink: &GatewaySink,
+    ) -> bool {
         match event_type {
-            "MESSAGE_CREATE" => self.handle_message_create(d, bot_user_id, tx).await,
+            "MESSAGE_CREATE" => match sink {
+                GatewaySink::Legacy(tx) => self.handle_message_create(d, bot_user_id, tx).await,
+                GatewaySink::Typed(tx) => {
+                    self.handle_message_create_typed(d, bot_user_id, tx).await
+                }
+            },
             "MESSAGE_UPDATE" => {
-                self.handle_message_update(d, bot_user_id).await;
+                self.handle_message_update_to(
+                    d,
+                    bot_user_id,
+                    match sink {
+                        GatewaySink::Typed(tx) => Some(tx),
+                        GatewaySink::Legacy(_) => None,
+                    },
+                )
+                .await;
                 true
             }
             "MESSAGE_DELETE" => {
-                self.handle_message_delete(d).await;
+                self.handle_message_delete_to(
+                    d,
+                    match sink {
+                        GatewaySink::Typed(tx) => Some(tx),
+                        GatewaySink::Legacy(_) => None,
+                    },
+                )
+                .await;
                 true
             }
             "MESSAGE_REACTION_ADD" => {
-                self.handle_reaction(d, bot_user_id, true).await;
+                self.handle_reaction_to(
+                    d,
+                    bot_user_id,
+                    true,
+                    match sink {
+                        GatewaySink::Typed(tx) => Some(tx),
+                        GatewaySink::Legacy(_) => None,
+                    },
+                )
+                .await;
                 true
             }
             "MESSAGE_REACTION_REMOVE" => {
-                self.handle_reaction(d, bot_user_id, false).await;
+                self.handle_reaction_to(
+                    d,
+                    bot_user_id,
+                    false,
+                    match sink {
+                        GatewaySink::Typed(tx) => Some(tx),
+                        GatewaySink::Legacy(_) => None,
+                    },
+                )
+                .await;
                 true
             }
             "THREAD_CREATE" | "THREAD_UPDATE" => {
@@ -194,7 +260,14 @@ impl DiscordChannel {
                 true
             }
             "INTERACTION_CREATE" => {
-                self.handle_interaction(d).await;
+                self.handle_interaction_to(
+                    d,
+                    match sink {
+                        GatewaySink::Typed(tx) => Some(tx),
+                        GatewaySink::Legacy(_) => None,
+                    },
+                )
+                .await;
                 true
             }
             _ => true,
