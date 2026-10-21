@@ -1,18 +1,14 @@
 //! QQ typed delivery, receipts, and listener adapter.
 
-use super::media::file_type;
+use super::media::{DIRECT_UPLOAD_LIMIT, file_type};
 use super::{QQ_API_BASE, QQChannel};
 use crate::host::{MediaRepository, VoiceMediaStore};
-use crate::providers::native::{
-    FileStep, Limits, NativeProvider, Sent, Step, Target, pre_dispatch, unsupported,
-};
+use crate::providers::native::{Limits, NativeProvider, Sent, Step, Target, pre_dispatch, unsupported};
 use async_trait::async_trait;
-use base64::Engine as _;
 use std::sync::Arc;
 use tinychannels_bus::channel::{ChannelSendError, MessageReceiptPartKind, SendErrorKind};
 use tinychannels_bus::{ChannelCapabilities, ConversationKind};
 
-const DIRECT_UPLOAD_LIMIT: u64 = 5 * 1024 * 1024;
 const TEXT_LIMIT: usize = 2000;
 
 #[async_trait]
@@ -234,61 +230,13 @@ impl NativeProvider for QQChannel {
 }
 
 impl QQChannel {
-    fn route(&self, target: &Target, operation: &str) -> String {
+    pub(super) fn route(&self, target: &Target, operation: &str) -> String {
         let (kind, id) = match target.conversation.kind {
             ConversationKind::Group => ("groups", target.conversation.id.as_str()),
             ConversationKind::Dm => ("users", target.conversation.id.as_str()),
             _ => unreachable!("QQ target was validated"),
         };
         format!("{QQ_API_BASE}/v2/{kind}/{id}/{operation}")
-    }
-
-    async fn upload(
-        &self,
-        target: &Target,
-        file: &FileStep,
-        file_type: u8,
-    ) -> Result<String, ChannelSendError> {
-        if file.bytes.len() as u64 > DIRECT_UPLOAD_LIMIT {
-            return Err(pre_dispatch("QQ direct media upload exceeds 5 MiB"));
-        }
-        if file
-            .caption
-            .as_deref()
-            .is_some_and(|caption| !caption.trim().is_empty())
-        {
-            return Err(unsupported("QQ rich media captions"));
-        }
-        let token = self
-            .get_token()
-            .await
-            .map_err(|_| transient("QQ media authentication failed", false))?;
-        let response = self
-            .http_client()
-            .post(self.route(target, "files"))
-            .header("Authorization", format!("QQBot {token}"))
-            .json(&serde_json::json!({
-                "file_type": file_type,
-                "file_name": file.name,
-                "file_data": base64::engine::general_purpose::STANDARD.encode(&file.bytes),
-                "srv_send_msg": false,
-            }))
-            .send()
-            .await
-            .map_err(|_| transient("QQ media upload request failed", false))?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(status_error(status, "media upload", false));
-        }
-        let body: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|_| transient("QQ media upload response was invalid", false))?;
-        body.get("file_info")
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .ok_or_else(|| pre_dispatch("QQ media upload returned no file_info"))
     }
 
     async fn send_json(

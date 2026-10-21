@@ -1,8 +1,7 @@
 use super::QQChannel;
+use super::media::DIRECT_UPLOAD_LIMIT;
 use crate::providers::native::capabilities::voice_capabilities;
 use tinychannels_bus::{ChannelCapabilities, ContentCapability};
-
-const DIRECT_UPLOAD_LIMIT: u64 = 5 * 1024 * 1024;
 
 pub(super) fn declared(channel: &QQChannel) -> ChannelCapabilities {
     let mut capabilities = crate::providers::long_tail::text_capabilities(

@@ -1,11 +1,12 @@
 //! QQ attachment download and media format classification.
 
 use super::QQChannel;
-use crate::providers::native::FileStep;
-use crate::providers::native::{pre_dispatch, unsupported};
+use super::outbound::{status_error, transient};
+use crate::providers::native::{FileStep, Target, pre_dispatch, unsupported};
+use base64::Engine as _;
 use tinychannels_bus::channel::ChannelSendError;
 
-const DIRECT_UPLOAD_LIMIT: u64 = 5 * 1024 * 1024;
+pub(super) const DIRECT_UPLOAD_LIMIT: u64 = 5 * 1024 * 1024;
 
 impl QQChannel {
     pub(super) async fn download_attachment(
@@ -51,6 +52,54 @@ impl QQChannel {
             bytes.extend_from_slice(&chunk);
         }
         (!bytes.is_empty()).then_some((bytes, mime))
+    }
+
+    pub(super) async fn upload(
+        &self,
+        target: &Target,
+        file: &FileStep,
+        file_type: u8,
+    ) -> Result<String, ChannelSendError> {
+        if file.bytes.len() as u64 > DIRECT_UPLOAD_LIMIT {
+            return Err(pre_dispatch("QQ direct media upload exceeds 5 MiB"));
+        }
+        if file
+            .caption
+            .as_deref()
+            .is_some_and(|caption| !caption.trim().is_empty())
+        {
+            return Err(unsupported("QQ rich media captions"));
+        }
+        let token = self
+            .get_token()
+            .await
+            .map_err(|_| transient("QQ media authentication failed", false))?;
+        let response = self
+            .http_client()
+            .post(self.route(target, "files"))
+            .header("Authorization", format!("QQBot {token}"))
+            .json(&serde_json::json!({
+                "file_type": file_type,
+                "file_name": file.name,
+                "file_data": base64::engine::general_purpose::STANDARD.encode(&file.bytes),
+                "srv_send_msg": false,
+            }))
+            .send()
+            .await
+            .map_err(|_| transient("QQ media upload request failed", false))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(status_error(status, "media upload", false));
+        }
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|_| transient("QQ media upload response was invalid", false))?;
+        body.get("file_info")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| pre_dispatch("QQ media upload returned no file_info"))
     }
 }
 

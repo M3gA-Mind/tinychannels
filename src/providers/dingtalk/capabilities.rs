@@ -1,8 +1,6 @@
 use super::DingTalkChannel;
+use super::native::{MAX_MEDIA_BYTES, MAX_VOICE_BYTES};
 use tinychannels_bus::{ChannelCapabilities, ContentCapability};
-
-const MAX_MEDIA_BYTES: u64 = 10 * 1024 * 1024;
-const MAX_VOICE_BYTES: u64 = 2 * 1024 * 1024;
 
 pub(super) fn declared(channel: &DingTalkChannel) -> ChannelCapabilities {
     let mut caps = crate::providers::long_tail::text_capabilities(
