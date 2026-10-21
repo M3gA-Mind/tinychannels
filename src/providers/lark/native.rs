@@ -1,17 +1,16 @@
 //! Native typed media delivery for Lark and Feishu.
 
 use super::LarkChannel;
+use super::media::file_type_for_mime;
+use super::outbound::{known_unsent, uncertain_send};
 use crate::host::{MediaRepository, VoiceMediaStore};
 use crate::providers::native::{FileStep, Limits, NativeProvider, Sent, Step, Target};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tinychannels_bus::channel::ChannelSendError;
-use super::outbound::{known_unsent, uncertain_send};
-use super::media::file_type_for_mime;
 use tinychannels_bus::{
     ChannelCapabilities, ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef,
 };
-
 
 #[async_trait]
 impl NativeProvider for LarkChannel {
@@ -67,7 +66,6 @@ impl NativeProvider for LarkChannel {
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError> {
         super::outbound::deliver(self, target, step).await
     }
-
 }
 
 #[cfg(test)]
