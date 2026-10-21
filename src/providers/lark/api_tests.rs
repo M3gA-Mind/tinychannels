@@ -18,7 +18,7 @@ impl crate::host::VoiceCodec for FixtureVoiceCodec {
         anyhow::ensure!(request.target == "ogg_opus");
         Ok(crate::host::VoiceCodecResult {
             audio_base64: base64::engine::general_purpose::STANDARD
-                .encode(include_bytes!("telegram/fixtures/sine-ogg-opus.ogg")),
+                .encode(include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg")),
             duration_ms: Some(1_000),
             waveform: None,
         })
@@ -27,7 +27,7 @@ impl crate::host::VoiceCodec for FixtureVoiceCodec {
 
 #[test]
 fn native_audio_requires_an_ogg_opus_identification_packet() {
-    let opus = include_bytes!("telegram/fixtures/sine-ogg-opus.ogg");
+    let opus = include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg");
     assert!(super::native::is_ogg_opus(opus));
 
     let mut vorbis = opus.to_vec();
@@ -654,7 +654,7 @@ async fn lark_voice_store_only_ingests_voice_without_file_repository() {
             {
                 (
                     200,
-                    include_bytes!("telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
+                    include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
                 )
             } else {
                 panic!("unexpected Lark request: {}", request.target)
@@ -697,7 +697,7 @@ async fn lark_voice_store_only_ingests_voice_without_file_repository() {
         base64::engine::general_purpose::STANDARD
             .decode(&stored[0].audio_base64)
             .unwrap(),
-        include_bytes!("telegram/fixtures/sine-ogg-opus.ogg")
+        include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg")
     );
 }
 
@@ -1059,7 +1059,7 @@ async fn host_aware_factory_sends_typed_image_through_lark_image_upload() {
     *media.read.lock().unwrap() = Some(crate::providers::native::fixtures::stored_media(
         tinychannels_bus::MediaKind::Audio,
         "audio/ogg",
-        include_bytes!("telegram/fixtures/sine-ogg-opus.ogg"),
+        include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg"),
     ));
     let audio_result = crate::channel::ChannelTypedSend::send_typed(
         channel.as_ref(),

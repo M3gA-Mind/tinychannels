@@ -1,6 +1,7 @@
 mod adapter;
 pub mod api;
 pub mod bot_api;
+mod capabilities;
 pub mod channel;
 mod gateway;
 mod http;

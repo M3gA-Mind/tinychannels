@@ -1,136 +1,17 @@
-use futures_util::{SinkExt, StreamExt};
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tokio_tungstenite::tungstenite::Message;
-use uuid::Uuid;
+//! DingTalk Stream Mode registration, acknowledgements, and inbound events.
 
-const DINGTALK_BOT_CALLBACK_TOPIC: &str = "/v1.0/im/bot/messages/get";
-
-/// DingTalk channel — connects via Stream Mode WebSocket for real-time messages.
-/// Replies are sent through per-message session webhook URLs.
-pub struct DingTalkChannel {
-    client_id: String,
-    client_secret: String,
-    allowed_users: Vec<String>,
-    /// Per-chat session webhooks for sending replies (chatID -> webhook URL).
-    /// DingTalk provides a unique webhook URL with each incoming message.
-    session_webhooks: Arc<RwLock<HashMap<String, String>>>,
-    http_client: reqwest::Client,
-    attachment_http_client: reqwest::Client,
-    native: crate::providers::native::HostPorts,
-    robot_contexts: Arc<RwLock<HashMap<String, serde_json::Value>>>,
-    /// Single-owner cancellation for the public Stream listener.
-    listener: std::sync::Mutex<Option<(Uuid, tokio::sync::watch::Sender<bool>)>>,
-}
-
-struct ListenerRegistration<'a> {
-    channel: &'a DingTalkChannel,
-    id: Uuid,
-}
-
-impl Drop for ListenerRegistration<'_> {
-    fn drop(&mut self) {
-        let mut listener = self
-            .channel
-            .listener
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if listener.as_ref().is_some_and(|(id, _)| *id == self.id) {
-            *listener = None;
-        }
-    }
-}
-
-/// Response from DingTalk gateway connection registration.
-#[derive(serde::Deserialize)]
-struct GatewayResponse {
-    endpoint: String,
-    ticket: String,
-}
+use super::*;
 
 impl DingTalkChannel {
-    pub fn new(client_id: String, client_secret: String, allowed_users: Vec<String>) -> Self {
-        Self {
-            client_id,
-            client_secret,
-            allowed_users,
-            session_webhooks: Arc::new(RwLock::new(HashMap::new())),
-            http_client: reqwest::Client::new(),
-            attachment_http_client: no_redirect_client(),
-            native: crate::providers::native::HostPorts::default(),
-            robot_contexts: Arc::new(RwLock::new(HashMap::new())),
-            listener: std::sync::Mutex::new(None),
-        }
-    }
-
-    pub fn with_http_client(
-        client_id: String,
-        client_secret: String,
-        allowed_users: Vec<String>,
-        http_client: reqwest::Client,
-    ) -> Self {
-        Self {
-            client_id,
-            client_secret,
-            allowed_users,
-            session_webhooks: Arc::new(RwLock::new(HashMap::new())),
-            http_client,
-            attachment_http_client: no_redirect_client(),
-            native: crate::providers::native::HostPorts::default(),
-            robot_contexts: Arc::new(RwLock::new(HashMap::new())),
-            listener: std::sync::Mutex::new(None),
-        }
-    }
-
-    /// Enable native typed media ingress and upload through host-scoped storage.
-    pub fn with_media_repository(
-        mut self,
-        repository: Arc<dyn crate::host::MediaRepository>,
-    ) -> Self {
-        self.native.media_repository = Some(repository);
-        self
-    }
-
-    /// Attach the host's ordered typed-ingress path.
-    pub fn with_events(mut self, events: Arc<dyn crate::host::EventSink>) -> Self {
-        self.native.events = Some(events);
-        self
-    }
-
-    /// Enable native voice ingress through the host's scoped voice store.
-    pub fn with_voice_media_store(mut self, store: Arc<dyn crate::host::VoiceMediaStore>) -> Self {
-        self.native.voice_media_store = Some(store);
-        self
-    }
-
-    /// Enable shared final-turn synthesis when the host has TTS, a codec,
-    /// and durable scoped voice storage.
-    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
-        self.native.voice_synthesis = enabled;
-        self
-    }
-
-    /// Attach the host's speech-to-text service for media that carries no transcript.
-    pub fn with_transcriber(mut self, transcriber: Arc<dyn crate::host::Transcriber>) -> Self {
-        self.native.transcriber = Some(transcriber);
-        self
-    }
-
-    pub(crate) fn with_attachment_http_client(mut self, client: reqwest::Client) -> Self {
-        self.attachment_http_client = client;
-        self
-    }
-
-    fn http_client(&self) -> reqwest::Client {
+    pub(super) fn http_client(&self) -> reqwest::Client {
         self.http_client.clone()
     }
 
-    fn is_user_allowed(&self, user_id: &str) -> bool {
+    pub(super) fn is_user_allowed(&self, user_id: &str) -> bool {
         self.allowed_users.iter().any(|u| u == "*" || u == user_id)
     }
 
-    fn parse_stream_data(frame: &serde_json::Value) -> Option<serde_json::Value> {
+    pub(super) fn parse_stream_data(frame: &serde_json::Value) -> Option<serde_json::Value> {
         match frame.get("data") {
             Some(serde_json::Value::String(raw)) => serde_json::from_str(raw).ok(),
             Some(serde_json::Value::Object(_)) => frame.get("data").cloned(),
@@ -138,7 +19,7 @@ impl DingTalkChannel {
         }
     }
 
-    fn resolve_chat_id(data: &serde_json::Value, sender_id: &str) -> String {
+    pub(super) fn resolve_chat_id(data: &serde_json::Value, sender_id: &str) -> String {
         let is_private_chat = data
             .get("conversationType")
             .and_then(|value| {
@@ -160,7 +41,7 @@ impl DingTalkChannel {
     }
 
     /// Register a connection with DingTalk's gateway to get a WebSocket endpoint.
-    async fn register_connection(&self) -> anyhow::Result<GatewayResponse> {
+    pub(super) async fn register_connection(&self) -> anyhow::Result<GatewayResponse> {
         let body = serde_json::json!({
             "clientId": self.client_id,
             "clientSecret": self.client_secret,
@@ -189,7 +70,9 @@ impl DingTalkChannel {
         Ok(gw)
     }
 
-    fn begin_listener(&self) -> anyhow::Result<(Uuid, tokio::sync::watch::Receiver<bool>)> {
+    pub(super) fn begin_listener(
+        &self,
+    ) -> anyhow::Result<(Uuid, tokio::sync::watch::Receiver<bool>)> {
         let mut listener = self
             .listener
             .lock()
@@ -205,7 +88,7 @@ impl DingTalkChannel {
 }
 
 impl DingTalkChannel {
-    async fn listen_owned(
+    pub(super) async fn listen_owned(
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
         mut cancellation: Option<tokio::sync::watch::Receiver<bool>>,
@@ -439,19 +322,10 @@ async fn until_listener_cancelled<F: std::future::Future>(
     }
 }
 
-fn no_redirect_client() -> reqwest::Client {
+pub(super) fn no_redirect_client() -> reqwest::Client {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .expect("building the DingTalk attachment HTTP client should succeed")
 }
-
-#[path = "dingtalk/native.rs"]
-mod native;
-
-crate::providers::native::native_v2_adapter!(DingTalkChannel);
-
-#[cfg(test)]
-#[path = "dingtalk_tests.rs"]
-mod tests;

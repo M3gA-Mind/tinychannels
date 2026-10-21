@@ -1,176 +1,22 @@
-use futures_util::{SinkExt, StreamExt};
-use serde_json::json;
-use std::collections::HashSet;
-use std::future::Future;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tokio_tungstenite::tungstenite::Message;
-use uuid::Uuid;
+//! QQ gateway authentication, listener lifecycle, and inbound events.
 
-const QQ_API_BASE: &str = "https://api.sgroup.qq.com";
-const QQ_AUTH_URL: &str = "https://bots.qq.com/app/getAppAccessToken";
-
-#[cfg(test)]
-fn ensure_https(url: &str) -> anyhow::Result<()> {
-    if !url.starts_with("https://") {
-        anyhow::bail!(
-            "Refusing to transmit sensitive data over non-HTTPS URL: URL scheme must be https"
-        );
-    }
-    Ok(())
-}
-
-fn no_redirect_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("building the default QQ attachment HTTP client should succeed")
-}
-
-/// Deduplication set capacity — evict half of entries when full.
-const DEDUP_CAPACITY: usize = 10_000;
-
-/// QQ Official Bot channel — uses Tencent's official QQ Bot API with
-/// OAuth2 authentication and a Discord-like WebSocket gateway protocol.
-pub struct QQChannel {
-    app_id: String,
-    app_secret: String,
-    allowed_users: Vec<String>,
-    /// Cached access token + expiry timestamp.
-    token_cache: Arc<RwLock<Option<(String, u64)>>>,
-    /// Message deduplication set.
-    dedup: Arc<RwLock<HashSet<String>>>,
-    http_client: reqwest::Client,
-    /// Attachment downloads never follow redirects; QQ attachment URLs are
-    /// signed platform URLs and must not be usable as arbitrary fetch proxies.
-    attachment_http_client: reqwest::Client,
-    /// Host-scoped media and voice stores used by native typed sends.
-    native: crate::providers::native::HostPorts,
-    /// Single-owner cancellation for the public typed gateway listener.
-    listener: std::sync::Mutex<Option<(Uuid, tokio::sync::watch::Sender<bool>)>>,
-}
-
-struct ListenerRegistration<'a> {
-    channel: &'a QQChannel,
-    id: Uuid,
-}
-
-impl Drop for ListenerRegistration<'_> {
-    fn drop(&mut self) {
-        let mut listener = self
-            .channel
-            .listener
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if listener.as_ref().is_some_and(|(id, _)| *id == self.id) {
-            *listener = None;
-        }
-    }
-}
-
-async fn listener_cancelled(cancellation: &mut Option<tokio::sync::watch::Receiver<bool>>) {
-    match cancellation {
-        Some(receiver) => {
-            let _ = receiver.changed().await;
-        }
-        None => std::future::pending::<()>().await,
-    }
-}
-
-async fn until_listener_cancelled<F: Future>(
-    cancellation: &mut Option<tokio::sync::watch::Receiver<bool>>,
-    future: F,
-) -> Option<F::Output> {
-    tokio::select! {
-        biased;
-        () = listener_cancelled(cancellation) => None,
-        output = future => Some(output),
-    }
-}
+use super::*;
 
 impl QQChannel {
-    pub fn new(app_id: String, app_secret: String, allowed_users: Vec<String>) -> Self {
-        Self {
-            app_id,
-            app_secret,
-            allowed_users,
-            token_cache: Arc::new(RwLock::new(None)),
-            dedup: Arc::new(RwLock::new(HashSet::new())),
-            http_client: reqwest::Client::new(),
-            attachment_http_client: no_redirect_client(),
-            native: crate::providers::native::HostPorts::default(),
-            listener: std::sync::Mutex::new(None),
-        }
-    }
-
-    pub fn with_http_client(
-        app_id: String,
-        app_secret: String,
-        allowed_users: Vec<String>,
-        http_client: reqwest::Client,
-    ) -> Self {
-        Self {
-            app_id,
-            app_secret,
-            allowed_users,
-            token_cache: Arc::new(RwLock::new(None)),
-            dedup: Arc::new(RwLock::new(HashSet::new())),
-            http_client,
-            attachment_http_client: no_redirect_client(),
-            native: crate::providers::native::HostPorts::default(),
-            listener: std::sync::Mutex::new(None),
-        }
-    }
-
-    /// Enable scoped media uploads through the host repository.
-    pub fn with_media_repository(
-        mut self,
-        repository: Arc<dyn crate::host::MediaRepository>,
-    ) -> Self {
-        self.native.media_repository = Some(repository);
-        self
-    }
-
-    /// Enable native QQ voice messages through the host voice store.
-    pub fn with_voice_media_store(mut self, store: Arc<dyn crate::host::VoiceMediaStore>) -> Self {
-        self.native.voice_media_store = Some(store);
-        self
-    }
-
-    /// Attach the host's transcriber for platform-marked inbound voice clips.
-    pub fn with_transcriber(mut self, transcriber: Arc<dyn crate::host::Transcriber>) -> Self {
-        self.native.transcriber = Some(transcriber);
-        self
-    }
-
-    /// Attach the host's ordered typed-ingress path.
-    pub fn with_events(mut self, events: Arc<dyn crate::host::EventSink>) -> Self {
-        self.native.events = Some(events);
-        self
-    }
-
-    /// Replace the no-redirect attachment client, primarily for host-managed
-    /// trust roots and deterministic local tests.
-    #[cfg(test)]
-    pub(crate) fn with_attachment_http_client(mut self, client: reqwest::Client) -> Self {
-        self.attachment_http_client = client;
-        self
-    }
-
-    fn http_client(&self) -> reqwest::Client {
+    pub(super) fn http_client(&self) -> reqwest::Client {
         self.http_client.clone()
     }
 
-    fn attachment_http_client(&self) -> reqwest::Client {
+    pub(super) fn attachment_http_client(&self) -> reqwest::Client {
         self.attachment_http_client.clone()
     }
 
-    fn is_user_allowed(&self, user_id: &str) -> bool {
+    pub(super) fn is_user_allowed(&self, user_id: &str) -> bool {
         self.allowed_users.iter().any(|u| u == "*" || u == user_id)
     }
 
     /// Fetch an access token from QQ's OAuth2 endpoint.
-    async fn fetch_access_token(&self) -> anyhow::Result<(String, u64)> {
+    pub(super) async fn fetch_access_token(&self) -> anyhow::Result<(String, u64)> {
         let body = json!({
             "appId": self.app_id,
             "clientSecret": self.app_secret,
@@ -214,7 +60,7 @@ impl QQChannel {
     }
 
     /// Get a valid access token, refreshing if expired.
-    async fn get_token(&self) -> anyhow::Result<String> {
+    pub(super) async fn get_token(&self) -> anyhow::Result<String> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -238,7 +84,7 @@ impl QQChannel {
     }
 
     /// Get the WebSocket gateway URL.
-    async fn get_gateway_url(&self, token: &str) -> anyhow::Result<String> {
+    pub(super) async fn get_gateway_url(&self, token: &str) -> anyhow::Result<String> {
         let resp = self
             .http_client()
             .get(format!("{QQ_API_BASE}/gateway"))
@@ -264,7 +110,7 @@ impl QQChannel {
 
     /// Check and insert message ID for deduplication.
     #[cfg(test)]
-    async fn is_duplicate(&self, msg_id: &str) -> bool {
+    pub(super) async fn is_duplicate(&self, msg_id: &str) -> bool {
         if msg_id.is_empty() {
             return false;
         }
@@ -287,11 +133,11 @@ impl QQChannel {
         false
     }
 
-    async fn has_duplicate(&self, msg_id: &str) -> bool {
+    pub(super) async fn has_duplicate(&self, msg_id: &str) -> bool {
         !msg_id.is_empty() && self.dedup.read().await.contains(msg_id)
     }
 
-    async fn mark_duplicate(&self, msg_id: &str) {
+    pub(super) async fn mark_duplicate(&self, msg_id: &str) {
         if msg_id.is_empty() {
             return;
         }
@@ -305,7 +151,9 @@ impl QQChannel {
         dedup.insert(msg_id.to_owned());
     }
 
-    fn begin_listener(&self) -> anyhow::Result<(Uuid, tokio::sync::watch::Receiver<bool>)> {
+    pub(super) fn begin_listener(
+        &self,
+    ) -> anyhow::Result<(Uuid, tokio::sync::watch::Receiver<bool>)> {
         let mut listener = self
             .listener
             .lock()
@@ -322,7 +170,7 @@ impl QQChannel {
 
 impl QQChannel {
     #[allow(clippy::too_many_lines)]
-    async fn listen_owned(
+    pub(super) async fn listen_owned(
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
         mut cancellation: Option<tokio::sync::watch::Receiver<bool>>,
@@ -556,16 +404,3 @@ impl QQChannel {
         }
     }
 }
-
-#[path = "qq/native.rs"]
-mod native;
-
-crate::providers::native::native_v2_adapter!(QQChannel);
-
-#[cfg(test)]
-#[path = "qq_tests.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "qq/native_tests.rs"]
-mod native_tests;
