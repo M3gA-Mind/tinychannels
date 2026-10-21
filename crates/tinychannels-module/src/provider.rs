@@ -1146,36 +1146,6 @@ impl tinychannels::host::EventSink for ModuleEvents {
     }
 }
 
-/// Reconnect execution stays in the module; raw provider errors never cross callbacks.
-async fn listen_with_supervision(
-    channel: Arc<dyn Channel>,
-    tx: mpsc::Sender<tinychannels::ChannelMessage>,
-    host: HostChannels,
-    policy: Option<ChannelSupervisionPolicy>,
-) -> anyhow::Result<()> {
-    let Some(policy) = policy else {
-        return channel.listen(tx).await;
-    };
-    let name = channel.name().to_owned();
-    let mut backoff = policy.initial_backoff_secs.max(1);
-    let maximum = policy.max_backoff_secs.max(backoff);
-    loop {
-        let result = channel.listen(tx.clone()).await;
-        if tx.is_closed() {
-            return result;
-        }
-        host.report_status(&name, "restarting", Some("provider disconnected".into()))
-            .await;
-        tokio::time::sleep(
-            Duration::from_secs(backoff)
-                + Duration::from_millis(tinychannels::runtime::jitter_millis(backoff)),
-        )
-        .await;
-        backoff = backoff.saturating_mul(2).min(maximum);
-        host.report_status(&name, "connecting", None).await;
-    }
-}
-
 async fn listen_adapter_with_supervision(
     adapter: Arc<dyn tinychannels::channel::ChannelAdapter>,
     sink: Arc<ModuleEvents>,
@@ -1820,8 +1790,6 @@ impl Running {
         let (send, mut sends) = mpsc::channel::<SendCommand>(256);
         let finished = Arc::new(AtomicBool::new(false));
         let task_finished = finished.clone();
-        let listen_channel = channel.clone();
-        let send_channel = channel.clone();
         let configured_instance = hooks
             .configured_instance
             .lock()
@@ -1839,6 +1807,7 @@ impl Running {
         let worker_native = native_ports.clone();
         let worker_provider_name = provider_name.clone();
         let listener_mode = worker_native.listener_mode;
+        let listener_adapter = Arc::clone(&worker_native.adapter);
         let worker = tokio::spawn(async move {
             let name = worker_provider_name;
             host.report_status(&name, "connecting", None).await;
@@ -1854,7 +1823,7 @@ impl Running {
                         listener_instance,
                         listener_scope,
                     ));
-                    let adapter = Arc::clone(&worker_native.adapter);
+                    let adapter = listener_adapter;
                     let mut listener_cancel = listener_cancel;
                     if outbound_only {
                         let _ = listener_cancel.wait_for(|value| *value).await;
@@ -1922,7 +1891,6 @@ impl Running {
                                                                 ..Default::default()
                                                             }
                                                         }),
-                                                ),
                                                 thread_id: message.thread_id.clone(),
                                                 reply_to_id: message.reply_to_id.clone(),
                                                 ..Default::default()
