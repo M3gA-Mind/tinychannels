@@ -148,11 +148,13 @@ impl NativeProvider for YuanbaoChannel {
 
     async fn start_draft(
         &self,
-        _intent: ChannelOutboundIntent,
+        intent: ChannelOutboundIntent,
     ) -> Result<Option<String>, ChannelSendError> {
-        Err(crate::providers::native::unsupported(
-            "Yuanbao draft lifecycle unavailable",
-        ))
+        let message = ChannelOutboundMessage::from_intent(&intent);
+        let target = self.normalized_target(&message)?;
+        // Yuanbao has no draft transport operation. The marker selects the
+        // streaming reply pipeline; content is sent once at finalization.
+        Ok(Some(format!("yb-draft:{}", target.conversation.id)))
     }
 
     async fn update_draft(
