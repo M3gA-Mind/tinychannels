@@ -207,7 +207,7 @@ struct NativeControllerFixture {
     provider: String,
     capabilities: tinychannels_bus::ChannelCapabilities,
     backend_fixture: BackendFixture,
-    server: wiremock::MockServer,
+    server: Arc<wiremock::MockServer>,
     observations: std::sync::Mutex<Vec<tinychannels_conformance::NativeControllerObservation>>,
 }
 
@@ -274,6 +274,13 @@ impl NativeControllerFixture {
             "body": body,
         }))
     }
+
+    async fn wire_count(&self) -> usize {
+        self.server
+            .received_requests()
+            .await
+            .map_or(0, |requests| requests.len())
+    }
 }
 
 #[async_trait::async_trait]
@@ -309,6 +316,27 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
                 || message.contains("cannot list"),
             message,
         };
+        macro_rules! operation_or_error {
+            ($feature:expr, $operation:expr, $before:expr, $result:expr) => {
+                match $result {
+                    Ok(value) => value,
+                    Err(error) => {
+                        if self.wire_count().await > $before {
+                            if let Ok(request) = self.captured_request().await {
+                                self.record(
+                                    $feature,
+                                    $operation,
+                                    request,
+                                    serde_json::json!({"error": error.to_string()}),
+                                    Vec::new(),
+                                );
+                            }
+                        }
+                        return Err(unsupported(error.to_string()));
+                    }
+                }
+            };
+        }
         match feature {
             Feature::Reaction => {
                 let reaction = match self.provider.as_str() {
@@ -323,11 +351,11 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
                         serde_json::json!({"channelId":"channel-1","messageId":"post-1","emoji":"👍"})
                     }
                 };
-                let result = self
+                let before = self.wire_count().await;
+                let result = operation_or_error!(feature, "reaction", before, self
                     .backend
                     .send_reaction(&self.config, &self.provider, reaction)
-                    .await
-                    .map_err(|error| unsupported(error.to_string()))?;
+                    .await);
                 if !result.success {
                     return Err(unsupported("native reaction was not accepted".into()));
                 }
@@ -344,11 +372,11 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
                 );
             }
             Feature::ThreadCreate => {
-                let result = self
+                let before = self.wire_count().await;
+                let result = operation_or_error!(feature, "thread_create", before, self
                     .backend
                     .create_thread(&self.config, &self.provider, "conformance thread")
-                    .await
-                    .map_err(|error| unsupported(error.to_string()))?;
+                    .await);
                 let request = self
                     .captured_request()
                     .await
@@ -367,11 +395,11 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
                 } else {
                     "archive"
                 };
-                let result = self
+                let before = self.wire_count().await;
+                let result = operation_or_error!(feature, "thread_update", before, self
                     .backend
                     .update_thread(&self.config, &self.provider, "77", action)
-                    .await
-                    .map_err(|error| unsupported(error.to_string()))?;
+                    .await);
                 let request = self
                     .captured_request()
                     .await
@@ -385,11 +413,11 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
                 );
             }
             Feature::ThreadList => {
-                let result = self
+                let before = self.wire_count().await;
+                let result = operation_or_error!(feature, "thread_list", before, self
                     .backend
                     .list_threads(&self.config, &self.provider, None)
-                    .await
-                    .map_err(|error| unsupported(error.to_string()))?;
+                    .await);
                 let request = self
                     .captured_request()
                     .await
