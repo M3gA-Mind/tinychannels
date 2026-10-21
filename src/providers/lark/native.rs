@@ -5,6 +5,7 @@ use super::LarkChannel;
 #[cfg(test)]
 #[cfg(test)]
 use super::media::file_type_for_mime;
+#[cfg(test)]
 pub(super) use super::media::is_ogg_opus;
 #[cfg(test)]
 use super::outbound::{known_unsent, uncertain_send};

@@ -7,7 +7,7 @@ use crate::providers::native::{Address, Limits, NativeProvider, Sent, Step, Targ
 use async_trait::async_trait;
 use std::sync::Arc;
 use tinychannels_bus::ChannelCapabilities;
-use tinychannels_bus::channel::{ChannelSendError, MessageReceiptPartKind, SendErrorKind};
+use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
 
 #[async_trait]
 impl NativeProvider for MattermostChannel {
