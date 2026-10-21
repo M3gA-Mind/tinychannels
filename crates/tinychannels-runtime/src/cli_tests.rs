@@ -37,12 +37,15 @@ impl ChannelInboundSink for NotifyingSink {
         ingress: tinychannels_bus::ChannelIngress,
     ) -> Result<(), ChannelSendError> {
         self.started.notify_one();
-        self.sender.send(ingress).await.map_err(|_| ChannelSendError {
-            kind: tinychannels_bus::channel::SendErrorKind::Transient,
-            message: "CLI test receiver closed".into(),
-            retryable: true,
-            ..Default::default()
-        })
+        self.sender
+            .send(ingress)
+            .await
+            .map_err(|_| ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "CLI test receiver closed".into(),
+                retryable: true,
+                ..Default::default()
+            })
     }
 }
 

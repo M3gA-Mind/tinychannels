@@ -115,11 +115,11 @@ async fn forward_lines<R: AsyncBufRead + Unpin>(
             },
             ..Default::default()
         };
-        if sink
-            .push(tinychannels_bus::ChannelIngress::Inbound(envelope))
-            .await
-            .is_err()
-        {
+        let push_result = tokio::select! {
+            _ = cancellation.cancelled() => break,
+            result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
+        };
+        if push_result.is_err() {
             break;
         }
     }
