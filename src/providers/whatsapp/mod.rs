@@ -287,7 +287,7 @@ impl WhatsAppChannel {
 }
 
 impl WhatsAppChannel {
-    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+    fn provider_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         capabilities(&CapabilitySpec {
             media: self.media_repository.is_some(),
             voice_store: self.voice_media_store.is_some(),
@@ -403,7 +403,7 @@ impl Channel for WhatsAppChannel {
     }
 
     fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.declared_capabilities()
+        self.provider_capabilities()
     }
 
     fn supports_remote_control(&self) -> bool {
@@ -536,7 +536,7 @@ impl crate::channel::ChannelAdapter for WhatsAppChannel {
     }
 
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.declared_capabilities()
+        self.provider_capabilities()
     }
 
     fn supports_webhook_delivery(&self) -> bool {
@@ -584,10 +584,9 @@ impl crate::channel::ChannelAdapter for WhatsAppChannel {
 
     async fn mark_read(
         &self,
-        conversation: &tinychannels_bus::ConversationRef,
+        _conversation: &tinychannels_bus::ConversationRef,
         provider_message_id: &str,
     ) -> Result<(), crate::channel::ChannelSendError> {
-        let _ = conversation;
         self.mark_read_provider(provider_message_id)
             .await
             .map_err(|error| failure_of(&error).into_send_error())
