@@ -4262,7 +4262,10 @@ async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
                 .lock()
                 .unwrap()
                 .iter()
-                .filter(|event| event.event_type == "button_callback")
+                .filter(|event| {
+                    serde_json::to_value(event)
+                        .is_ok_and(|value| value["type"] == "button_callback")
+                })
                 .count()
                 >= 2;
             let has_inbound = !events.inbounds.lock().unwrap().is_empty();
@@ -4288,8 +4291,8 @@ async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
         .lock()
         .unwrap()
         .iter()
-        .filter(|event| event.event_type == "button_callback")
-        .map(|event| event.payload.clone())
+        .filter_map(|event| serde_json::to_value(event).ok())
+        .filter(|event| event["type"] == "button_callback")
         .collect::<Vec<_>>();
     assert_eq!(callbacks.len(), 2);
     assert_eq!(callbacks[0]["type"], "button_callback");
@@ -4740,30 +4743,34 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
         .unwrap()
         .unwrap();
 
-    let recorded = events.events.lock().unwrap().clone();
+    let recorded = events
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|event| serde_json::to_value(event).expect("serialize typed channel event"))
+        .collect::<Vec<_>>();
     assert_eq!(recorded.len(), 2);
-    assert_eq!(recorded[0].event_type, "message_updated");
-    assert_eq!(recorded[0].payload["type"], "message_updated");
-    assert_eq!(recorded[0].payload["sourceEventId"], "13");
-    assert_eq!(recorded[0].payload["conversation"]["id"], "100");
-    assert_eq!(recorded[0].payload["messageId"], "telegram_100_5");
-    assert_eq!(recorded[0].payload["providerMessageId"], "5");
-    assert_eq!(recorded[0].payload["conversation"]["kind"], "group");
-    assert_eq!(recorded[0].payload["conversation"]["topicId"], "88");
-    assert_eq!(recorded[0].payload["parts"][0]["text"], "edited hello");
-    assert_eq!(recorded[1].event_type, "reaction_added");
-    assert_eq!(recorded[1].payload["type"], "reaction_added");
-    assert_eq!(recorded[1].payload["sourceEventId"], "15");
+    assert_eq!(recorded[0]["type"], "message_updated");
+    assert_eq!(recorded[0]["sourceEventId"], "13");
+    assert_eq!(recorded[0]["conversation"]["id"], "100");
+    assert_eq!(recorded[0]["messageId"], "telegram_100_5");
+    assert_eq!(recorded[0]["providerMessageId"], "5");
+    assert_eq!(recorded[0]["conversation"]["kind"], "group");
+    assert_eq!(recorded[0]["conversation"]["topicId"], "88");
+    assert_eq!(recorded[0]["parts"][0]["text"], "edited hello");
+    assert_eq!(recorded[1]["type"], "reaction_added");
+    assert_eq!(recorded[1]["sourceEventId"], "15");
     assert_eq!(
-        recorded[1].payload["eventId"],
+        recorded[1]["eventId"],
         "telegram:update:15:reaction:added:100:5:❤"
     );
-    assert_eq!(recorded[1].payload["messageId"], "telegram_100_5");
-    assert_eq!(recorded[1].payload["providerMessageId"], "5");
-    assert_eq!(recorded[1].payload["conversation"]["id"], "100");
-    assert_eq!(recorded[1].payload["conversation"]["topicId"], "88");
-    assert_eq!(recorded[1].payload["actor"]["id"], "7");
-    assert_eq!(recorded[1].payload["reaction"]["value"], "❤");
+    assert_eq!(recorded[1]["messageId"], "telegram_100_5");
+    assert_eq!(recorded[1]["providerMessageId"], "5");
+    assert_eq!(recorded[1]["conversation"]["id"], "100");
+    assert_eq!(recorded[1]["conversation"]["topicId"], "88");
+    assert_eq!(recorded[1]["actor"]["id"], "7");
+    assert_eq!(recorded[1]["reaction"]["value"], "❤");
     assert_eq!(json_bodies(&server, "deleteWebhook").await.len(), 1);
     // The unauthorized sender got the approval prompt.
     let prompts = sent_texts(&server).await;
