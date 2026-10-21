@@ -8,6 +8,9 @@ use rand::RngExt as _;
 mod cli;
 mod dispatch;
 mod health;
+#[cfg(test)]
+#[path = "health_tests.rs"]
+mod health_tests;
 #[allow(
     deprecated,
     reason = "legacy session projection remains during v22 migration"

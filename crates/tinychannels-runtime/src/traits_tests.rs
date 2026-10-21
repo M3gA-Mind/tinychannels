@@ -70,3 +70,11 @@ fn v1_send_message_is_immediately_converted_to_a_scoped_typed_intent() {
         channel::OutboundPayload::NativeChannelData { .. }
     ));
 }
+
+#[test]
+fn webhook_rejection_keeps_its_safe_wire_error_text() {
+    let error = crate::traits::WebhookRejected("signature was rejected".into());
+    assert_eq!(error.to_string(), "signature was rejected");
+    let source: &dyn std::error::Error = &error;
+    assert!(source.source().is_none());
+}
