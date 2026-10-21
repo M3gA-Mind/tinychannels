@@ -1070,7 +1070,9 @@ fn failure_of(error: &anyhow::Error) -> WaFailure {
     error
         .downcast_ref::<WaFailure>()
         .cloned()
-        .unwrap_or_else(|| WaFailure::uncertain("WhatsApp Web operation outcome is uncertain"))
+        .unwrap_or_else(|| {
+            WaFailure::uncertain(format!("WhatsApp Web operation outcome is uncertain: {error}"))
+        })
 }
 
 #[cfg(feature = "whatsapp-web")]

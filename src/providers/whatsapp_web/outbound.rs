@@ -290,8 +290,8 @@ impl WhatsAppWebChannel {
         message: &ChannelOutboundMessage,
     ) -> Result<ChannelSendOutcome, WaFailure> {
         let scope = plan::outbound_scope(message, "whatsapp")?;
-        let client = self.live_client()?;
         let to = self.admitted_jid(&scope.conversation.id)?;
+        let client = self.live_client()?;
         let planned = plan_parts(
             message,
             &scope,
