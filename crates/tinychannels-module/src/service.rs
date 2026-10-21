@@ -562,7 +562,12 @@ impl Channels {
             }
             _ => "",
         };
-        let capabilities = configured_capabilities(&self.running, name).await;
+        let capabilities = match &request {
+            tinychannels_bus::module_control::ChannelControlRequest::Route {
+                capabilities, ..
+            } => capabilities.clone(),
+            _ => configured_capabilities(&self.running, name).await,
+        };
         crate::control::prepare(&self.host, request, capabilities).await
     }
 

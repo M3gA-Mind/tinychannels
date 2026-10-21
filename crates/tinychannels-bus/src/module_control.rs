@@ -18,6 +18,9 @@ pub enum ChannelControlRequest {
     Route {
         workspace_dir: String,
         message: Box<ChannelMessage>,
+        /// Capabilities of the configured channel instance selected by the host.
+        /// Isolated turn runtimes do not own provider instances themselves.
+        capabilities: ChannelCapabilities,
         route: RemoteRoute,
         history_len: usize,
         providers: Vec<ProviderDescriptor>,

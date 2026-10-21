@@ -2765,6 +2765,45 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
 }
 
 #[tokio::test]
+async fn route_remote_commands_use_host_capabilities_for_isolated_runtime() {
+    use tinychannels_bus::module_control::{
+        ChannelControlRequest as Request, ChannelControlResult as Response, ProviderDescriptor,
+    };
+    use tinychannels_bus::module_remote::RemoteRoute;
+
+    let service = inbound_preparation_service().await;
+    let response = service
+        .prepare_channel_control(Request::Route {
+            workspace_dir: ".".into(),
+            message: serde_json::from_value(serde_json::json!({
+                "id":"fixture", "sender":"sender", "reply_target":"chat",
+                "content":"/help", "channel":"telegram", "timestamp":1
+            }))
+            .unwrap(),
+            route: RemoteRoute {
+                provider: "fixture".into(),
+                model: "fixture".into(),
+            },
+            history_len: 0,
+            providers: vec![ProviderDescriptor {
+                name: "fixture".into(),
+                aliases: vec![],
+            }],
+        })
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        response,
+        Response::Route {
+            reply: Some(reply),
+            ..
+        } if reply == tinychannels::remote::build_remote_help_response()
+    ));
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn webhook_provider_requires_outbound_start_and_rejects_duplicate_ownership() {
     let service = inbound_preparation_service().await;
     let config = ChannelsConfig {
