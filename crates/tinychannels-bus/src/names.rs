@@ -94,6 +94,18 @@ pub mod methods {
     pub const CHANNEL_CONTROLLER: &str = "ChannelController";
     /// Run typing, draft and capability operations on one running provider.
     pub const CHANNEL_INTERACTION: &str = "ChannelInteraction";
+    /// Begin a bounded host-owned media upload.
+    pub const BEGIN_MEDIA_UPLOAD: &str = "BeginMediaUpload";
+    /// Append a confidential, ordered chunk to a media upload.
+    pub const APPEND_MEDIA_UPLOAD_CHUNK: &str = "AppendMediaUploadChunk";
+    /// Finalize a media upload and return an opaque scoped reference.
+    pub const FINISH_MEDIA_UPLOAD: &str = "FinishMediaUpload";
+    /// Resolve a scoped opaque reference into a bounded read handle.
+    pub const BEGIN_MEDIA_READ: &str = "BeginMediaRead";
+    /// Read the next bounded chunk from a media handle.
+    pub const READ_MEDIA_CHUNK: &str = "ReadMediaChunk";
+    /// Release an upload or read handle.
+    pub const FINISH_MEDIA_HANDLE: &str = "FinishMediaHandle";
 }
 
 /// One constant per method name on [`HOST_BUS_NAME`].
@@ -119,7 +131,7 @@ pub mod host_methods {
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 37] = [
+pub const METHODS: [&str; 43] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -157,6 +169,12 @@ pub const METHODS: [&str; 37] = [
     methods::PREPARE_CHANNEL_CONTROL,
     methods::START_RUNTIME_WITH_DISPATCH,
     methods::PREPARE_RUNTIME_COMMAND,
+    methods::BEGIN_MEDIA_UPLOAD,
+    methods::APPEND_MEDIA_UPLOAD_CHUNK,
+    methods::FINISH_MEDIA_UPLOAD,
+    methods::BEGIN_MEDIA_READ,
+    methods::READ_MEDIA_CHUNK,
+    methods::FINISH_MEDIA_HANDLE,
 ];
 
 /// All host-callback method names in declaration order.

@@ -23,6 +23,7 @@ pub mod module_email;
 pub mod module_inbound;
 #[allow(deprecated, reason = "v21 module DTOs remain for one release")]
 pub mod module_interaction;
+pub mod module_media;
 pub mod module_progressive;
 pub mod module_relay;
 #[allow(deprecated, reason = "v21 module DTOs remain for one release")]
@@ -58,7 +59,7 @@ pub use config::ChannelsConfig;
 pub use controllers::{ChannelAuthMode, ChannelDefinition};
 pub use error::{Result, TinyChannelsError};
 pub use health::{ChannelHealthReport, ChannelHealthState};
-pub use host::{HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult};
+pub use host::{HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult, HostVoiceScope};
 pub use http::HttpProxyPolicy;
 pub use module_controller::{
     ChannelBackendRequest, ChannelBackendResult, ChannelControllerRequest, ChannelControllerResult,
@@ -67,6 +68,13 @@ pub use module_delivery::{DeliveryQueueEntry, DeliveryRecoveryState, DeliveryTer
 pub use module_email::{
     EmailAttachment, EmailAttachmentUpload, EmailSendRequest, EmailUploadBegin, EmailUploadChunk,
     EmailUploadHandle,
+};
+pub use module_media::{
+    MEDIA_READ_CAPACITY, MEDIA_READ_CHUNK_BYTES, MEDIA_UPLOAD_BEGIN_MAX_BYTES,
+    MEDIA_UPLOAD_CAPACITY, MEDIA_UPLOAD_CHUNK_BYTES, MEDIA_UPLOAD_MAX_BYTES,
+    MEDIA_UPLOAD_MAX_CHUNKS, MediaReadBegin, MediaReadChunk, MediaReadChunkResult,
+    MediaReadFinish, MediaReadHandle, MediaReadInfo, MediaUploadBegin, MediaUploadChunk,
+    MediaUploadFinish, MediaUploadHandle, MediaUploadResult,
 };
 pub use names::{BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH, methods};
 #[allow(
