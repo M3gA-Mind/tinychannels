@@ -1204,7 +1204,10 @@ async fn lark_file_upload_validates_size_and_preserves_audio_duration() {
         .filter(|request| request.target == "/open-apis/im/v1/files")
         .collect::<Vec<_>>();
     assert_eq!(upload_requests.len(), 2);
-    assert!(String::from_utf8_lossy(&upload_requests[1].raw_body).contains("duration\r\n\r\n1200"));
+    assert!(
+        String::from_utf8_lossy(&upload_requests[1].raw_body)
+            .contains("name=\"duration\"\r\n\r\n1200")
+    );
 }
 
 #[tokio::test]
