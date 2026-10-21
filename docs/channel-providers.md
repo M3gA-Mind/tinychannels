@@ -51,7 +51,7 @@ providers support every feature.
 | Signal | `providers/signal/conformance_tests.rs` |
 | Slack | `providers/slack/adapter_tests.rs` |
 | Telegram | `providers/telegram/channel_ops_tests.rs::configured_telegram_adapter_passes_mock_wire_conformance` |
-| Lark | `providers/lark_conformance_tests.rs` |
+| Lark | `providers/lark/legacy_conformance_tests.rs` |
 | WhatsApp Cloud and Web | `providers/whatsapp*/conformance_tests.rs` |
 | Yuanbao | `providers/yuanbao/conformance_tests.rs` |
 

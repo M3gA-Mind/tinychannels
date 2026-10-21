@@ -1,18 +1,36 @@
 # Issue 22 media protocol research
 
-This note records protocol evidence for the native media work in issue 22.
-It distinguishes a provider's native voice-message type from sending an audio
-file as an ordinary attachment. Capability claims should follow the type the
-wire protocol actually sends.
+This note records protocol evidence gathered during the original issue 22
+research. Provider implementation statements below are a historical baseline,
+not a description of current support. Native media was implemented afterward;
+the status table links to the current code and tests. Keep native voice
+messages distinct from ordinary audio-file attachments, and base capability
+claims on the type the wire protocol actually sends.
+
+## Current implementation status
+
+| Provider | Current native media path | Implementation evidence |
+| --- | --- | --- |
+| Lark / Feishu | Typed inbound files and voice notes; outbound images, files, video, audio, and voice, subject to provider limits, configured stores, and codecs. | [`lark/native.rs`](../src/providers/lark/native.rs), [`lark/api_tests.rs`](../src/providers/lark/api_tests.rs) |
+| QQ Official Bot | Typed image, video, and file ingress and bounded native media sends; native voice output when a host voice store is configured. Direct uploads are limited to 5 MiB; larger uploads need the chunk protocol. | [`qq/native.rs`](../src/providers/qq/native.rs), [`qq/native_tests.rs`](../src/providers/qq/native_tests.rs) |
+| DingTalk App Bot | Typed media and voice ingress plus native file and voice sends, subject to configured stores/codecs and provider limits. | [`dingtalk/native.rs`](../src/providers/dingtalk/native.rs), [`dingtalk/native_tests.rs`](../src/providers/dingtalk/native_tests.rs), [`dingtalk/dingtalk_tests.rs`](../src/providers/dingtalk/dingtalk_tests.rs) |
+| Yuanbao | URL-backed inbound `TIMSoundElem` becomes a typed voice note when the host voice store is configured. Native voice output remains unsupported. | [`yuanbao/inbound.rs`](../src/providers/yuanbao/inbound.rs), [`yuanbao/channel_tests.rs`](../src/providers/yuanbao/channel_tests.rs), [`yuanbao/native_tests.rs`](../src/providers/yuanbao/native_tests.rs) |
+
+These links describe the implementation at the TinyChannels revision recorded
+by the OpenHuman epic. They do not promise support for every media type; consult
+the provider's declared capabilities and limits.
 
 ## Yuanbao / Tencent IM
 
 The Yuanbao adapter uses the BizMsg protobuf protocol, not Tencent IM's
 documented REST message API. Its local codec defines `TIMSoundElem` as
 `MsgContent.sound` (protobuf field 7; see `src/providers/yuanbao/types.rs`,
-`proto_constants.rs`, and `proto.rs`). Inbound decoding already recognizes
-that element as `MessageKind::Voice` (`src/providers/yuanbao/inbound.rs`), but
-the current text projection drops sound-only messages before dispatch.
+`proto_constants.rs`, and `proto.rs`). Inbound decoding recognizes that
+element as `MessageKind::Voice` (`src/providers/yuanbao/inbound.rs`). At the
+time of this research, the text projection dropped sound-only messages before
+dispatch; current code can ingest a URL-backed sound as a typed voice note
+when the host voice store is configured (see the current implementation links
+above).
 
 Tencent's [Message Formats reference](https://intl.cloud.tencent.com/pt/document/product/647/74355)
 documents `TIMSoundElem` fields `Url`, `UUID`, `Size`, `Second`, and
@@ -34,15 +52,12 @@ and file kinds and does not resolve voice. This corroborates the distinction
 between recognition and retrievable audio bytes.
 
 No verified native outbound `TIMSoundElem` encoder is present in this
-repository or the cited schema: the current encoder lacks verified
-`Download_Flag`/duration semantics for a sound payload. Keep native voice
-message capability disabled until a captured or documented BizMsg encoding
-establishes the required fields. The current generic sender already encodes
-every non-image file as `TIMFileElem` (see
-`src/providers/yuanbao/outbound.rs::prepare_media_body_with_caption`), so an
-audio MIME could use ordinary file transport. It still needs dedicated
-planner/capability and wire-receipt tests before advertising audio attachment
-support, and must not be described as a native voice bubble.
+repository or the cited schema: the encoder lacks verified
+`Download_Flag`/duration semantics for a sound payload, so native voice output
+remains disabled. The generic sender encodes non-image files as `TIMFileElem`
+(see `src/providers/yuanbao/outbound.rs::prepare_media_body_with_caption`).
+That file path is distinct from a native voice message; consult current
+declared capabilities before claiming audio-file delivery.
 
 ## Lark / Feishu
 
@@ -72,16 +87,13 @@ voice codecs require the shared host codec port before they can use this
 native type. Audio sent as a generic file remains a file message.
 
 The same API surface is used for Feishu and Lark with the configured regional
-API base (`open.feishu.cn` or `open.larksuite.com`). The current adapter only
-parses text/post and sends `msg_type=text` (`src/providers/lark.rs`), so its
-missing media support is an implementation gap, not a platform limitation.
-Implementation should use the image upload endpoint for image parts, file
-upload for file and audio parts (including the required `file_type` and
-duration metadata where the API requires it), then send the corresponding
-message `msg_type` and returned key. Inbound message type/content parsing and
-resource download should preserve the provider message id and chat/thread
-scope, enforce the existing user allowlist, and ingest bytes through the
-shared host media/voice ports with size and MIME bounds.
+API base (`open.feishu.cn` or `open.larksuite.com`). The text-only adapter
+described in the original research was the pre-media baseline. The current
+provider implements typed image, file, audio, video, and voice paths, including
+resource download, scoped host storage, and configured voice codec handling;
+the provider tests linked above cover requests and typed envelopes. Platform
+constraints still apply: native audio requires compatible OPUS input, and
+captions or thread/reply addressing are unsupported on some media paths.
 
 Audio sent as `msg_type=audio` is a native audio message on this API. Whether
 Lark's event payload marks a received audio message as a voice note versus a
@@ -107,26 +119,28 @@ fallback:
   endpoints are /v2/groups/{group_openid}/files and /v2/groups/{group_openid}/messages;
   uploaded media is isolated between DM and group scopes.
 
-This adapter can safely support bounded native uploads without implementing
-chunk transfer: it will enforce a 5 MiB maximum before upload, classify the
-actual native file type, upload with srv_send_msg=false, then send the returned
-opaque file_info in the separate message request. The declared capability
-limit must remain 5 MiB until the full chunk-upload protocol is implemented.
+The current adapter supports bounded native uploads without implementing
+chunk transfer: it enforces a 5 MiB maximum before upload, classifies the
+native file type, uploads with `srv_send_msg=false`, then sends the returned
+opaque `file_info` in the separate message request. The declared capability
+limit remains 5 MiB until the full chunk-upload protocol is implemented.
 
 Tencent's own [Node.js bot SDK](https://github.com/tencent-connect/qqbot-nodejs/blob/main/USAGE.md)
 documents inbound `attachments` with `content_type`, `url`, and optional
 filename on C2C/group event objects, and the official
 [botpy C2C file example](https://github.com/tencent-connect/botpy/blob/master/examples/demo_c2c_reply_file.py)
-shows native upload followed by a msg_type=7 response. This confirms that the
-existing QQ listener's text-only projection drops supported inbound
-attachments; it is an implementation gap, not a protocol limitation.
+shows native upload followed by a msg_type=7 response. The original research
+identified that the QQ listener dropped supported inbound attachments. The
+current native path ingests typed image, video, and file attachments; tests
+linked above cover bounded uploads and inbound storage.
 
 The message timestamp is RFC3339 text, not Unix milliseconds. Tencent's
 [official Go SDK message model](https://github.com/tencent-connect/botgo/blob/fe31c0dfe469001e0f783d2f07e7de7bd08b403f/dto/message.go#L15-L20)
 types `timestamp` as its `Timestamp` string, and its
 [Timestamp parser](https://github.com/tencent-connect/botgo/blob/fe31c0dfe469001e0f783d2f07e7de7bd08b403f/dto/timestamp.go)
-uses Go's `time.RFC3339` layout. The typed ingress should parse that source
-format into Unix milliseconds instead of silently dropping the timestamp.
+uses Go's `time.RFC3339` layout. The current typed ingress parses that source
+format into Unix milliseconds; `providers/qq/native_tests.rs` covers RFC3339,
+integer, and invalid timestamp values.
 
 ## DingTalk App Bot
 
@@ -135,10 +149,11 @@ distinguishes App Bots from custom webhook bots: App Bots can call OpenAPI,
 including media upload, while custom webhook bots cannot. The official
 [App Bot reply guide](https://opensource.dingtalk.com/developerpedia/docs/learn/bot/appbot/reply/)
 says session webhooks support text and Markdown, while OpenAPI supports media
-uploads and richer message forms. The current adapter is an App Bot Stream Mode
-client (`client_id` / `client_secret`) but retains only each incoming message's
-session webhook, so it does not yet have enough target state for the native
-OpenAPI media-send path.
+uploads and richer message forms. The original research found that the App Bot
+Stream Mode adapter retained only each incoming message's session webhook.
+The current native provider path implements typed inbound media and voice
+handling and App Bot file/voice sends; see the current implementation and test
+links above for its supported scope.
 
 The official [received-message type reference](https://opensource.dingtalk.com/developerpedia/docs/learn/bot/message/)
 lists image, video, voice, file, and rich-text events. The official
@@ -160,9 +175,10 @@ existing 10 MiB bound and codec support. The newer robot send API is
 `POST https://api.dingtalk.com/v1.0/robot/groupMessages/send` with
 `robotCode`, `openConversationId`, `msgKey`, and JSON-string `msgParam`; the
 private-chat endpoint is documented separately. These endpoints require an
-App Bot's robot code and an access token. The current adapter receives
-`robotCode` in callbacks but does not retain it, so adding this path requires
-account-scoped retention and tests for both group and direct-message targets.
+App Bot's robot code and an access token. Current account-scoped send behavior
+is covered by the native provider tests linked above. Keep the
+platform-specific caveats below: support depends on bot type, configured
+callback scope, and provider response.
 
 There is a material platform/API compatibility caveat: Hermes Agent
 [issue #30144](https://github.com/NousResearch/hermes-agent/issues/30144)
