@@ -2303,7 +2303,10 @@ async fn send_configured_outcome(
             })
             .await
     });
-    let command = commands.recv().await.expect("adapter dispatch");
+    let command = tokio::time::timeout(Duration::from_secs(2), commands.recv())
+        .await
+        .expect("adapter send dispatch timed out")
+        .expect("adapter dispatch");
     command.started.send(()).unwrap();
     command
         .reply
