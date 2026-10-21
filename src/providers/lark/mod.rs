@@ -1,6 +1,8 @@
 mod capabilities;
 mod config;
 mod inbound;
+mod media;
+mod outbound;
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceCodec, VoiceMediaStore};
 use crate::traits::ChannelMessage;
 use futures_util::{SinkExt, StreamExt};
