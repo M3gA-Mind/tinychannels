@@ -2575,10 +2575,10 @@ async fn remote_help_is_parsed_and_rendered_inside_the_module() {
                     "content":"/help", "channel":"telegram:fixture", "timestamp":1
                 }))
                 .unwrap(),
-                capabilities: Some(tinychannels_bus::ChannelCapabilities {
+                capabilities: Some(Box::new(tinychannels_bus::ChannelCapabilities {
                     remote_control: true,
                     ..Default::default()
-                }),
+                })),
                 route: RemoteRoute {
                     provider: "fixture".into(),
                     model: "fixture".into(),
@@ -2793,10 +2793,10 @@ async fn route_remote_commands_use_host_capabilities_for_isolated_runtime() {
                 "content":"/help", "channel":"telegram", "timestamp":1
             }))
             .unwrap(),
-            capabilities: Some(tinychannels_bus::ChannelCapabilities {
+            capabilities: Some(Box::new(tinychannels_bus::ChannelCapabilities {
                 remote_control: true,
                 ..Default::default()
-            }),
+            })),
             route: RemoteRoute {
                 provider: "fixture".into(),
                 model: "fixture".into(),

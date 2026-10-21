@@ -580,7 +580,7 @@ impl Channels {
             tinychannels_bus::module_control::ChannelControlRequest::Route {
                 capabilities: Some(capabilities),
                 ..
-            } => capabilities.clone(),
+            } => capabilities.as_deref().cloned().unwrap_or_default(),
             _ => configured_capabilities(&self.running, name).await,
         };
         crate::control::prepare(&self.host, request, capabilities).await

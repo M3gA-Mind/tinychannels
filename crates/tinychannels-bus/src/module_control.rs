@@ -23,7 +23,7 @@ pub enum ChannelControlRequest {
         /// Missing values retain compatibility with callers that rely on the
         /// module's own configured provider registry.
         #[serde(default)]
-        capabilities: Option<ChannelCapabilities>,
+        capabilities: Option<Box<ChannelCapabilities>>,
         route: RemoteRoute,
         history_len: usize,
         providers: Vec<ProviderDescriptor>,
