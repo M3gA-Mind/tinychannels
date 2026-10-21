@@ -13,8 +13,10 @@ re-exports these modules to preserve its published implementation paths.
 Extension traits implement algorithms on bus-owned DTOs. Import the appropriate
 trait to retain method syntax; see the
 [relocation specification](../../docs/spec/pure-contract-relocation.md).
-`Channel` and `ChannelSendExt` are runtime-owned in-process provider seams;
-`ChannelMessage`, `ChannelIngress`, and `SendMessage` remain pure bus DTOs.
-History state, compaction helpers, and worker failure formatting also live here
-because they use runtime synchronization. Additional loadable-module operations
-remain a separate migration slice.
+Provider implementations use the runtime's typed adapter and operation ports
+for lifecycle, inbound delivery, sending, and optional channel operations.
+`ChannelMessage` and `SendMessage` remain bus-owned compatibility DTOs at the
+wire boundary; `ChannelIngress` is the typed inbound contract. History state,
+compaction helpers, and worker failure formatting also live here because they
+use runtime synchronization. Additional loadable-module operations remain a
+separate migration slice.
