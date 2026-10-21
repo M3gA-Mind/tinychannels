@@ -516,12 +516,15 @@ impl crate::provider::TestProviderBehavior for CaptureChannel {
     }
 }
 
-struct RemoteControlCaptureChannel(tokio::sync::mpsc::Sender<SendMessage>);
+struct RemoteControlCaptureChannel {
+    id: &'static str,
+    sent: tokio::sync::mpsc::Sender<SendMessage>,
+}
 
 #[async_trait::async_trait]
 impl crate::provider::TestProviderBehavior for RemoteControlCaptureChannel {
     fn test_provider_id(&self) -> &'static str {
-        "fixture"
+        self.id
     }
     fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
@@ -540,7 +543,7 @@ impl crate::provider::TestProviderBehavior for RemoteControlCaptureChannel {
             crate::provider::test_message_text(message),
             message.conversation_id.clone(),
         );
-        self.0
+        self.sent
             .send(legacy)
             .await
             .map_err(|error| tinychannels::channel::ChannelSendError {
@@ -3086,7 +3089,10 @@ async fn enable_remote_providers(channels: &Channels) {
         channels.running.lock().await.insert(
             configured_name.to_owned(),
             Running::start_test(
-                Arc::new(RemoteControlCaptureChannel(sender)),
+                Arc::new(RemoteControlCaptureChannel {
+                    id: configured_name,
+                    sent: sender,
+                }),
                 Arc::new(Hooks::default()),
                 host.clone(),
             ),
@@ -4211,26 +4217,31 @@ async fn service_send_failures_preserve_named_error_and_durable_queue_busy_refus
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (service, _callbacks, _server) =
         channels_with_store(Arc::new(FailingChannel(calls.clone()))).await;
-    for error in [
-        service
-            .send_message("fixture".into(), SendMessage::new("hello", "room"))
-            .await
-            .expect_err("provider fails"),
-        service
-            .send_channel_intent(
-                "fixture".into(),
-                ChannelOutboundIntent {
-                    turn_id: None,
-                    durability: tinychannels::DeliveryDurability::BestEffort,
-                    ..required_intent("best-effort", "hello")
-                },
-            )
-            .await
-            .map(|_| ())
-            .expect_err("provider fails"),
-    ] {
-        assert!(matches!(error, BusError::MethodFailed { name, .. } if name == SEND_FAILED_ERROR));
-    }
+    let legacy_error = service
+        .send_message("fixture".into(), SendMessage::new("hello", "room"))
+        .await
+        .expect_err("legacy send surface projects the provider failure");
+    assert!(
+        matches!(legacy_error, BusError::MethodFailed { name, .. } if name == SEND_FAILED_ERROR)
+    );
+    let typed_result = service
+        .send_channel_intent(
+            "fixture".into(),
+            ChannelOutboundIntent {
+                turn_id: None,
+                durability: tinychannels::DeliveryDurability::BestEffort,
+                ..required_intent("best-effort", "hello")
+            },
+        )
+        .await
+        .expect("typed API returns the structured provider outcome");
+    assert_eq!(
+        typed_result
+            .error
+            .as_ref()
+            .map(|error| error.message.as_str()),
+        Some("fixture provider failure")
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     let admission = service.delivery_admission.lock().await;
     let error = service
