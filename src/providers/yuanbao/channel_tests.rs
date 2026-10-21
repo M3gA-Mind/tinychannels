@@ -1,5 +1,6 @@
-use crate::traits::Channel;
 use std::sync::Arc;
+use crate::channel::ChannelStreamingDraft;
+use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
 
 use super::*;
 
@@ -9,6 +10,15 @@ fn good_cfg() -> YuanbaoConfig {
     c.ws_domain = "wss://example".into();
     c.token = "tok".into();
     c
+}
+
+fn draft_intent(recipient: &str, text: &str) -> ChannelOutboundIntent {
+    ChannelOutboundIntent {
+        channel_id: "yuanbao".into(),
+        conversation_id: recipient.into(),
+        payload: OutboundPayload::Text { text: text.into() },
+        ..Default::default()
+    }
 }
 
 #[test]
@@ -366,15 +376,24 @@ fn supports_reactions_is_false() {
 #[tokio::test]
 async fn send_draft_returns_marker_id() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
-    let msg = SendMessage::new("ignored", "user-42");
-    let id = ch.send_draft(&msg).await.unwrap();
+    let id = ChannelStreamingDraft::start_draft(&ch, draft_intent("user-42", "ignored"))
+        .await
+        .unwrap();
     assert_eq!(id.as_deref(), Some("yb-draft:user-42"));
 }
 
 #[tokio::test]
 async fn update_draft_is_a_noop_ok() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
-    assert!(ch.update_draft("user-42", "any-id", "text").await.is_ok());
+    assert!(
+        ChannelStreamingDraft::update_draft(
+            &ch,
+            "any-id",
+            draft_intent("user-42", "text")
+        )
+        .await
+        .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -531,11 +550,13 @@ async fn disconnected_sends_and_typing_return_errors_without_leaving_heartbeat_t
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
     ch.register_recipient_alias("alias", "original").await;
     assert!(crate::provider_test_support::send_v1(&ch, &SendMessage::new("hello", "alias")).await.is_err());
-    assert!(
-        ch.finalize_draft("alias", "draft", "hello", Some("thread"))
-            .await
-            .is_err()
-    );
+    assert!(ChannelStreamingDraft::finalize_draft(
+        &ch,
+        "draft",
+        draft_intent("alias", "hello")
+    )
+    .await
+    .is_err());
     assert!(ch.start_typing("alias").await.is_err());
     assert!(ch.heartbeat_tasks.lock().await.is_empty());
     ch.start_heartbeat_task("original").await;
