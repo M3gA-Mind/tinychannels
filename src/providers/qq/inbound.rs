@@ -2,6 +2,21 @@
 
 use super::*;
 
+const INBOUND_ATTACHMENT_LIMIT: u64 = 50 * 1024 * 1024;
+const MAX_INBOUND_ATTACHMENTS: usize = 10;
+
+pub(super) fn timestamp_unix_ms(value: &serde_json::Value) -> Option<u64> {
+    if let Some(timestamp) = value.as_u64() {
+        return Some(timestamp);
+    }
+    let timestamp = value.as_str()?;
+    if let Ok(timestamp) = timestamp.parse::<u64>() {
+        return Some(timestamp);
+    }
+    let timestamp = chrono::DateTime::parse_from_rfc3339(timestamp).ok()?;
+    u64::try_from(timestamp.timestamp_millis()).ok()
+}
+
 impl QQChannel {
     pub(super) fn http_client(&self) -> reqwest::Client {
         self.http_client.clone()
@@ -402,5 +417,174 @@ impl QQChannel {
         } else {
             anyhow::bail!("QQ WebSocket connection closed")
         }
+    }
+}
+
+// Typed gateway message decoding and configured host-store ingestion.
+use tinychannels_bus::channel::ConversationKind;
+
+impl QQChannel {
+    /// Build a typed QQ inbound envelope from a gateway message. Attachment
+    /// downloads are restricted to HTTPS Tencent hosts, do not follow
+    /// redirects, and are bounded before they reach host storage.
+    #[cfg(test)]
+    pub(crate) async fn inbound_envelope(
+        &self,
+        event_type: &str,
+        message: &serde_json::Value,
+    ) -> Option<tinychannels_bus::ChannelInboundEnvelope> {
+        self.inbound_envelope_with_mode(event_type, message, false)
+            .await
+    }
+
+    pub(crate) async fn inbound_envelope_for_listener(
+        &self,
+        event_type: &str,
+        message: &serde_json::Value,
+    ) -> Option<tinychannels_bus::ChannelInboundEnvelope> {
+        self.inbound_envelope_with_mode(event_type, message, true)
+            .await
+    }
+
+    async fn inbound_envelope_with_mode(
+        &self,
+        event_type: &str,
+        message: &serde_json::Value,
+        listener: bool,
+    ) -> Option<tinychannels_bus::ChannelInboundEnvelope> {
+        use crate::providers::native::inbound::{
+            InboundFile, Ingest, Ingested, assemble, media_of,
+        };
+
+        let message_id = message.get("id")?.as_str()?.to_owned();
+        if message_id.is_empty() || self.native.has_seen(&format!("qq:{message_id}")) {
+            return None;
+        }
+        let (sender_id, conversation_id, kind) = match event_type {
+            "C2C_MESSAGE_CREATE" => {
+                let author = message.get("author")?;
+                let sender = author
+                    .get("user_openid")
+                    .or_else(|| author.get("id"))?
+                    .as_str()?;
+                (
+                    sender.to_owned(),
+                    format!("user:{sender}"),
+                    ConversationKind::Dm,
+                )
+            }
+            "GROUP_AT_MESSAGE_CREATE" => {
+                let author = message.get("author")?;
+                let sender = author.get("member_openid")?.as_str()?;
+                let group = message.get("group_openid")?.as_str()?;
+                (
+                    sender.to_owned(),
+                    format!("group:{group}"),
+                    ConversationKind::Group,
+                )
+            }
+            _ => return None,
+        };
+        // Keep the exact legacy allowlist behavior before any attachment I/O.
+        if !self.is_user_allowed(&sender_id) {
+            return None;
+        }
+        let text = message
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        let conversation = tinychannels_bus::ConversationRef {
+            kind,
+            id: conversation_id,
+            ..Default::default()
+        };
+        let mut ingested = Ingested::default();
+        let mut downloaded_bytes = 0_u64;
+        if (listener || self.native.events.is_some())
+            && self.native.media_repository.is_some()
+            && let Some(attachments) = message
+                .get("attachments")
+                .and_then(serde_json::Value::as_array)
+        {
+            for (index, attachment) in attachments.iter().take(MAX_INBOUND_ATTACHMENTS).enumerate()
+            {
+                let Some(url) = attachment.get("url").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let remaining = INBOUND_ATTACHMENT_LIMIT.saturating_sub(downloaded_bytes);
+                let Some((bytes, response_mime)) = self.download_attachment(url, remaining).await
+                else {
+                    continue;
+                };
+                downloaded_bytes += bytes.len() as u64;
+                let mime = attachment
+                    .get("content_type")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or(&response_mime)
+                    .to_owned();
+                let name = attachment
+                    .get("filename")
+                    .or_else(|| attachment.get("name"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+                Ingest {
+                    provider: "qq",
+                    channel: tinychannels_bus::ChannelRef {
+                        id: "qq".into(),
+                        account_id: None,
+                    },
+                    repository: self.native.media_repository.as_ref(),
+                    voice_store: self.native.voice_media_store.as_ref(),
+                    transcriber: self.native.transcriber.as_ref(),
+                    file_bytes: INBOUND_ATTACHMENT_LIMIT,
+                    voice_bytes: INBOUND_ATTACHMENT_LIMIT,
+                }
+                .add(
+                    &mut ingested,
+                    &conversation,
+                    &message_id,
+                    InboundFile {
+                        bytes,
+                        mime,
+                        name,
+                        duration_ms: None,
+                        // QQ attachments do not distinguish voice notes from
+                        // ordinary audio files in the documented event shape.
+                        voice: false,
+                        dedupe_key: format!("{message_id}:{index}"),
+                        transcript: None,
+                    },
+                )
+                .await;
+            }
+        }
+        let parts = assemble(&text, None, ingested);
+        if parts.is_empty() {
+            return None;
+        }
+        if !listener {
+            self.native.mark_seen(format!("qq:{message_id}"));
+        }
+        Some(tinychannels_bus::ChannelInboundEnvelope {
+            channel: tinychannels_bus::ChannelRef {
+                id: "qq".into(),
+                account_id: None,
+            },
+            message_id: message_id.clone(),
+            timestamp_unix_ms: message.get("timestamp").and_then(timestamp_unix_ms),
+            conversation,
+            sender: tinychannels_bus::SenderRef {
+                id: sender_id,
+                ..Default::default()
+            },
+            text,
+            media: media_of(&parts),
+            parts,
+            raw: Some(serde_json::json!({"providerMessageId": message_id})),
+            ..Default::default()
+        })
     }
 }

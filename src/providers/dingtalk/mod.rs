@@ -51,6 +51,10 @@ struct GatewayResponse {
     ticket: String,
 }
 
+mod capabilities;
+mod media;
+mod outbound;
+
 #[path = "native.rs"]
 mod native;
 

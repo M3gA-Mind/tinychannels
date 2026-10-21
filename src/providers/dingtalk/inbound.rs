@@ -329,3 +329,177 @@ pub(super) fn no_redirect_client() -> reqwest::Client {
         .build()
         .expect("building the DingTalk attachment HTTP client should succeed")
 }
+
+// Typed callback decoding and host-store ingestion.
+use super::native::{MAX_MEDIA_BYTES, conversation_context_key};
+use crate::providers::native::inbound::{InboundFile, Ingest, Ingested};
+use tinychannels_bus::channel::{
+    ChannelInboundEnvelope, ConversationKind, ConversationRef, SenderRef,
+};
+use tinychannels_bus::{VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState};
+
+impl DingTalkChannel {
+    pub(super) async fn inbound_envelope_for_listener(
+        &self,
+        data: &serde_json::Value,
+    ) -> Option<ChannelInboundEnvelope> {
+        self.inbound_envelope_with_mode(data).await
+    }
+
+    async fn inbound_envelope_with_mode(
+        &self,
+        data: &serde_json::Value,
+    ) -> Option<ChannelInboundEnvelope> {
+        use crate::providers::native::inbound::{assemble, media_of};
+
+        let message_id = data.get("msgId")?.as_str()?.to_owned();
+        if message_id.is_empty() || self.native.has_seen(&format!("dingtalk:{message_id}")) {
+            return None;
+        }
+        let sender_id = data.get("senderStaffId")?.as_str()?.to_owned();
+        if sender_id.is_empty() || !self.is_user_allowed(&sender_id) {
+            return None;
+        }
+        let is_direct = data
+            .get("conversationType")
+            .and_then(|value| {
+                value
+                    .as_str()
+                    .map(|value| value == "1")
+                    .or_else(|| value.as_i64().map(|value| value == 1))
+            })
+            .unwrap_or(true);
+        let conversation_id = data
+            .get("conversationId")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&sender_id)
+            .to_owned();
+        let conversation = ConversationRef {
+            kind: if is_direct {
+                ConversationKind::Dm
+            } else {
+                ConversationKind::Group
+            },
+            id: conversation_id.clone(),
+            ..Default::default()
+        };
+        self.robot_contexts.write().await.insert(
+            conversation_context_key(conversation.kind, &conversation_id),
+            serde_json::json!({
+                "robotCode": data.get("robotCode").and_then(serde_json::Value::as_str).unwrap_or_default(),
+                "senderId": data.get("senderId").and_then(serde_json::Value::as_str).unwrap_or_default(),
+                "senderStaffId": data.get("senderStaffId").and_then(serde_json::Value::as_str).unwrap_or_default(),
+            }),
+        );
+        let message_type = data
+            .get("msgtype")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let content = data.get("content").unwrap_or(&serde_json::Value::Null);
+        let text = data
+            .pointer("/text/content")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        let mut ingested = Ingested::default();
+        let voice = message_type == "audio";
+        let can_ingest_file =
+            self.native.media_repository.is_some() && matches!(message_type, "picture" | "file");
+        let can_ingest_voice = self.native.voice_media_store.is_some() && voice;
+        if can_ingest_file || can_ingest_voice {
+            let download_code = if message_type == "picture" {
+                content
+                    .get("pictureDownloadCode")
+                    .or_else(|| content.get("downloadCode"))
+            } else {
+                content.get("downloadCode")
+            }
+            .and_then(serde_json::Value::as_str)?;
+            let robot_code = data.get("robotCode")?.as_str()?;
+            let (bytes, mime) = self
+                .download_media(download_code, robot_code, MAX_MEDIA_BYTES)
+                .await?;
+            let image = message_type == "picture";
+            let transcript = content
+                .get("recognition")
+                .and_then(serde_json::Value::as_str)
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| VoiceTranscript {
+                    text: text.to_owned(),
+                    language: None,
+                    state: VoiceTranscriptState::Complete,
+                    source: VoiceTranscriptSource::Provider,
+                });
+            Ingest {
+                provider: "dingtalk",
+                channel: tinychannels_bus::ChannelRef {
+                    id: "dingtalk".into(),
+                    account_id: Some(self.client_id.clone()),
+                },
+                repository: self.native.media_repository.as_ref(),
+                voice_store: self.native.voice_media_store.as_ref(),
+                transcriber: self.native.transcriber.as_ref(),
+                file_bytes: MAX_MEDIA_BYTES,
+                voice_bytes: MAX_MEDIA_BYTES,
+            }
+            .add(
+                &mut ingested,
+                &conversation,
+                &message_id,
+                InboundFile {
+                    bytes,
+                    mime: if mime.is_empty() {
+                        if image {
+                            "image/jpeg"
+                        } else {
+                            "application/octet-stream"
+                        }
+                        .into()
+                    } else {
+                        mime
+                    },
+                    name: content
+                        .get("fileName")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                    duration_ms: None,
+                    voice,
+                    dedupe_key: format!("{message_id}:0"),
+                    transcript,
+                },
+            )
+            .await;
+        }
+        let parts = assemble(&text, None, ingested);
+        if parts.is_empty() {
+            return None;
+        }
+        Some(ChannelInboundEnvelope {
+            channel: tinychannels_bus::ChannelRef {
+                id: "dingtalk".into(),
+                account_id: Some(self.client_id.clone()),
+            },
+            message_id: message_id.clone(),
+            timestamp_unix_ms: data.get("createAt").and_then(serde_json::Value::as_u64),
+            conversation,
+            sender: SenderRef {
+                id: sender_id,
+                name: data
+                    .get("senderNick")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                ..Default::default()
+            },
+            text,
+            media: media_of(&parts),
+            parts,
+            raw: Some(serde_json::json!({
+                "providerMessageId": message_id,
+                "messageType": message_type,
+            })),
+            ..Default::default()
+        })
+    }
+}
