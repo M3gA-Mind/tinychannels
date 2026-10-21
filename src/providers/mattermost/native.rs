@@ -105,7 +105,7 @@ impl NativeProvider for MattermostChannel {
     }
 
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError> {
-        super::outbound::deliver_native(self, target, step).await
+        self.deliver_native(target, step).await
     }
 
     async fn set_typing(&self, conversation: &str, on: bool) -> Result<(), ChannelSendError> {
@@ -129,16 +129,16 @@ impl NativeProvider for MattermostChannel {
         reaction: &tinychannels_bus::channel::ChannelReaction,
         remove: bool,
     ) -> Result<(), ChannelSendError> {
-        super::outbound::react_native(self, conversation, provider_message_id, reaction, remove)
+        self.react_native(conversation, provider_message_id, reaction, remove)
             .await
     }
 
     async fn edit_text(&self, address: &Address, text: &str) -> Result<(), ChannelSendError> {
-        super::outbound::edit_native(self, address, text).await
+        self.edit_native(address, text).await
     }
 
     async fn delete_message(&self, address: &Address) -> Result<(), ChannelSendError> {
-        super::outbound::delete_native(self, address).await
+        self.delete_native(address).await
     }
 }
 

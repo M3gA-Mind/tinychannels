@@ -203,7 +203,7 @@ pub(super) fn file_type_for_mime(mime: &str) -> &'static str {
 }
 
 impl LarkChannel {
-    pub(super) async fn prepare_steps(
+    pub(super) async fn prepare_native_steps(
         &self,
         _target: &crate::providers::native::Target,
         steps: &mut [crate::providers::native::Step],

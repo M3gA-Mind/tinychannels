@@ -1,6 +1,9 @@
 //! Lark event intake over the webhook and WebSocket transports.
 
 use super::*;
+use tinychannels_bus::{
+    ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef, SenderRef,
+};
 
 impl LarkChannel {
     pub(super) fn http_client(&self) -> reqwest::Client {

@@ -3,15 +3,21 @@
 use super::FILE_LIMIT;
 use super::LarkChannel;
 #[cfg(test)]
-use super::media::{file_type_for_mime, is_ogg_opus};
+#[cfg(test)]
+use super::media::file_type_for_mime;
+pub(super) use super::media::is_ogg_opus;
 #[cfg(test)]
 use super::outbound::{known_unsent, uncertain_send};
 use crate::host::{MediaRepository, VoiceMediaStore};
+#[cfg(test)]
+use crate::providers::native::FileStep;
 use crate::providers::native::{Limits, NativeProvider, Sent, Step, Target};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tinychannels_bus::ChannelCapabilities;
 use tinychannels_bus::channel::ChannelSendError;
+#[cfg(test)]
+use tinychannels_bus::{ChannelRef, ConversationRef};
 
 #[async_trait]
 impl NativeProvider for LarkChannel {
@@ -61,7 +67,7 @@ impl NativeProvider for LarkChannel {
         target: &Target,
         steps: &mut [Step],
     ) -> Result<(), ChannelSendError> {
-        super::media::prepare_steps(self, target, steps).await
+        self.prepare_native_steps(target, steps).await
     }
 
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError> {

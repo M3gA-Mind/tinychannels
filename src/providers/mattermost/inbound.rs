@@ -266,7 +266,7 @@ impl MattermostChannel {
     }
 }
 
-fn valid_file_id(file_id: &str) -> bool {
+pub(super) fn valid_file_id(file_id: &str) -> bool {
     !file_id.is_empty()
         && file_id
             .bytes()

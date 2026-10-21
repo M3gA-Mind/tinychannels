@@ -1,6 +1,8 @@
 //! Mattermost typing indicators and outbound actions.
 
 use super::*;
+use crate::providers::native::{Address, Sent, Step, Target};
+use tinychannels_bus::channel::{ChannelSendError, MessageReceiptPartKind, SendErrorKind};
 
 impl MattermostChannel {
     pub(super) async fn start_typing_loop(&self, recipient: &str) -> Result<()> {
@@ -181,7 +183,7 @@ impl MattermostChannel {
     }
 }
 
-fn channel_id(conversation: &str) -> &str {
+pub(super) fn channel_id(conversation: &str) -> &str {
     conversation
         .split_once(':')
         .map_or(conversation, |(id, _)| id)
@@ -270,7 +272,7 @@ impl MattermostChannel {
     }
 }
 
-fn mattermost_emoji_name(value: &str) -> Option<String> {
+pub(super) fn mattermost_emoji_name(value: &str) -> Option<String> {
     let value = value.trim();
     let known = match value {
         "👍" => Some("+1"),
@@ -291,7 +293,7 @@ fn mattermost_emoji_name(value: &str) -> Option<String> {
     .then(|| name.to_owned())
 }
 
-fn mattermost_request_error(operation: &str, may_have_been_applied: bool) -> ChannelSendError {
+pub(super) fn mattermost_request_error(operation: &str, may_have_been_applied: bool) -> ChannelSendError {
     ChannelSendError {
         kind: if may_have_been_applied {
             SendErrorKind::Unknown
@@ -305,7 +307,7 @@ fn mattermost_request_error(operation: &str, may_have_been_applied: bool) -> Cha
     }
 }
 
-fn mattermost_status_error(
+pub(super) fn mattermost_status_error(
     response: &reqwest::Response,
     operation: &str,
     may_have_been_applied: bool,
@@ -346,7 +348,7 @@ fn mattermost_status_error(
     }
 }
 
-pub(super) fn http_error(
+pub(super) pub(super) fn http_error(
     status: reqwest::StatusCode,
     operation: &str,
     final_post: bool,

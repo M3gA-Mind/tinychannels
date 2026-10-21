@@ -1,5 +1,7 @@
 //! Mattermost file upload and download operations.
 
+use super::inbound::valid_file_id;
+use super::outbound::http_error;
 use super::outbound::http_error;
 use super::*;
 use crate::providers::native::FileStep;
