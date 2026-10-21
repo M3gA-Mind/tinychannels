@@ -497,7 +497,7 @@ impl AdapterFixture for WebKit {
                     .offline(false)
                     .build();
                 self.channel
-                    .inbound_state(tx)
+                    .inbound_state(tx, None)
                     .handle_event(&Event::Receipt(receipt))
                     .await;
                 let event = self
