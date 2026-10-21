@@ -6,6 +6,7 @@ use std::time::Duration;
 use tinychannels_conformance::{
     AdapterFixture, ConformanceFeature, ExpectedScope, WireObservation, check_all_features,
 };
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio_rustls::TlsAcceptor;
@@ -17,8 +18,8 @@ const GUARD: Duration = Duration::from_secs(10);
 
 fn acceptor(tls12_only: bool) -> TlsAcceptor {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let cert = include_bytes!("../../tests/fixtures/tls/cert.der");
-    let key = include_bytes!("../../tests/fixtures/tls/key.der");
+    let cert = include_bytes!("../../../tests/fixtures/tls/cert.der");
+    let key = include_bytes!("../../../tests/fixtures/tls/key.der");
     let builder = if tls12_only {
         rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS12])
     } else {
@@ -881,6 +882,86 @@ async fn send_fails_before_listen_has_connected() {
     .unwrap_err();
     assert_eq!(error.message, "IRC is not connected");
     assert!(!error.sent_before_error);
+}
+
+#[tokio::test]
+async fn stop_recovers_a_poisoned_listener_lock_and_signals_cancellation() {
+    let channel = std::sync::Arc::new(IrcChannel::new(config(1)));
+    let (cancel, mut cancelled) = tokio::sync::watch::channel(false);
+    *channel.listener_cancel.lock().unwrap() = Some(cancel);
+
+    let poisoner = channel.clone();
+    let poisoned = std::thread::spawn(move || {
+        let _guard = poisoner.listener_cancel.lock().unwrap();
+        panic!("poison listener cancellation state for recovery test");
+    })
+    .join()
+    .is_err();
+    assert!(poisoned, "the test must exercise a genuinely poisoned lock");
+
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .expect("stop recovers the lock and cancels the owned listener");
+    tokio::time::timeout(GUARD, cancelled.changed())
+        .await
+        .expect("stop should publish cancellation")
+        .expect("the cancellation sender remains registered");
+    assert!(*cancelled.borrow());
+}
+
+#[tokio::test]
+async fn typed_send_uses_the_scoped_conversation_on_an_active_connection() {
+    let (listener, port) = bind().await;
+    let acceptor = acceptor(false);
+    let channel = Arc::new(IrcChannel::new(config(port)));
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
+    let mut start = tokio::spawn({
+        let channel = channel.clone();
+        async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
+    });
+    let mut peer = tokio::select! {
+        result = &mut start => panic!("IRC start returned before connecting: {result:?}"),
+        peer = Peer::accept(&listener, &acceptor) => peer,
+    };
+    peer.expect("NICK bot").await;
+    peer.expect("USER botuser 0 * :OpenHuman").await;
+    peer.say(":srv 001 bot :Welcome").await;
+
+    let outcome = crate::channel::ChannelAdapter::send(
+        channel.as_ref(),
+        tinychannels_bus::ChannelOutboundIntent {
+            idempotency_key: "irc-connected-send".into(),
+            channel_id: "irc".into(),
+            conversation_id: "#fallback".into(),
+            conversation_ref: Some(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Channel,
+                id: "#scoped".into(),
+                ..Default::default()
+            }),
+            payload: tinychannels_bus::OutboundPayload::Text {
+                text: "hello from the typed adapter".into(),
+            },
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("the active connection should accept typed text");
+    assert!(outcome.receipt.parts.is_empty());
+    peer.expect("PRIVMSG #scoped :hello from the typed adapter")
+        .await;
+
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(GUARD, start)
+        .await
+        .expect("stop should join the typed listener")
+        .unwrap()
+        .unwrap();
+    // The listener stop already closed its TLS side, so asking the peer to
+    // send a second close_notify can race into ConnectionAborted here.
+    drop(peer);
 }
 
 #[tokio::test]

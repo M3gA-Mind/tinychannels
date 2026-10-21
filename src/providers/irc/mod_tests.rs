@@ -436,6 +436,68 @@ async fn typed_send_without_connection_is_retryable_before_dispatch() {
     assert_eq!(error.message, "IRC is not connected");
 }
 
+#[tokio::test]
+async fn typed_send_rejects_invalid_or_unimplemented_addresses_before_connecting() {
+    use tinychannels_bus::channel::SendErrorKind;
+    use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
+
+    let channel = make_channel();
+    let empty_address = ChannelOutboundIntent {
+        channel_id: "irc".into(),
+        conversation_id: "  ".into(),
+        payload: OutboundPayload::Text {
+            text: "hello".into(),
+        },
+        ..Default::default()
+    };
+    let error = crate::providers::long_tail::LongTail::send_typed_message(
+        &channel,
+        &tinychannels_bus::ChannelOutboundMessage::from_intent(&empty_address),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::BadFormat);
+    assert!(!error.unsupported);
+
+    let reply = ChannelOutboundIntent {
+        channel_id: "irc".into(),
+        conversation_id: "#openhuman".into(),
+        reply_to_id: Some("message-1".into()),
+        payload: OutboundPayload::Text {
+            text: "hello".into(),
+        },
+        ..Default::default()
+    };
+    let error = crate::providers::long_tail::LongTail::send_typed_message(
+        &channel,
+        &tinychannels_bus::ChannelOutboundMessage::from_intent(&reply),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::BadFormat);
+    assert!(error.unsupported);
+    assert!(error.message.contains("reply or thread addressing"));
+
+    let media = ChannelOutboundIntent {
+        channel_id: "irc".into(),
+        conversation_id: "#openhuman".into(),
+        payload: OutboundPayload::Media {
+            text: None,
+            media_urls: vec!["https://example.test/image.png".into()],
+        },
+        ..Default::default()
+    };
+    let error = crate::providers::long_tail::LongTail::send_typed_message(
+        &channel,
+        &tinychannels_bus::ChannelOutboundMessage::from_intent(&media),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::BadFormat);
+    assert!(error.unsupported);
+    assert!(error.message.contains("non-text content"));
+}
+
 #[test]
 fn typed_write_failure_is_uncertain_after_dispatch_may_have_started() {
     let error = IrcChannel::typed_send_failure(anyhow::anyhow!("socket write failed"));

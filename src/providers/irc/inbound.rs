@@ -1,44 +1,25 @@
-use async_trait::async_trait;
+use super::outbound::SENDER_PREFIX_RESERVE;
+use super::{IrcChannel, WriteHalf, split_message};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::Mutex;
-
-// Use tokio_rustls's re-export of rustls types
 use tokio_rustls::rustls;
 
-/// Read timeout for IRC — if no data arrives within this duration, the
-/// connection is considered dead. IRC servers typically PING every 60-120s.
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Monotonic counter to ensure unique message IDs under burst traffic.
 static MSG_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// IRC over TLS channel.
-///
-/// Connects to an IRC server using TLS, joins configured channels,
-/// and forwards PRIVMSG messages to the `OpenHuman` message bus.
-/// Supports both channel messages and private messages (DMs).
-pub struct IrcChannel {
-    server: String,
-    port: u16,
-    nickname: String,
-    username: String,
-    channels: Vec<String>,
-    allowed_users: Vec<String>,
-    server_password: Option<String>,
-    nickserv_password: Option<String>,
-    sasl_password: Option<String>,
-    verify_tls: bool,
-    /// Shared write half of the TLS stream for sending messages.
-    writer: Arc<Mutex<Option<WriteHalf>>>,
-    /// Cancellation for the single provider-owned native listener.
-    listener_cancel: std::sync::Mutex<Option<tokio::sync::watch::Sender<bool>>>,
-}
+/// Style instruction prepended to every IRC message before it reaches the LLM.
+/// IRC clients render plain text only — no markdown, no HTML, no XML.
+pub(super) const IRC_STYLE_PREFIX: &str = "\
+[context: you are responding over IRC. \
+Plain text only. No markdown, no tables, no XML/HTML tags. \
+Never use triple backtick code fences. Use a single blank line to separate blocks instead. \
+Be terse and concise. \
+Use short lines. Avoid walls of text.]\n";
 
-type WriteHalf = tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
-
-struct ListenerRegistration<'a>(&'a IrcChannel);
+pub(super) struct ListenerRegistration<'a>(pub(super) &'a IrcChannel);
 
 impl Drop for ListenerRegistration<'_> {
     fn drop(&mut self) {
@@ -46,31 +27,19 @@ impl Drop for ListenerRegistration<'_> {
     }
 }
 
-/// Style instruction prepended to every IRC message before it reaches the LLM.
-/// IRC clients render plain text only — no markdown, no HTML, no XML.
-const IRC_STYLE_PREFIX: &str = "\
-[context: you are responding over IRC. \
-Plain text only. No markdown, no tables, no XML/HTML tags. \
-Never use triple backtick code fences. Use a single blank line to separate blocks instead. \
-Be terse and concise. \
-Use short lines. Avoid walls of text.]\n";
-
-/// Reserved bytes for the server-prepended sender prefix (`:nick!user@host `).
-const SENDER_PREFIX_RESERVE: usize = 64;
-
 /// A parsed IRC message.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct IrcMessage {
-    prefix: Option<String>,
-    command: String,
-    params: Vec<String>,
+pub(super) struct IrcMessage {
+    pub(super) prefix: Option<String>,
+    pub(super) command: String,
+    pub(super) params: Vec<String>,
 }
 
 impl IrcMessage {
     /// Parse a raw IRC line into an `IrcMessage`.
     ///
     /// IRC format: `[:<prefix>] <command> [<params>] [:<trailing>]`
-    fn parse(line: &str) -> Option<Self> {
+    pub(super) fn parse(line: &str) -> Option<Self> {
         let line = line.trim_end_matches(['\r', '\n']);
         if line.is_empty() {
             return None;
@@ -109,7 +78,7 @@ impl IrcMessage {
     }
 
     /// Extract the nickname from the prefix (nick!user@host → nick).
-    fn nick(&self) -> Option<&str> {
+    pub(super) fn nick(&self) -> Option<&str> {
         self.prefix.as_ref().and_then(|p| {
             let end = p.find('!').unwrap_or(p.len());
             let nick = &p[..end];
@@ -119,7 +88,7 @@ impl IrcMessage {
 }
 
 /// Encode SASL PLAIN credentials: base64(\0nick\0password).
-fn encode_sasl_plain(nick: &str, password: &str) -> String {
+pub(super) fn encode_sasl_plain(nick: &str, password: &str) -> String {
     // Simple base64 encoder — avoids adding a base64 crate dependency.
     // The project's Discord channel uses a similar inline approach.
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -153,117 +122,8 @@ fn encode_sasl_plain(nick: &str, password: &str) -> String {
     out
 }
 
-/// Split a message into lines safe for IRC transmission.
-///
-/// IRC is a line-based protocol — `\r\n` terminates each command, so any
-/// newline inside a PRIVMSG payload would truncate the message and turn the
-/// remainder into garbled/invalid IRC commands.
-///
-/// This function:
-/// 1. Splits on `\n` (and strips `\r`) so each logical line becomes its own PRIVMSG.
-/// 2. Splits any line that exceeds `max_bytes` at a safe UTF-8 boundary.
-/// 3. Skips empty lines to avoid sending blank PRIVMSGs.
-fn split_message(message: &str, max_bytes: usize) -> Vec<String> {
-    let mut chunks = Vec::new();
-
-    // Guard against max_bytes == 0 to prevent infinite loop
-    if max_bytes == 0 {
-        let mut full = String::new();
-        for l in message
-            .lines()
-            .map(|l| l.trim_end_matches('\r'))
-            .filter(|l| !l.is_empty())
-        {
-            if !full.is_empty() {
-                full.push(' ');
-            }
-            full.push_str(l);
-        }
-        if full.is_empty() {
-            chunks.push(String::new());
-        } else {
-            chunks.push(full);
-        }
-        return chunks;
-    }
-
-    for line in message.split('\n') {
-        let line = line.trim_end_matches('\r');
-        if line.is_empty() {
-            continue;
-        }
-
-        if line.len() <= max_bytes {
-            chunks.push(line.to_string());
-            continue;
-        }
-
-        // Line exceeds max_bytes — split at safe UTF-8 boundaries
-        let mut remaining = line;
-        while !remaining.is_empty() {
-            if remaining.len() <= max_bytes {
-                chunks.push(remaining.to_string());
-                break;
-            }
-
-            let mut split_at = max_bytes;
-            while split_at > 0 && !remaining.is_char_boundary(split_at) {
-                split_at -= 1;
-            }
-            if split_at == 0 {
-                // No valid boundary found going backward — advance forward instead
-                split_at = max_bytes;
-                while split_at < remaining.len() && !remaining.is_char_boundary(split_at) {
-                    split_at += 1;
-                }
-            }
-
-            chunks.push(remaining[..split_at].to_string());
-            remaining = &remaining[split_at..];
-        }
-    }
-
-    if chunks.is_empty() {
-        chunks.push(String::new());
-    }
-
-    chunks
-}
-
-/// Configuration for constructing an `IrcChannel`.
-pub struct IrcChannelConfig {
-    pub server: String,
-    pub port: u16,
-    pub nickname: String,
-    pub username: Option<String>,
-    pub channels: Vec<String>,
-    pub allowed_users: Vec<String>,
-    pub server_password: Option<String>,
-    pub nickserv_password: Option<String>,
-    pub sasl_password: Option<String>,
-    pub verify_tls: bool,
-}
-
 impl IrcChannel {
-    pub fn new(cfg: IrcChannelConfig) -> Self {
-        let username = cfg.username.unwrap_or_else(|| cfg.nickname.clone());
-        Self {
-            server: cfg.server,
-            port: cfg.port,
-            nickname: cfg.nickname,
-            username,
-            channels: cfg.channels,
-            allowed_users: cfg.allowed_users,
-            server_password: cfg.server_password,
-            nickserv_password: cfg.nickserv_password,
-            sasl_password: cfg.sasl_password,
-            verify_tls: cfg.verify_tls,
-            writer: Arc::new(Mutex::new(None)),
-            listener_cancel: std::sync::Mutex::new(None),
-        }
-    }
-
-    fn is_user_allowed(&self, nick: &str) -> bool {
+    pub(super) fn is_user_allowed(&self, nick: &str) -> bool {
         if self.allowed_users.iter().any(|u| u == "*") {
             return true;
         }
@@ -300,14 +160,14 @@ impl IrcChannel {
     }
 
     /// Send a raw IRC line (appends \r\n).
-    async fn send_raw(writer: &mut WriteHalf, line: &str) -> anyhow::Result<()> {
+    pub(super) async fn send_raw(writer: &mut WriteHalf, line: &str) -> anyhow::Result<()> {
         let data = format!("{line}\r\n");
         writer.write_all(data.as_bytes()).await?;
         writer.flush().await?;
         Ok(())
     }
 
-    async fn send_text_connected(
+    pub(super) async fn send_text_connected(
         writer: &mut WriteHalf,
         recipient: &str,
         text: &str,
@@ -322,7 +182,9 @@ impl IrcChannel {
         Ok(())
     }
 
-    fn typed_send_failure(error: anyhow::Error) -> tinychannels_bus::channel::ChannelSendError {
+    pub(super) fn typed_send_failure(
+        error: anyhow::Error,
+    ) -> tinychannels_bus::channel::ChannelSendError {
         use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
 
         tracing::debug!(%error, "[irc] typed send failed");
@@ -334,7 +196,7 @@ impl IrcChannel {
         }
     }
 
-    async fn listen_owned(
+    pub(super) async fn listen_owned(
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
         mut cancellation: Option<tokio::sync::watch::Receiver<bool>>,
@@ -352,7 +214,7 @@ impl IrcChannel {
         result
     }
 
-    fn begin_listener(&self) -> anyhow::Result<tokio::sync::watch::Receiver<bool>> {
+    pub(super) fn begin_listener(&self) -> anyhow::Result<tokio::sync::watch::Receiver<bool>> {
         let mut active = self
             .listener_cancel
             .lock()
@@ -365,7 +227,7 @@ impl IrcChannel {
         Ok(receiver)
     }
 
-    fn end_listener(&self) {
+    pub(super) fn end_listener(&self) {
         self.listener_cancel
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -376,7 +238,7 @@ impl IrcChannel {
         self.writer.lock().await.take();
     }
 
-    async fn stop_writer(&self) -> anyhow::Result<()> {
+    pub(super) async fn stop_writer(&self) -> anyhow::Result<()> {
         let Some(mut writer) = self.writer.lock().await.take() else {
             return Ok(());
         };
@@ -395,7 +257,7 @@ impl IrcChannel {
     }
 
     #[cfg(test)]
-    async fn health_check(&self) -> bool {
+    pub(super) async fn health_check(&self) -> bool {
         // Lightweight connectivity check: TLS connect + QUIT.
         match self.connect().await {
             Ok(tls) => {
@@ -697,128 +559,3 @@ impl rustls::client::danger::ServerCertVerifier for NoVerify {
             .supported_schemes()
     }
 }
-
-#[cfg(test)]
-#[path = "irc_tests.rs"]
-mod tests;
-
-#[async_trait]
-impl crate::providers::long_tail::LongTail for IrcChannel {
-    const ID: &'static str = "irc";
-    const DISPLAY: &'static str = "IRC";
-
-    fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
-        use crate::providers::long_tail::{TextSpec, text_capabilities};
-        text_capabilities(TextSpec::default())
-    }
-
-    async fn send_typed_message(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> Result<
-        tinychannels_bus::channel::ChannelSendOutcome,
-        tinychannels_bus::channel::ChannelSendError,
-    > {
-        use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
-
-        if message.conversation_id.trim().is_empty() {
-            return Err(ChannelSendError {
-                kind: SendErrorKind::BadFormat,
-                message: "conversation address is empty".into(),
-                ..Default::default()
-            });
-        }
-        let has_thread = message.reply_to_id.is_some()
-            || message.thread_id.is_some()
-            || message
-                .conversation_ref
-                .as_ref()
-                .is_some_and(|conversation| {
-                    conversation.thread_id.is_some() || conversation.topic_id.is_some()
-                });
-        if has_thread {
-            return Err(crate::providers::long_tail::unsupported::<Self>(
-                "reply or thread addressing",
-            ));
-        }
-        let text = message
-            .legacy_text()
-            .map_err(|_| crate::providers::long_tail::unsupported::<Self>("non-text content"))?;
-        let recipient = message
-            .conversation_ref
-            .as_ref()
-            .map_or(message.conversation_id.as_str(), |conversation| {
-                conversation.id.as_str()
-            });
-
-        let mut guard = self.writer.lock().await;
-        let Some(writer) = guard.as_mut() else {
-            return Err(ChannelSendError {
-                kind: SendErrorKind::Transient,
-                message: "IRC is not connected".into(),
-                retryable: true,
-                sent_before_error: false,
-                ..Default::default()
-            });
-        };
-        Self::send_text_connected(writer, recipient, &text)
-            .await
-            .map_err(Self::typed_send_failure)?;
-        Ok(tinychannels_bus::channel::ChannelSendOutcome::default())
-    }
-
-    async fn start_listener(
-        &self,
-        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
-    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-        let cancellation =
-            self.begin_listener()
-                .map_err(|error| tinychannels_bus::channel::ChannelSendError {
-                    kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
-                    message: error.to_string(),
-                    retryable: false,
-                    ..Default::default()
-                })?;
-        let _registration = ListenerRegistration(self);
-        let result = self.listen_owned(sink, Some(cancellation)).await;
-        result.map_err(|error| {
-            tracing::debug!(%error, "IRC typed listener stopped");
-            tinychannels_bus::channel::ChannelSendError {
-                kind: tinychannels_bus::channel::SendErrorKind::Transient,
-                message: "IRC listener stopped".into(),
-                retryable: true,
-                ..Default::default()
-            }
-        })
-    }
-
-    async fn stop_listener(&self) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-        if let Some(cancel) = self
-            .listener_cancel
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_ref()
-        {
-            cancel.send_replace(true);
-        }
-        self.stop_writer().await.map_err(|error| {
-            tracing::debug!(%error, "IRC listener shutdown failed");
-            tinychannels_bus::channel::ChannelSendError {
-                kind: tinychannels_bus::channel::SendErrorKind::Transient,
-                message: "IRC listener shutdown failed".into(),
-                retryable: true,
-                ..Default::default()
-            }
-        })
-    }
-}
-
-crate::providers::long_tail::impl_long_tail_adapter!(IrcChannel);
-
-#[cfg(test)]
-#[path = "irc_listen_tests.rs"]
-mod listen_tests;
-
-#[cfg(any(test, debug_assertions))]
-#[path = "irc_test_support_tests.rs"]
-pub mod test_support;
