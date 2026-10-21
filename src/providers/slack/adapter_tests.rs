@@ -1,7 +1,7 @@
 use super::*;
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelStreamingDraft, ChannelTypedSend,
-    ChannelTyping,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
+    ChannelTypedSend, ChannelTyping,
 };
 use crate::providers::slack::fixtures::*;
 use serde_json::{Value, json};
@@ -574,13 +574,11 @@ fn the_descriptor_status_and_capabilities_identify_the_native_adapter() {
         ChannelAdapter::declared_capabilities(&channel),
         channel.declared()
     );
-    assert_eq!(Channel::capabilities(&channel), channel.declared());
     assert_eq!(
         ChannelAdapter::proactive_target(&channel).as_deref(),
         Some("C1")
     );
-    assert_eq!(Channel::proactive_target(&channel).as_deref(), Some("C1"));
-    assert_eq!(Channel::name(&channel), "slack");
+    assert_eq!(descriptor.id, "slack");
     assert!(channel.supports_remote_control() && channel.supports_chat_approvals());
     assert!(
         channel.supports_reactions() && channel.supports_edit() && channel.supports_draft_updates()
@@ -619,22 +617,23 @@ async fn lifecycle_hooks_are_owned_by_the_module_runtime() {
         .expect("listener stop cancels polling")
         .expect("listener task joins")
         .unwrap();
-    let status = channel.status().await.unwrap();
+    let status = ChannelAdapter::status(channel.as_ref()).await.unwrap();
     assert_eq!(status.channel_id, "slack");
     assert_eq!(status.states.len(), 2);
 }
 
 #[tokio::test]
-async fn legacy_sends_post_text_and_keep_typed_errors_recoverable() {
+async fn typed_sends_post_text_and_keep_provider_errors_recoverable() {
     let server = mock_api().await;
     mount(&server, "chat.postMessage", ok(json!({"ts": "1.1"}))).await;
     let channel = channel_for(&server, &[]);
-    Channel::send(&channel, &SendMessage::new("hi", "C1"))
+    ChannelAdapter::send(&channel, text_intent("hi"))
         .await
         .unwrap();
-    let mut threaded = SendMessage::new("again", "C1");
-    threaded.thread_ts = Some("1.0".into());
-    Channel::send(&channel, &threaded).await.unwrap();
+    let mut threaded = text_intent("again");
+    threaded.thread_id = Some("1.0".into());
+    threaded.conversation_ref = Some(conversation(Some("1.0")));
+    ChannelAdapter::send(&channel, threaded).await.unwrap();
     let posts = bodies(&server, "chat.postMessage").await;
     assert_eq!(
         (posts[0]["channel"].as_str(), posts[0]["text"].as_str()),
@@ -649,13 +648,10 @@ async fn legacy_sends_post_text_and_keep_typed_errors_recoverable() {
         json!({"ok": false, "error": "channel_not_found"}),
     )
     .await;
-    let error = Channel::send(&channel_for(&denied, &[]), &SendMessage::new("x", "C1"))
+    let error = ChannelAdapter::send(&channel_for(&denied, &[]), text_intent("x"))
         .await
         .unwrap_err();
-    let failure = error
-        .downcast_ref::<crate::providers::slack::types::SlackFailure>()
-        .unwrap();
-    assert_eq!(failure.0.kind, SendErrorKind::NotFound);
+    assert_eq!(error.kind, SendErrorKind::NotFound);
 
     let outcome = channel
         .send_typed_with_receipt(&ChannelOutboundMessage::from_intent(&text_intent("typed")))
