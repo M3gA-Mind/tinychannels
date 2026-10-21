@@ -4369,7 +4369,10 @@ async fn v1_discord_send_uses_configured_channel_when_recipient_is_empty() {
     let requests = rest.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].url.path(), "/channels/555000111/messages");
-    assert_eq!(requests[0].body_json::<serde_json::Value>().unwrap()["content"], "v1 proactive");
+    assert_eq!(
+        requests[0].body_json::<serde_json::Value>().unwrap()["content"],
+        "v1 proactive"
+    );
     rest.verify().await;
     channels.shutdown().await.unwrap();
 }

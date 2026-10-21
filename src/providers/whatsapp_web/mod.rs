@@ -1029,14 +1029,18 @@ impl WhatsAppWebChannel {
         }
 
         let to = self.recipient_to_jid(recipient).map_err(|_| {
-            anyhow::Error::new(crate::providers::whatsapp_shared::error::WaFailure::bad_format(
-                "WhatsApp recipient address is invalid",
-            ))
+            anyhow::Error::new(
+                crate::providers::whatsapp_shared::error::WaFailure::bad_format(
+                    "WhatsApp recipient address is invalid",
+                ),
+            )
         })?;
         let client = self.connected_client().map_err(|_| {
-            anyhow::Error::new(crate::providers::whatsapp_shared::error::WaFailure::rejected(
-                "WhatsApp Web client is not connected",
-            ))
+            anyhow::Error::new(
+                crate::providers::whatsapp_shared::error::WaFailure::rejected(
+                    "WhatsApp Web client is not connected",
+                ),
+            )
         })?;
         client
             .send_composing(&to)
@@ -1057,14 +1061,18 @@ impl WhatsAppWebChannel {
         }
 
         let to = self.recipient_to_jid(recipient).map_err(|_| {
-            anyhow::Error::new(crate::providers::whatsapp_shared::error::WaFailure::bad_format(
-                "WhatsApp recipient address is invalid",
-            ))
+            anyhow::Error::new(
+                crate::providers::whatsapp_shared::error::WaFailure::bad_format(
+                    "WhatsApp recipient address is invalid",
+                ),
+            )
         })?;
         let client = self.connected_client().map_err(|_| {
-            anyhow::Error::new(crate::providers::whatsapp_shared::error::WaFailure::rejected(
-                "WhatsApp Web client is not connected",
-            ))
+            anyhow::Error::new(
+                crate::providers::whatsapp_shared::error::WaFailure::rejected(
+                    "WhatsApp Web client is not connected",
+                ),
+            )
         })?;
         client
             .send_paused(&to)
