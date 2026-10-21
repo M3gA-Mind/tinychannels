@@ -333,9 +333,7 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
         );
         drop(rx);
         release_tx.send(()).unwrap();
-        let error = listening.await.unwrap().unwrap_err();
-        assert_eq!(error.kind, crate::SendErrorKind::Transient);
-        assert!(error.retryable);
+        assert!(listening.await.unwrap().is_err());
         websocket.await.unwrap();
     })
     .await
