@@ -1843,7 +1843,10 @@ impl Running {
                     let _ = command.started.send(());
                     let result = match command.operation {
                         ProviderOperation::SendTyped(message) => {
-                            let sent = match worker_native.typed_send.send_typed(&message).await {
+                            let sent: std::result::Result<
+                                tinychannels_bus::channel::ChannelSendOutcome,
+                                anyhow::Error,
+                            > = match worker_native.typed_send.send_typed(&message).await {
                                 Ok(outcome) => Ok(outcome),
                                 Err(error) => {
                                     Ok(tinychannels_bus::channel::ChannelSendOutcome {
