@@ -100,10 +100,14 @@ pub mod methods {
     pub const APPEND_MEDIA_UPLOAD_CHUNK: &str = "AppendMediaUploadChunk";
     /// Finalize a media upload and return an opaque scoped reference.
     pub const FINISH_MEDIA_UPLOAD: &str = "FinishMediaUpload";
+    /// Abort a buffered media upload; retries are idempotent.
+    pub const ABORT_MEDIA_UPLOAD: &str = "AbortMediaUpload";
     /// Resolve a scoped opaque reference into a bounded read handle.
     pub const BEGIN_MEDIA_READ: &str = "BeginMediaRead";
     /// Read the next bounded chunk from a media handle.
     pub const READ_MEDIA_CHUNK: &str = "ReadMediaChunk";
+    /// Abort a media read and release its temporary bytes.
+    pub const ABORT_MEDIA_READ: &str = "AbortMediaRead";
     /// Release an upload or read handle.
     pub const FINISH_MEDIA_HANDLE: &str = "FinishMediaHandle";
 }
@@ -131,7 +135,7 @@ pub mod host_methods {
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 43] = [
+pub const METHODS: [&str; 45] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -172,8 +176,10 @@ pub const METHODS: [&str; 43] = [
     methods::BEGIN_MEDIA_UPLOAD,
     methods::APPEND_MEDIA_UPLOAD_CHUNK,
     methods::FINISH_MEDIA_UPLOAD,
+    methods::ABORT_MEDIA_UPLOAD,
     methods::BEGIN_MEDIA_READ,
     methods::READ_MEDIA_CHUNK,
+    methods::ABORT_MEDIA_READ,
     methods::FINISH_MEDIA_HANDLE,
 ];
 
