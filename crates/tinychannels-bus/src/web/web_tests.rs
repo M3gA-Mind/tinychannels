@@ -255,6 +255,126 @@ fn projected_legacy_normalization_covers_tool_subagent_artifact_and_other_events
             .is_none()
     );
 
+    let mut projected_events = vec![
+        WebChannelEvent::SubagentCompleted {
+            context: context.clone(),
+            message: None,
+            tool_name: Some(String::new()),
+            skill_id: None,
+            success: None,
+            round: None,
+            subagent: None,
+        },
+        WebChannelEvent::SubagentFailed {
+            context: context.clone(),
+            message: None,
+            tool_name: Some(String::new()),
+            skill_id: None,
+            success: None,
+            subagent: None,
+            round: None,
+        },
+        WebChannelEvent::SubagentAwaitingUser {
+            context: context.clone(),
+            message: None,
+            tool_name: Some(String::new()),
+            skill_id: None,
+            success: None,
+            round: None,
+            subagent: None,
+        },
+        WebChannelEvent::SubagentIterationStart {
+            context: context.clone(),
+            message: None,
+            tool_name: Some(String::new()),
+            skill_id: None,
+            round: None,
+            subagent: None,
+        },
+        WebChannelEvent::SubagentToolCall {
+            context: context.clone(),
+            tool_name: Some(String::new()),
+            skill_id: None,
+            args: Some(serde_json::Value::Null),
+            round: None,
+            tool_call_id: None,
+            tool_display_label: None,
+            tool_display_detail: None,
+            subagent: None,
+        },
+        WebChannelEvent::SubagentToolResult {
+            context: context.clone(),
+            tool_name: Some(String::new()),
+            skill_id: None,
+            success: None,
+            round: None,
+            tool_call_id: None,
+            output: None,
+            args: Some(serde_json::Value::Null),
+            elapsed_ms: None,
+            tool_display_label: None,
+            tool_display_detail: None,
+            structured: None,
+            failure: None,
+            subagent: None,
+        },
+        WebChannelEvent::ApprovalRequest {
+            context: context.clone(),
+            tool_name: Some(String::new()),
+            message: None,
+            args: Some(serde_json::Value::Null),
+            tool_call_id: None,
+            expires_at: None,
+            detached: None,
+        },
+        WebChannelEvent::ApprovalDecided {
+            context: context.clone(),
+            tool_name: Some(String::new()),
+            message: None,
+            tool_call_id: None,
+            cancel_reason: None,
+        },
+        WebChannelEvent::PlanReviewRequest {
+            context: context.clone(),
+            tool_name: Some(String::new()),
+            message: None,
+            args: Some(serde_json::Value::Null),
+            tool_call_id: None,
+            expires_at: None,
+        },
+        WebChannelEvent::PlanReviewDecided {
+            context: context.clone(),
+            tool_name: Some(String::new()),
+            message: None,
+            tool_call_id: None,
+            cancel_reason: None,
+        },
+        WebChannelEvent::ArtifactReady {
+            context: context.clone(),
+            tool_call_id: None,
+            args: Some(serde_json::Value::Null),
+        },
+        WebChannelEvent::ArtifactFailed {
+            context: context.clone(),
+            tool_call_id: None,
+            args: Some(serde_json::Value::Null),
+        },
+        WebChannelEvent::MemoryActivity {
+            context: context.clone(),
+            args: Some(serde_json::Value::Null),
+        },
+        WebChannelEvent::ExternalTransferPending {
+            context: context.clone(),
+            args: Some(serde_json::Value::Null),
+        },
+    ];
+    for event in &mut projected_events {
+        event.normalize_projected_wire_fields();
+        let wire = serde_json::to_value(&*event).unwrap();
+        assert!(wire.get("tool_name").is_none());
+        assert!(wire.get("args").is_none());
+    }
+
     let mut artifact = WebChannelEvent::ArtifactPending {
         context: context.clone(),
         tool_call_id: None,
@@ -376,12 +496,17 @@ fn queue_modes_keep_all_five_web_dispositions() {
 
 #[test]
 fn web_wire_caps_bound_utf8_output_and_json_arguments() {
-    let output = cap_web_output("é".repeat(MAX_WEB_TOOL_PAYLOAD_BYTES));
+    assert_eq!(cap_web_output("small".into()), "small");
+    let output = cap_web_output("界".repeat(MAX_WEB_TOOL_PAYLOAD_BYTES));
     assert!(output.len() <= MAX_WEB_TOOL_PAYLOAD_BYTES);
     assert!(output.is_char_boundary(output.len()));
     assert!(output.ends_with("of tool output]"));
     assert_eq!(cap_web_args(None), None);
     assert_eq!(cap_web_args(Some(serde_json::Value::Null)), None);
+    assert_eq!(
+        cap_web_args(Some(serde_json::json!({ "small": true }))),
+        Some(serde_json::json!({ "small": true }))
+    );
     let bounded = cap_web_args(Some(serde_json::json!({
         "body": "x".repeat(MAX_WEB_TOOL_PAYLOAD_BYTES)
     })))
