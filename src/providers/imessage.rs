@@ -22,6 +22,7 @@ use crate::traits::ChannelMessage;
 #[cfg(test)]
 use anyhow::Context as _;
 use directories::UserDirs;
+use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -56,7 +57,6 @@ struct ListenerCursor {
     read_date: i64,
     read_rowid: i64,
 }
-
 
 /// iMessage channel using macOS `AppleScript` bridge.
 /// Polls the Messages database for new messages and sends replies via `osascript`.
@@ -142,7 +142,6 @@ impl IMessageChannel {
         }
         self.messages_db_path().is_some_and(|path| path.exists())
     }
-
 }
 
 impl IMessageChannel {
@@ -173,13 +172,13 @@ impl IMessageChannel {
         // Open a persistent read-only connection instead of creating
         // a new one on every 3-second poll cycle.
         let path = db_path.to_path_buf();
-        let conn = tokio::task::spawn_blocking(move || open_read_only(&path)).await??;
+        let conn = tokio::task::spawn_blocking(move || db::open_read_only(&path)).await??;
 
         // Track the newest inbound ROWID and read time already seen (shuttle
         // conn in and out).
         let (mut conn, initial_rowid, initial_read) =
             tokio::task::spawn_blocking(move || -> anyhow::Result<(Connection, i64, i64)> {
-                let rowid = max_inbound_rowid(&conn)?;
+                let rowid = db::max_inbound_rowid(&conn)?;
                 let read = db::max_date_read(&conn).unwrap_or(0);
                 Ok((conn, rowid, read))
             })

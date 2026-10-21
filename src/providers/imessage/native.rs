@@ -142,7 +142,6 @@ pub(super) fn is_valid_chat_guid(target: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '@'))
 }
 
-
 impl IMessageChannel {
     /// AppleScript sending `body` (a quoted string or `POSIX file` expression)
     /// to `recipient`: a participant for a person, a chat for a group.
@@ -214,7 +213,8 @@ end tell"#
         loop {
             let probe = path.clone();
             let found = tokio::task::spawn_blocking(move || {
-                super::db::open_read_only(&probe).and_then(|conn| newest_sent_after(&conn, baseline))
+                super::db::open_read_only(&probe)
+                    .and_then(|conn| newest_sent_after(&conn, baseline))
             })
             .await
             .ok()

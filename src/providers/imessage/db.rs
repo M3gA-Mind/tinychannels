@@ -277,7 +277,7 @@ pub(super) fn query_new_messages(
 #[allow(dead_code)]
 /// Get the current max ROWID from the messages table.
 /// Uses rusqlite with parameterized queries for security (CWE-89 prevention).
-async pub(super) fn get_max_rowid(db_path: &Path) -> anyhow::Result<i64> {
+pub(super) async fn get_max_rowid(db_path: &Path) -> anyhow::Result<i64> {
     let path = db_path.to_path_buf();
     tokio::task::spawn_blocking(move || max_inbound_rowid(&open_read_only(&path)?)).await?
 }
@@ -286,7 +286,7 @@ async pub(super) fn get_max_rowid(db_path: &Path) -> anyhow::Result<i64> {
 /// Uses rusqlite with parameterized queries for security (CWE-89 prevention).
 /// The `since_rowid` parameter is bound safely, preventing SQL injection.
 #[allow(dead_code)]
-async pub(super) fn fetch_new_messages(
+pub(super) async fn fetch_new_messages(
     db_path: &Path,
     since_rowid: i64,
 ) -> anyhow::Result<Vec<(i64, String, String)>> {
@@ -294,4 +294,3 @@ async pub(super) fn fetch_new_messages(
     tokio::task::spawn_blocking(move || query_new_messages(&open_read_only(&path)?, since_rowid))
         .await?
 }
-
