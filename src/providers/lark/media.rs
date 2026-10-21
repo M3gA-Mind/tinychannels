@@ -202,25 +202,6 @@ pub(super) fn file_type_for_mime(mime: &str) -> &'static str {
     }
 }
 
-fn known_unsent(message: &str) -> ChannelSendError {
-    ChannelSendError {
-        kind: tinychannels_bus::channel::SendErrorKind::Transient,
-        message: message.into(),
-        retryable: true,
-        sent_before_error: false,
-        ..Default::default()
-    }
-}
-
-fn uncertain_send(message: &str) -> ChannelSendError {
-    ChannelSendError {
-        kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-        message: message.into(),
-        sent_before_error: true,
-        ..Default::default()
-    }
-}
-
 impl LarkChannel {
     pub(super) async fn prepare_steps(
         &self,

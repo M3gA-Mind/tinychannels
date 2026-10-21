@@ -1,5 +1,6 @@
 //! Mattermost file upload and download operations.
 
+use super::outbound::http_error;
 use super::*;
 use crate::providers::native::FileStep;
 use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
