@@ -569,7 +569,7 @@ impl LongTailFixture {
         let clients = FixtureHttpClients(server.client.clone());
         let channel = build_long_tail_channel_with_host(&config, &host, &clients, "dingtalk")
             .expect("configured DingTalk adapter built through provider factory");
-        let (sink_tx, sink_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (sink_tx, mut sink_rx) = tokio::sync::mpsc::unbounded_channel();
         let sink = Arc::new(ConformanceInboundSink(sink_tx));
         let listener_channel = channel.clone();
         let listener = tokio::spawn(async move {
