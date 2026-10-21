@@ -266,6 +266,112 @@ async fn polling_survives_transport_errors() {
 }
 
 #[tokio::test]
+async fn typed_socket_listener_rejects_duplicates_and_restarts_after_stop() {
+    use crate::channel::{ChannelAdapter, ChannelInboundSink, ChannelSendError};
+    use tinychannels_bus::ChannelIngress;
+
+    struct Sink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
+
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for Sink {
+        async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+            self.0.send(ingress).map_err(|_| ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "test sink closed".into(),
+                retryable: true,
+                ..Default::default()
+            })
+        }
+    }
+
+    let server = mock_api().await;
+    mount_auth(&server, "UBOT").await;
+    let url = serve(|index, mut socket| {
+        Box::pin(async move {
+            let (event_id, ts, text) = if index == 0 {
+                ("restart-1", "10.1", "before stop")
+            } else {
+                ("restart-2", "10.2", "after restart")
+            };
+            socket
+                .send(envelope(
+                    "events_api",
+                    event_id,
+                    json!({"event": {
+                        "type": "message",
+                        "channel": "C1",
+                        "ts": ts,
+                        "user": "U1",
+                        "text": text
+                    }}),
+                ))
+                .await
+                .unwrap();
+            expect_ack(&mut socket, event_id).await;
+            while socket.next().await.is_some() {}
+        })
+    })
+    .await;
+    open_returns(&server, &url).await;
+
+    let channel = Arc::new(
+        channel_for(&server, &["U1"]).with_app_token(Some("app-token".into())),
+    );
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Arc::new(Sink(tx));
+    let first_channel = channel.clone();
+    let first_sink = sink.clone();
+    let first = tokio::spawn(async move {
+        ChannelAdapter::start(first_channel.as_ref(), first_sink.as_ref()).await
+    });
+
+    let first_event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("first event arrives")
+        .expect("sink stays open");
+    let ChannelIngress::Inbound(first_event) = first_event else {
+        panic!("expected first inbound event, got {first_event:?}");
+    };
+    assert_eq!(first_event.text, "before stop");
+
+    let duplicate = ChannelAdapter::start(channel.as_ref(), sink.as_ref()).await;
+    assert_eq!(
+        duplicate.unwrap_err().kind,
+        tinychannels_bus::channel::SendErrorKind::Forbidden,
+        "a configured Slack adapter has only one active listener"
+    );
+
+    ChannelAdapter::stop(channel.as_ref()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), first)
+        .await
+        .expect("first listener stops")
+        .expect("listener task joins")
+        .expect("stop is successful");
+
+    let second_channel = channel.clone();
+    let second_sink = sink.clone();
+    let second = tokio::spawn(async move {
+        ChannelAdapter::start(second_channel.as_ref(), second_sink.as_ref()).await
+    });
+    let second_event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("restarted listener delivers")
+        .expect("sink stays open");
+    let ChannelIngress::Inbound(second_event) = second_event else {
+        panic!("expected second inbound event, got {second_event:?}");
+    };
+    assert_eq!(second_event.text, "after restart");
+    assert!(rx.try_recv().is_err(), "restart must not duplicate prior ingress");
+
+    ChannelAdapter::stop(channel.as_ref()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), second)
+        .await
+        .expect("restarted listener stops")
+        .expect("listener task joins")
+        .expect("stop is successful");
+}
+
+#[tokio::test]
 async fn adapter_start_delivers_socket_mode_messages_to_the_typed_sink() {
     use crate::channel::{ChannelAdapter, ChannelInboundSink, ChannelSendError};
     use tinychannels_bus::ChannelIngress;
