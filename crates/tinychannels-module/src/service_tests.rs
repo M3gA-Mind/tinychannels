@@ -106,6 +106,59 @@ async fn v1_email_subject_reaches_the_configured_smtp_wire() {
     service.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn v1_send_preserves_provider_specific_subjects_for_qualified_instances() {
+    let (sent, mut received) = tokio::sync::mpsc::channel(2);
+    let (channels, _callbacks, _server) = channels_with_store_named(
+        "dingtalk:account-a",
+        Arc::new(CaptureWireProvider {
+            id: "dingtalk",
+            sent,
+        }),
+    )
+    .await;
+
+    channels
+        .send_message(
+            "dingtalk:account-a".into(),
+            SendMessage::with_subject("custom body", "room-1", "OpenHuman"),
+        )
+        .await
+        .unwrap();
+    let dingtalk = received.recv().await.unwrap();
+    assert_eq!(dingtalk.channel_id, "dingtalk");
+    assert_eq!(dingtalk.conversation_id, "room-1");
+    assert!(matches!(
+        dingtalk.payload,
+        tinychannels_bus::OutboundPayload::Text { text }
+            if text == "Subject: OpenHuman\ncustom body"
+    ));
+    channels.shutdown().await.unwrap();
+
+    let (sent, mut received) = tokio::sync::mpsc::channel(2);
+    let (channels, _callbacks, _server) = channels_with_store_named(
+        "telegram:account-a",
+        Arc::new(CaptureWireProvider {
+            id: "telegram",
+            sent,
+        }),
+    )
+    .await;
+    channels
+        .send_message(
+            "telegram:account-a".into(),
+            SendMessage::with_subject("visible body", "chat-1", "ignored subject"),
+        )
+        .await
+        .unwrap();
+    let telegram = received.recv().await.unwrap();
+    assert!(matches!(
+        telegram.payload,
+        tinychannels_bus::OutboundPayload::Text { text } if text == "visible body"
+    ));
+    channels.shutdown().await.unwrap();
+}
+
 /// Mirrors the predicate in `start_channel`.
 ///
 /// Extracted rather than duplicated in the test so the two cannot disagree:
