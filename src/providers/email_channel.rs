@@ -145,6 +145,7 @@ impl Drop for ListenerRegistration {
 
 #[cfg(feature = "email")]
 enum EmailDelivery<'a> {
+    #[cfg(test)]
     Legacy(&'a mpsc::Sender<ChannelMessage>),
     Typed(&'a (dyn ChannelInboundSink + Send + Sync)),
 }
@@ -463,13 +464,6 @@ impl EmailChannel {
         }
     }
 
-    /// Main IDLE-based listen loop with automatic reconnection
-    #[cfg(feature = "email")]
-    async fn listen_with_idle(&self, tx: mpsc::Sender<ChannelMessage>) -> Result<()> {
-        self.listen_with_reconnect(&tx, || self.connect_imap())
-            .await
-    }
-
     #[cfg(feature = "email")]
     async fn listen_typed_with<S, F, Fut>(
         &self,
@@ -520,7 +514,7 @@ impl EmailChannel {
 
     /// The reconnect loop over any session source, so it is testable without
     /// a TLS server.
-    #[cfg(feature = "email")]
+    #[cfg(all(feature = "email", test))]
     async fn listen_with_reconnect<S, F, Fut>(
         &self,
         tx: &mpsc::Sender<ChannelMessage>,

@@ -25,12 +25,14 @@ pub(crate) const SLACK_SEEN_WINDOW: usize = 2048;
 #[cfg(test)]
 pub(crate) struct SlackFailure(pub(crate) ChannelSendError);
 
+#[cfg(test)]
 impl std::fmt::Display for SlackFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.0.message)
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for SlackFailure {}
 
 /// Slack channel: Socket Mode (or history polling) in, Web API out.

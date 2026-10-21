@@ -54,12 +54,14 @@ pub(crate) fn pre_dispatch(message: &str) -> ChannelSendError {
 #[cfg(test)]
 pub(crate) struct NativeFailure(pub(crate) ChannelSendError);
 
+#[cfg(test)]
 impl std::fmt::Display for NativeFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.0.message)
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for NativeFailure {}
 
 /// The host ports every native adapter can use, and its inbound dedupe window.
