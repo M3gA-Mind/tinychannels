@@ -278,6 +278,59 @@ async fn stored_media_roundtrips_through_a_scoped_opaque_blob_reference() {
 }
 
 #[tokio::test]
+async fn media_repository_trait_routes_bounded_store_read_stream_and_delete_operations() {
+    let store = store();
+    let reference =
+        MediaRepository::store_media(&store, media_request(valid_png(), Some("photo.png"), None))
+            .await
+            .unwrap();
+    let id = reference.opaque_id.clone().unwrap();
+    let resolved = MediaRepository::read_media(&store, media_scope(), id.clone(), 1024)
+        .await
+        .unwrap();
+    assert_eq!(resolved.bytes, valid_png());
+
+    let streamed = MediaRepository::store_media_stream(
+        &store,
+        MediaStreamRequest {
+            metadata: media_request(valid_png(), None, None).metadata,
+            reader: Box::pin(std::io::Cursor::new(valid_png())),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        MediaRepository::delete_media(&store, media_scope(), id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        MediaRepository::delete_media(&store, media_scope(), streamed.opaque_id.unwrap())
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn deleting_media_refuses_foreign_scope_and_malformed_opaque_ids() {
+    let store = store();
+    let reference = store
+        .store(media_request(valid_png(), None, None))
+        .await
+        .unwrap();
+    let id = reference.opaque_id.unwrap();
+    let mut foreign = media_scope();
+    foreign.turn_id = "another-turn".into();
+    assert!(store.delete(foreign, &id).await.is_err());
+    assert!(
+        store
+            .read(media_scope(), "not-an-opaque-media-id", 1024)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn media_reference_requires_the_original_configured_full_turn_scope() {
     let store = store();
     let reference = store

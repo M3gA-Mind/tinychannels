@@ -1092,6 +1092,23 @@ async fn module_media_handlers_roundtrip_only_within_the_provider_turn_scope() {
         ..Default::default()
     };
     let bytes = b"private media payload".to_vec();
+    let mut invalid_scope = scope.clone();
+    invalid_scope.turn_id.clear();
+    assert!(
+        channels
+            .begin_media_upload(tinychannels_bus::MediaUploadBegin {
+                instance: "fixture".into(),
+                scope: invalid_scope,
+                kind: tinychannels_bus::MediaKind::Document,
+                content_type: "text/plain".into(),
+                file_name: None,
+                duration_ms: None,
+                codec: None,
+                byte_count: bytes.len(),
+            })
+            .await
+            .is_err()
+    );
     let upload = channels
         .begin_media_upload(tinychannels_bus::MediaUploadBegin {
             instance: "fixture".into(),
@@ -1129,6 +1146,24 @@ async fn module_media_handlers_roundtrip_only_within_the_provider_turn_scope() {
     assert_eq!(media.url, None);
     assert_eq!(media.path, None);
 
+    let cancelled_upload = channels
+        .begin_media_upload(tinychannels_bus::MediaUploadBegin {
+            instance: "fixture".into(),
+            scope: scope.clone(),
+            kind: tinychannels_bus::MediaKind::Document,
+            content_type: "text/plain".into(),
+            file_name: None,
+            duration_ms: None,
+            codec: None,
+            byte_count: bytes.len(),
+        })
+        .await
+        .unwrap();
+    channels
+        .abort_media_upload(tinychannels_bus::MediaUploadFinish(cancelled_upload))
+        .await
+        .unwrap();
+
     let mut wrong_turn = scope.clone();
     wrong_turn.turn_id = "other-turn".into();
     assert!(
@@ -1138,6 +1173,17 @@ async fn module_media_handlers_roundtrip_only_within_the_provider_turn_scope() {
                 scope: wrong_turn,
                 media: media.clone(),
                 max_bytes: 1024,
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        channels
+            .begin_media_read(tinychannels_bus::MediaReadBegin {
+                instance: "fixture".into(),
+                scope: scope.clone(),
+                media: media.clone(),
+                max_bytes: 0,
             })
             .await
             .is_err()
