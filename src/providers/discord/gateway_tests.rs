@@ -156,7 +156,7 @@ async fn dispatch_reports_a_gone_receiver_only_for_messages() {
 async fn thread_events_prime_the_cache_so_no_lookup_is_needed() {
     let server = MockServer::start().await;
     let channel = channel_for(&server);
-    let (tx, mut rx) = mpsc::channel(1);
+    let (tx, _rx) = mpsc::channel(1);
 
     channel
         .handle_dispatch_to(
@@ -212,7 +212,7 @@ async fn button_interactions_dispatch_to_the_interaction_handler() {
         .respond_with(ResponseTemplate::new(204))
         .mount(&server)
         .await;
-    let (tx, _rx) = mpsc::channel(1);
+    let (tx, mut rx) = mpsc::channel(1);
     let press = json!({
         "id": "77", "token": "tok", "type": 3, "channel_id": CHANNEL, "guild_id": GUILD,
         "data": {"custom_id": "go"}, "member": {"user": {"id": "42"}}
