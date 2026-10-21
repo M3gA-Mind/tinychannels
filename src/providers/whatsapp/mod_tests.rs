@@ -1395,17 +1395,12 @@ mod v2 {
 
     #[tokio::test]
     async fn webhook_adapter_start_does_not_claim_a_stream_listener() {
-        let channel = WhatsAppChannel::new(
-            "t".into(),
-            "1".into(),
-            "v".into(),
-            vec![],
-        );
+        let channel = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![]);
         let sink = crate::provider_test_support::RecordingInboundSink::default();
         tokio::time::timeout(std::time::Duration::from_secs(1), channel.start(&sink))
-        .await
-        .expect("webhook adapter start is nonblocking")
-        .unwrap();
+            .await
+            .expect("webhook adapter start is nonblocking")
+            .unwrap();
         channel.stop().await.unwrap();
         assert!(sink.events().is_empty());
     }
