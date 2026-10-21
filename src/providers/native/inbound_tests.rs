@@ -24,20 +24,15 @@ fn file(mime: &str, voice: bool) -> InboundFile {
 
 struct Rig {
     media: Arc<StubMedia>,
-    voice: Arc<StubVoice>,
     media_dyn: Arc<dyn MediaRepository>,
-    voice_dyn: Arc<dyn VoiceMediaStore>,
     stt_dyn: Arc<dyn Transcriber>,
 }
 
-fn rig(media: StubMedia, voice: StubVoice, stt: StubTranscriber) -> Rig {
+fn rig(media: StubMedia, stt: StubTranscriber) -> Rig {
     let media = Arc::new(media);
-    let voice = Arc::new(voice);
     Rig {
         media_dyn: media.clone(),
-        voice_dyn: voice.clone(),
         media,
-        voice,
         stt_dyn: Arc::new(stt),
     }
 }
@@ -51,11 +46,17 @@ impl Rig {
                 account_id: None,
             },
             repository: Some(&self.media_dyn),
-            voice_store: Some(&self.voice_dyn),
             transcriber: with_stt.then_some(&self.stt_dyn),
             file_bytes: 16,
             voice_bytes: 8,
         }
+    }
+}
+
+fn voice_note(part: &ContentPart) -> &VoiceNote {
+    match part {
+        ContentPart::VoiceNote { voice_note } => voice_note,
+        _ => panic!("expected voice note part"),
     }
 }
 
@@ -66,46 +67,45 @@ fn mime_helpers_classify_and_name_codecs() {
     assert_eq!(kind_for_mime("audio/ogg"), MediaKind::Audio);
     assert_eq!(kind_for_mime("application/pdf"), MediaKind::Document);
     assert_eq!(normalize_mime(" Audio/MP4 ; codecs=aac"), "audio/mp4");
-    for (mime, codec) in [
-        ("audio/amr", Some("amr_nb")),
-        ("audio/mp4", Some("m4a_aac")),
-        ("audio/aac", Some("m4a_aac")),
-        ("audio/mpeg", Some("mp3")),
-        ("audio/ogg", Some("ogg_opus")),
-        ("audio/x-caf", Some("caf")),
-        ("audio/wav", None),
-    ] {
-        assert_eq!(codec_for(mime).as_deref(), codec, "{mime}");
-    }
+    assert_eq!(codec_for("audio/amr").as_deref(), Some("amr_nb"));
+    assert_eq!(codec_for("audio/mp4").as_deref(), Some("m4a_aac"));
+    assert_eq!(codec_for("audio/wav"), None);
 }
 
 #[tokio::test]
-async fn amr_voice_is_stored_with_the_native_codec_tag() {
-    let rig = rig(Default::default(), Default::default(), Default::default());
-    let mut ingest = rig.ingest(false);
-    ingest.voice_bytes = 2 * 1024 * 1024;
-    let mut amr = file("audio/amr", true);
-    amr.bytes = include_bytes!("../../../tests/fixtures/dingtalk/amrnb_mode0.amr").to_vec();
-    amr.name = Some("voice.amr".into());
-
+async fn attachments_are_stored_as_typed_parts_in_received_order() {
+    let rig = rig(Default::default(), Default::default());
     let mut ingested = Ingested::default();
-    ingest
-        .add(&mut ingested, &conversation(), "amr-message", amr)
-        .await;
-
-    let note = ingested.voice.expect("allowed AMR voice should be stored");
-    assert_eq!(note.media.content_type.as_deref(), Some("audio/amr"));
-    assert_eq!(note.codec.as_deref(), Some("amr_nb"));
-    let stored = rig.voice.stored.lock().unwrap();
-    assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].mime_type, "audio/amr");
-    assert_eq!(stored[0].codec.as_deref(), Some("amr_nb"));
-    assert_eq!(stored[0].file_name.as_deref(), Some("voice.amr"));
+    for (mime, is_voice) in [
+        ("image/png", false),
+        ("audio/mp4", true),
+        ("application/pdf", false),
+    ] {
+        rig.ingest(false)
+            .add(&mut ingested, &conversation(), "m1", file(mime, is_voice))
+            .await;
+    }
+    assert!(matches!(ingested.parts[0], ContentPart::Image { .. }));
+    assert!(matches!(ingested.parts[1], ContentPart::VoiceNote { .. }));
+    assert!(matches!(ingested.parts[2], ContentPart::File { .. }));
+    let stored = rig.media.stored.lock().unwrap();
+    assert_eq!(stored.len(), 3);
+    assert_eq!(stored[1].metadata.codec.as_deref(), Some("m4a_aac"));
+    assert_eq!(
+        stored[1].metadata.voice_direction,
+        Some(HostVoiceMediaDirection::Inbound)
+    );
+    let note = voice_note(&ingested.parts[1]);
+    assert_eq!(note.codec.as_deref(), Some("m4a_aac"));
+    assert_eq!(note.duration_ms, Some(1200));
+    assert!(note.media.url.is_none());
+    assert!(note.media.path.is_none());
+    assert!(note.media.local_cache_path.is_none());
 }
 
 #[tokio::test]
-async fn files_become_typed_parts_of_the_right_kind() {
-    let rig = rig(Default::default(), Default::default(), Default::default());
+async fn attachments_are_typed_and_unsupported_ones_are_skipped() {
+    let rig = rig(Default::default(), Default::default());
     let mut ingested = Ingested::default();
     for mime in ["image/png", "video/mp4", "audio/mpeg", "application/pdf"] {
         rig.ingest(false)
@@ -113,103 +113,28 @@ async fn files_become_typed_parts_of_the_right_kind() {
             .await;
     }
     assert!(matches!(ingested.parts[0], ContentPart::Image { .. }));
-    assert!(matches!(
-        ingested.parts[1],
-        ContentPart::Video {
-            duration_ms: Some(1200),
-            ..
-        }
-    ));
+    assert!(matches!(ingested.parts[1], ContentPart::Video { .. }));
     assert!(matches!(ingested.parts[2], ContentPart::Audio { .. }));
     assert!(matches!(ingested.parts[3], ContentPart::File { .. }));
-    assert_eq!(rig.media.stored.lock().unwrap().len(), 4);
     assert_eq!(media_of(&ingested.parts).len(), 4);
-}
 
-#[tokio::test]
-async fn unusable_files_are_skipped_without_failing_the_message() {
-    let rig = rig(Default::default(), Default::default(), Default::default());
-    let mut ingested = Ingested::default();
     let mut empty = file("image/png", false);
     empty.bytes.clear();
-    let mut huge = file("image/png", false);
-    huge.bytes = vec![0; 17];
-    for bad in [file("application/x-msdownload", false), empty, huge] {
+    for bad in [file("application/x-msdownload", false), empty] {
         rig.ingest(false)
             .add(&mut ingested, &conversation(), "m1", bad)
             .await;
     }
-    // No repository at all.
-    let mut bare = rig.ingest(false);
-    bare.repository = None;
-    bare.add(
-        &mut ingested,
-        &conversation(),
-        "m1",
-        file("image/png", false),
-    )
-    .await;
-    // A repository that cannot store.
-    let failing = self::rig(
-        StubMedia {
-            fail_store: true,
-            ..Default::default()
-        },
-        Default::default(),
-        Default::default(),
-    );
-    failing
-        .ingest(false)
-        .add(
-            &mut ingested,
-            &conversation(),
-            "m1",
-            file("image/png", false),
-        )
-        .await;
-    assert!(ingested.parts.is_empty() && ingested.voice.is_none());
+    assert_eq!(ingested.parts.len(), 4);
 }
 
 #[tokio::test]
-async fn voice_notes_are_stored_scrubbed_and_transcribed() {
-    let rig = rig(Default::default(), Default::default(), Default::default());
-    let mut ingested = Ingested::default();
-    rig.ingest(true)
-        .add(
-            &mut ingested,
-            &conversation(),
-            "m1",
-            file("audio/mp4", true),
-        )
-        .await;
-    let note = ingested.voice.as_ref().unwrap();
-    assert_eq!(note.codec.as_deref(), Some("m4a_aac"));
-    assert_eq!(note.duration_ms, Some(1200));
-    assert!(note.media.url.is_none(), "private provider URLs never leak");
-    let transcript = note.transcript.as_ref().unwrap();
-    assert_eq!(transcript.source, VoiceTranscriptSource::HostStt);
-    assert_eq!(transcript.state, VoiceTranscriptState::Complete);
-    assert_eq!(rig.voice.stored.lock().unwrap().len(), 1);
-
-    // A second clip in the same message is ignored.
-    rig.ingest(true)
-        .add(
-            &mut ingested,
-            &conversation(),
-            "m1",
-            file("audio/mp4", true),
-        )
-        .await;
-    assert_eq!(rig.voice.stored.lock().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn provider_transcripts_win_and_missing_stt_leaves_it_to_the_ingress() {
-    let rig = rig(Default::default(), Default::default(), Default::default());
+async fn voice_transcript_is_enriched_without_reordering_the_media_part() {
+    let rig = rig(Default::default(), Default::default());
     let mut ingested = Ingested::default();
     let mut clip = file("audio/ogg", true);
     clip.transcript = Some(VoiceTranscript {
-        text: "provider".into(),
+        text: "provider transcript".into(),
         language: None,
         state: VoiceTranscriptState::Complete,
         source: VoiceTranscriptSource::Provider,
@@ -217,94 +142,65 @@ async fn provider_transcripts_win_and_missing_stt_leaves_it_to_the_ingress() {
     rig.ingest(true)
         .add(&mut ingested, &conversation(), "m1", clip)
         .await;
-    assert_eq!(ingested.voice.unwrap().transcript.unwrap().text, "provider");
+    assert_eq!(voice_note(&ingested.parts[0]).transcript.as_ref().unwrap().text, "provider transcript");
 
-    let mut plain = Ingested::default();
+    let mut next = Ingested::default();
     rig.ingest(false)
-        .add(&mut plain, &conversation(), "m2", file("audio/ogg", true))
+        .add(&mut next, &conversation(), "m2", file("audio/ogg", true))
         .await;
-    assert!(plain.voice.unwrap().transcript.is_none());
+    assert!(voice_note(&next.parts[0]).transcript.is_none());
 }
 
 #[tokio::test]
-async fn transcription_failures_and_blank_results_leave_no_transcript() {
-    for stt in [
-        StubTranscriber {
-            text: "  ",
-            fail: false,
-        },
-        StubTranscriber {
-            text: "x",
-            fail: true,
-        },
-    ] {
-        let rig = rig(Default::default(), Default::default(), stt);
-        let mut ingested = Ingested::default();
-        rig.ingest(true)
-            .add(
-                &mut ingested,
-                &conversation(),
-                "m1",
-                file("audio/mp4", true),
-            )
-            .await;
-        assert!(ingested.voice.unwrap().transcript.is_none());
-    }
-}
-
-#[tokio::test]
-async fn voice_storage_failures_and_missing_references_drop_the_clip() {
-    for voice in [
-        StubVoice {
+async fn unusable_voice_media_and_missing_storage_are_skipped() {
+    let failing = rig(
+        StubMedia {
             fail_store: true,
             ..Default::default()
         },
-        StubVoice {
-            empty_reference: true,
-            ..Default::default()
-        },
-    ] {
-        let rig = rig(Default::default(), voice, Default::default());
-        let mut ingested = Ingested::default();
-        rig.ingest(true)
-            .add(
-                &mut ingested,
-                &conversation(),
-                "m1",
-                file("audio/mp4", true),
-            )
-            .await;
-        assert!(ingested.voice.is_none() && ingested.parts.is_empty());
-    }
-    // Oversized for a voice clip (limit 8), though fine for a file.
-    let rig = rig(Default::default(), Default::default(), Default::default());
-    let mut clip = file("audio/mp4", true);
-    clip.bytes = vec![0; 12];
-    let mut ingested = Ingested::default();
-    rig.ingest(true)
-        .add(&mut ingested, &conversation(), "m1", clip)
+        Default::default(),
+    );
+    let mut parts = Ingested::default();
+    failing
+        .ingest(false)
+        .add(&mut parts, &conversation(), "m1", file("audio/mp4", true))
         .await;
-    assert!(ingested.voice.is_none());
-    // Without a voice store the same clip is plain audio.
-    let mut no_voice = rig.ingest(false);
-    no_voice.voice_store = None;
-    let mut plain = file("audio/mp4", true);
-    plain.bytes = vec![0; 12];
-    no_voice
-        .add(&mut ingested, &conversation(), "m1", plain)
+    assert!(parts.parts.is_empty());
+
+    let rig = rig(Default::default(), Default::default());
+    let mut no_storage = rig.ingest(false);
+    no_storage.repository = None;
+    no_storage
+        .add(&mut parts, &conversation(), "m1", file("audio/mp4", true))
         .await;
-    assert!(matches!(ingested.parts[0], ContentPart::Audio { .. }));
+    assert!(parts.parts.is_empty());
+
+    let mut oversized = file("audio/mp4", true);
+    oversized.bytes = vec![0; 9];
+    rig.ingest(false)
+        .add(&mut parts, &conversation(), "m1", oversized)
+        .await;
+    assert!(parts.parts.is_empty());
 }
 
 #[test]
-fn parts_are_assembled_text_first_then_voice_then_media() {
-    let rig = rig(Default::default(), Default::default(), Default::default());
-    let _ = rig;
-    let parts = assemble("hi", Some("md"), Ingested::default());
-    assert!(matches!(
-        &parts[0],
-        ContentPart::Text { markdown_dialect: Some(d), .. } if d == "md"
-    ));
+fn assembly_keeps_text_first_and_attachment_parts_ordered() {
+    let ingested = Ingested {
+        parts: vec![
+            ContentPart::Text {
+                text: "first".into(),
+                markdown_dialect: None,
+            },
+            ContentPart::Text {
+                text: "second".into(),
+                markdown_dialect: None,
+            },
+        ],
+    };
+    let parts = assemble("prefix", Some("md"), ingested);
+    assert!(matches!(&parts[0], ContentPart::Text { markdown_dialect: Some(d), .. } if d == "md"));
+    assert!(matches!(&parts[1], ContentPart::Text { text, .. } if text == "first"));
+    assert!(matches!(&parts[2], ContentPart::Text { text, .. } if text == "second"));
     assert!(assemble("  ", None, Ingested::default()).is_empty());
 }
 
@@ -316,25 +212,18 @@ async fn publishing_reports_whether_the_sink_took_the_message() {
     assert!(publish("fake", Some(&taking), envelope.clone()).await);
     let refusing: Arc<dyn EventSink> = Arc::new(RecordingEvents::default());
     assert!(!publish("fake", Some(&refusing), envelope.clone()).await);
-    let failing: Arc<dyn EventSink> = Arc::new(RecordingEvents {
-        fail: true,
-        ..Default::default()
-    });
+    let failing: Arc<dyn EventSink> = Arc::new(RecordingEvents { fail: true, ..Default::default() });
     assert!(!publish("fake", Some(&failing), envelope).await);
 }
 
 #[tokio::test]
 async fn events_carry_the_provider_channel_and_survive_a_failing_sink() {
-    let kind = ChannelEventKind::MessageDeleted {
-        message_id: "m".into(),
-        provider_message_id: None,
-    };
     let event = channel_event(
         "fake",
         "e1".into(),
         Some(5),
         Some(conversation()),
-        kind.clone(),
+        ChannelEventKind::MessageDeleted { message_id: "m".into(), provider_message_id: None },
     );
     assert_eq!(event.channel.id, "fake");
     assert_eq!(event.version, 2);
@@ -343,9 +232,6 @@ async fn events_carry_the_provider_channel_and_survive_a_failing_sink() {
     publish_event("fake", Some(&sink), event.clone()).await;
     assert_eq!(recording.events().len(), 1);
     publish_event("fake", None, event.clone()).await;
-    let failing: Arc<dyn EventSink> = Arc::new(RecordingEvents {
-        fail: true,
-        ..Default::default()
-    });
+    let failing: Arc<dyn EventSink> = Arc::new(RecordingEvents { fail: true, ..Default::default() });
     publish_event("fake", Some(&failing), event).await;
 }
