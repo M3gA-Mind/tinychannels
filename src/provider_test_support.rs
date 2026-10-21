@@ -68,8 +68,8 @@ pub(crate) async fn send_v1<C: ChannelAdapter>(
     message: &SendMessage,
 ) -> anyhow::Result<ChannelSendOutcome> {
     let mut intent = outbound_intent_from_send_message(&channel.descriptor().id, message);
-    // Mirror the module's immediate v1-to-v2 conversion: preserve a legacy
-    // subject through the text convention consumed by mail-style providers.
+    // Mirror the module's provider-specific v1-to-v2 conversion: only mail
+    // and DingTalk consume the legacy subject field.
     let text = match (channel.descriptor().id.as_str(), message.subject.as_deref()) {
         ("email" | "dingtalk", Some(subject)) => format!(
             "Subject: {}\n{}",

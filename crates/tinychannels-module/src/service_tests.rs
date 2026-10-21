@@ -534,13 +534,12 @@ impl crate::provider::TestProviderBehavior for CaptureTypedChannel {
         tinychannels_bus::channel::ChannelSendOutcome,
         tinychannels::channel::ChannelSendError,
     > {
-        self.sent
-            .send(message.clone())
-            .await
-            .map_err(|error| tinychannels::channel::ChannelSendError {
+        self.sent.send(message.clone()).await.map_err(|error| {
+            tinychannels::channel::ChannelSendError {
                 message: error.to_string(),
                 ..Default::default()
-            })?;
+            }
+        })?;
         Ok(Default::default())
     }
 }
@@ -4279,17 +4278,24 @@ async fn legacy_send_and_interaction_route_to_live_provider_and_reject_unknown_c
 #[tokio::test]
 async fn v1_subjects_are_normalized_only_for_providers_that_consume_them() {
     for (provider, subject, content, expected) in [
-        ("email", "Weekly report", "All green", "Subject: Weekly report\nAll green"),
-        ("dingtalk", "OpenHuman", "custom", "Subject: OpenHuman\ncustom"),
+        (
+            "email",
+            "Weekly report",
+            "All green",
+            "Subject: Weekly report\nAll green",
+        ),
+        (
+            "dingtalk",
+            "OpenHuman",
+            "custom",
+            "Subject: OpenHuman\ncustom",
+        ),
         ("telegram", "ignored", "visible body", "visible body"),
     ] {
         let (sent, mut received) = tokio::sync::mpsc::channel(1);
         let (service, _callbacks, _server) = channels_with_store_named(
             provider,
-            Arc::new(CaptureTypedChannel {
-                id: provider,
-                sent,
-            }),
+            Arc::new(CaptureTypedChannel { id: provider, sent }),
         )
         .await;
         let mut message = SendMessage::new(content, "recipient");
