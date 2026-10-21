@@ -264,3 +264,74 @@ async fn polling_survives_transport_errors() {
     .await;
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn adapter_start_delivers_socket_mode_messages_to_the_typed_sink() {
+    use crate::channel::{ChannelAdapter, ChannelInboundSink, ChannelSendError};
+    use tinychannels_bus::ChannelIngress;
+
+    struct Sink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
+
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for Sink {
+        async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+            self.0.send(ingress).map_err(|_| ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "test sink closed".into(),
+                retryable: true,
+                ..Default::default()
+            })
+        }
+    }
+
+    let server = mock_api().await;
+    mount_auth(&server, "UBOT").await;
+    let url = serve(|_, mut socket| {
+        Box::pin(async move {
+            socket
+                .send(envelope(
+                    "events_api",
+                    "e-typed-1",
+                    json!({"event": {
+                        "type": "message",
+                        "channel": "C1",
+                        "channel_type": "channel",
+                        "ts": "9.4",
+                        "thread_ts": "9.1",
+                        "user": "U1",
+                        "text": "typed Slack ingress"
+                    }}),
+                ))
+                .await
+                .unwrap();
+            expect_ack(&mut socket, "e-typed-1").await;
+            let _ = socket.close(None).await;
+        })
+    })
+    .await;
+    open_returns(&server, &url).await;
+    let channel = channel_for(&server, &["U1"]).with_app_token(Some("app-token".into()));
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Sink(tx);
+    let start = ChannelAdapter::start(&channel, &sink);
+    tokio::pin!(start);
+    let ingress = tokio::select! {
+        result = &mut start => panic!("Slack adapter start returned before typed delivery: {result:?}"),
+        ingress = tokio::time::timeout(Duration::from_secs(2), rx.recv()) => {
+            ingress.expect("typed Slack ingress timeout").expect("typed sink closed")
+        }
+    };
+    let ChannelIngress::Inbound(envelope) = ingress else {
+        panic!("expected a Slack inbound envelope, got {ingress:?}");
+    };
+    assert_eq!(envelope.channel.id, "slack");
+    assert_eq!(envelope.conversation.id, "C1");
+    assert_eq!(envelope.conversation.thread_id.as_deref(), Some("9.1"));
+    assert_eq!(envelope.message_id, "slack_C1_9.4");
+    assert_eq!(envelope.text, "typed Slack ingress");
+    ChannelAdapter::stop(&channel).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), &mut start)
+        .await
+        .expect("Slack adapter observes stop")
+        .unwrap();
+}
