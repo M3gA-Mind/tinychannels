@@ -673,6 +673,7 @@ async fn unparseable_recipients_are_rejected() {
     let ch = WhatsAppWebChannel::new("/tmp/t.db".into(), None, None, vec![]);
     let fake = Arc::new(RecordingClient::default());
     *ch.client.lock() = Some(fake.clone() as Arc<dyn OutboundClient>);
+    ch.connected.store(true, Ordering::Release);
 
     let empty = crate::provider_test_support::send_v1(&ch, &message("   ", "x"))
         .await
@@ -732,12 +733,12 @@ async fn client_failures_surface_with_their_operation() {
     let composing = ch.start_typing("+1234567890").await.unwrap_err();
     assert_eq!(
         composing.message,
-        "Failed to send typing state (composing): composing boom"
+        "WhatsApp Web operation outcome is uncertain: Failed to send typing state (composing): composing boom"
     );
     let paused = ch.stop_typing("+1234567890").await.unwrap_err();
     assert_eq!(
         paused.message,
-        "Failed to send typing state (paused): paused boom"
+        "WhatsApp Web operation outcome is uncertain: Failed to send typing state (paused): paused boom"
     );
 }
 
