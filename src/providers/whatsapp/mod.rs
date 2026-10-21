@@ -364,7 +364,9 @@ impl WhatsAppChannel {
         self.ingest_webhook(signature, body)
             .await
             .map_err(|failure| match failure {
-                WaFailure::Rejected(message) | WaFailure::Unsupported(message) => {
+                WaFailure::Rejected(message)
+                | WaFailure::BadFormat(message)
+                | WaFailure::Unsupported(message) => {
                     anyhow::Error::new(tinychannels_runtime::WebhookRejected(message))
                 }
                 uncertain => anyhow::Error::new(uncertain),
