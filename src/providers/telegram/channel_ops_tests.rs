@@ -5435,18 +5435,32 @@ async fn typed_listener_retries_rejected_update_before_acknowledging_its_offset(
     }
 
     let server = mock_api().await;
+    let observed_offsets = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let accepted_offset_seen = Arc::new(tokio::sync::Notify::new());
+    let response_offsets = observed_offsets.clone();
+    let response_accepted = accepted_offset_seen.clone();
     Mock::given(method("POST"))
         .and(path(api_path("getUpdates")))
-        .respond_with(updates(serde_json::json!([{
-            "update_id": 41,
-            "message": {
-                "message_id": 9,
-                "date": 1700000000,
-                "chat": { "id": -10042, "type": "supergroup" },
-                "from": { "id": 7, "username": "alice", "first_name": "Alice" },
-                "text": "retry this update"
+        .respond_with(move |request: &wiremock::Request| {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            let offset = body["offset"].as_i64().unwrap();
+            response_offsets.lock().unwrap().push(offset);
+            if offset == 42 {
+                response_accepted.notify_one();
+                updates(serde_json::json!([]))
+            } else {
+                updates(serde_json::json!([{
+                    "update_id": 41,
+                    "message": {
+                        "message_id": 9,
+                        "date": 1700000000,
+                        "chat": { "id": -10042, "type": "supergroup" },
+                        "from": { "id": 7, "username": "alice", "first_name": "Alice" },
+                        "text": "retry this update"
+                    }
+                }]))
             }
-        }])))
+        })
         .mount(&server)
         .await;
     let channel = Arc::new(fast_backoff(channel_for(&server, &["alice"])));
@@ -5458,25 +5472,36 @@ async fn typed_listener_retries_rejected_update_before_acknowledging_its_offset(
         "the rejected ingress must terminate this attempt"
     );
     assert!(!channel.has_seen_update_id(41));
+    assert_eq!(*observed_offsets.lock().unwrap(), [0]);
 
     let second = crate::channel::ChannelAdapter::start(channel.as_ref(), sink.as_ref());
     tokio::pin!(second);
     tokio::select! {
         result = &mut second => panic!("listener stopped before retry delivery: {result:?}"),
-        _ = tokio::time::timeout(Duration::from_secs(2), sink.notified.notified()) => {},
+        result = tokio::time::timeout(Duration::from_secs(2), accepted_offset_seen.notified()) => {
+            result.expect("the committed offset is polled after acceptance");
+        },
     }
     assert!(channel.has_seen_update_id(41));
     assert_eq!(sink.calls.load(Ordering::SeqCst), 2);
     assert_eq!(sink.accepted.lock().unwrap().len(), 1);
     let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 2);
-    for request in requests {
-        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
-        assert_eq!(
-            body.get("offset").and_then(serde_json::Value::as_i64),
-            Some(0)
-        );
-    }
+    assert!(
+        requests.len() >= 3,
+        "the committed offset is polled after delivery"
+    );
+    let request_offsets = requests
+        .iter()
+        .map(|request| {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            body.get("offset")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(&request_offsets[..2], [0, 0]);
+    assert_eq!(request_offsets[2], 42);
+    assert!(request_offsets[2..].iter().all(|offset| *offset == 42));
 
     crate::channel::ChannelAdapter::stop(channel.as_ref())
         .await
