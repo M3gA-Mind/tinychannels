@@ -3,7 +3,7 @@
 //!
 //! ## Why
 //!
-//! [`crate::traits::Channel`] covers the *transport* side of a provider —
+//! [`crate::channel::ChannelAdapter`] covers the *transport* side of a provider —
 //! receive inbound messages, send outbound ones. That is all a **lean**
 //! provider (irc, signal, slack) needs. **Rich** providers (web, telegram,
 //! presentation, whatsapp_web) additionally need to reach back into the host

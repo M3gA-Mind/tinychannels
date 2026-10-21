@@ -3,7 +3,7 @@
 //!
 //! Outbound text, attachments and voice clips go through the REST API.
 //! Inbound traffic is a signed webhook: the host forwards each raw POST to
-//! [`Channel::deliver_webhook`], which authenticates the exact bytes, downloads
+//! [`ChannelAdapter::deliver_webhook`](crate::channel::ChannelAdapter::deliver_webhook), which authenticates the exact bytes, downloads
 //! media, stores voice notes and publishes on the ordered ingress path.
 
 mod capabilities;

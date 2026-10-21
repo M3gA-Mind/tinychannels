@@ -387,7 +387,7 @@ pub struct WhatsAppWebChannel {
     /// in. Without this, any caller able to pass a `recipient` could post
     /// into arbitrary joined groups via the @g.us suffix.
     allowed_groups: Arc<Mutex<HashSet<String>>>,
-    /// Sink for inbound `ChannelMessage`s. Populated when [`Channel::listen`]
+    /// Sink for inbound typed ingress. Populated when [`ChannelAdapter::start`](crate::channel::ChannelAdapter::start)
     /// is called and shared with the event-handler closure.
     tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ChannelMessage>>>>,
     /// Cancellation for the configured typed listener. The provider callback
@@ -422,7 +422,7 @@ impl WhatsAppWebChannel {
         messages.iter().filter(move |message| !is_from_me(message))
     }
 
-    /// Construct a channel. The bot does not connect until [`Channel::listen`]
+    /// Construct a channel. The bot does not connect until [`ChannelAdapter::start`](crate::channel::ChannelAdapter::start)
     /// is invoked.
     pub fn new(
         session_path: String,
@@ -728,7 +728,7 @@ impl WhatsAppWebChannel {
         }
     }
 
-    /// Body of [`Channel::listen`] over an injected network stack: the
+    /// Body of [`ChannelAdapter::start`](crate::channel::ChannelAdapter::start) over an injected network stack: the
     /// transport the bot connects through and the HTTP client it fetches the
     /// app version with. Production passes the WebSocket transport and the
     /// ureq client; tests pass offline doubles.

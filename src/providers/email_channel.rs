@@ -91,7 +91,7 @@ trait ImapStream: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug + Send {}
 #[cfg(feature = "email")]
 impl<S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug + Send> ImapStream for S {}
 
-/// Budget for one [`Channel::health_check`] IMAP login probe.
+/// Budget for one [`EmailChannel::health_check_with`] IMAP login probe.
 #[cfg(feature = "email")]
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -705,7 +705,7 @@ impl EmailChannel {
     }
 
     /// This channel's SMTP account as per-call [`SmtpCredentials`], for the
-    /// async [`MailSender`] seam.
+    /// async [`crate::providers::mail::MailSender`] seam.
     ///
     /// `smtp_tls` maps to implicit TLS ([`SmtpSecurity::Ssl`]) and its absence to
     /// a plaintext connection ([`SmtpSecurity::None`]) — the same two transports

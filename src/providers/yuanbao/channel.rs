@@ -1,6 +1,6 @@
 //! Channel facade for the Yuanbao provider.
 //!
-//! This module owns the OpenHuman [`Channel`] implementation and keeps
+//! This module owns the provider's typed [`ChannelAdapter`](crate::channel::ChannelAdapter) implementation and keeps
 //! provider wiring out of `mod.rs`. Protocol decoding, transport, inbound
 //! filtering, and outbound sending remain delegated to sibling modules.
 
