@@ -1048,9 +1048,10 @@ impl TelegramChannel {
             // and deliver the full transcript as a follow-up text message instead
             // of dropping the entire voice reply.
             let transcript_fallback = caption.chars().count() > 1024;
-            let store = self.voice_media_store.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("Telegram voice upload requires host media resolution")
-            })?;
+            let store = self
+                .voice_media_store
+                .as_ref()
+                .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?;
             let conversation = message.conversation_ref.clone().unwrap_or_else(|| {
                 tinychannels_bus::ConversationRef {
                     id: message.conversation_id.clone(),
@@ -1062,7 +1063,7 @@ impl TelegramChannel {
                 .opaque_id
                 .as_deref()
                 .filter(|id| !id.trim().is_empty())
-                .ok_or_else(|| anyhow::anyhow!("voice media has no host-owned opaque reference"))?;
+                .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?;
             let channel =
                 message
                     .channel_ref
@@ -1075,9 +1076,7 @@ impl TelegramChannel {
                 .turn_id
                 .clone()
                 .filter(|turn_id| !turn_id.trim().is_empty())
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Telegram voice upload requires originating turn identity")
-                })?;
+                .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?;
             let scope = tinychannels_bus::HostVoiceScope {
                 configured_instance: channel
                     .account_id
