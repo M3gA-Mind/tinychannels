@@ -3,7 +3,6 @@
 //! This crate owns shared provider seams and algorithms, without concrete
 //! provider transports or host policy. Hosts observe listener lifecycle through [`ListenerObserver`].
 
-use std::time::Duration;
 use rand::RngExt as _;
 
 mod dispatch;
