@@ -2551,9 +2551,37 @@ async fn preparation_preserves_explicit_keys_and_typed_thread_before_provider_io
         .unwrap();
     assert!(matches!(
         &subject_prepared.intent.payload,
-        tinychannels_bus::OutboundPayload::NativeChannelData { .. }
+        tinychannels_bus::OutboundPayload::Text { text } if text == "Subject: subject\nfixture"
     ));
     assert_eq!(subject_prepared.legacy_message["subject"], "subject");
+
+    let mut dingtalk_message = SendMessage::new("custom", "room");
+    dingtalk_message.subject = Some("OpenHuman".into());
+    let dingtalk_prepared = channels
+        .prepare_outbound_intent(
+            "dingtalk".into(),
+            ChannelMessagePreparation::Typed(dingtalk_message),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        &dingtalk_prepared.intent.payload,
+        tinychannels_bus::OutboundPayload::Text { text } if text == "Subject: OpenHuman\ncustom"
+    ));
+
+    let mut telegram_message = SendMessage::new("visible body", "chat");
+    telegram_message.subject = Some("ignored before typed migration".into());
+    let telegram_prepared = channels
+        .prepare_outbound_intent(
+            "telegram".into(),
+            ChannelMessagePreparation::Typed(telegram_message),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        &telegram_prepared.intent.payload,
+        tinychannels_bus::OutboundPayload::Text { text } if text == "visible body"
+    ));
 
     let native_intent = tinychannels_bus::ChannelOutboundIntent {
         channel_id: "telegram".into(),
