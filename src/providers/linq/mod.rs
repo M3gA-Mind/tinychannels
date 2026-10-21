@@ -295,7 +295,7 @@ impl LinqChannel {
     }
 }
 
-crate::providers::outbound::native_v2_adapter!(LinqChannel);
+super::native::native_v2_adapter!(LinqChannel);
 
 #[cfg(test)]
 #[path = "fixtures_tests.rs"]
@@ -346,5 +346,5 @@ pub fn verify_linq_signature(secret: &str, body: &str, timestamp: &str, signatur
 }
 
 #[cfg(test)]
-#[path = "linq_tests.rs"]
+#[path = "tests/mod.rs"]
 mod tests;

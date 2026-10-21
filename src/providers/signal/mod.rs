@@ -351,7 +351,7 @@ impl SignalChannel {
     }
 }
 
-super::outbound::native_v2_adapter!(SignalChannel);
+super::native::native_v2_adapter!(SignalChannel);
 
 #[cfg(test)]
 #[path = "fixtures_tests.rs"]

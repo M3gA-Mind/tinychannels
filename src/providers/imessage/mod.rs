@@ -228,7 +228,7 @@ impl IMessageChannel {
     }
 }
 
-crate::providers::outbound::native_v2_adapter!(IMessageChannel);
+super::native::native_v2_adapter!(IMessageChannel);
 
 #[cfg(test)]
 #[path = "fixtures_tests.rs"]

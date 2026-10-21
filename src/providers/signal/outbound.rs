@@ -343,5 +343,5 @@ impl NativeProvider for SignalChannel {
 }
 
 #[cfg(test)]
-#[path = "native/tests/mod.rs"]
+#[path = "tests/mod.rs"]
 mod tests;
