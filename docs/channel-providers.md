@@ -62,6 +62,39 @@ adapter and mock wire. IRC has a full 24-case suite against a local protocol
 peer. Controller-mediated operations are checked separately from these 24
 provider cases.
 
+## Declared capability overview
+
+These are descriptor declarations, not a promise that every configured account
+has every capability. Provider constructors derive the descriptor from the
+services and protocol options actually wired for that account. `conditional`
+means the capability is omitted until its required host service or provider
+option is present; consult the provider's capability implementation for the
+accepted MIME types, limits, and exact events.
+
+| Provider | Text | Typed media | Voice | Addressing and interaction highlights |
+| --- | --- | --- | --- | --- |
+| DingTalk | In/out | Image and file when media storage is wired | Audio/voice when voice services are wired | Reply and provider events |
+| Discord | In/out | Conditional image, video, audio, and file | Conditional | Reply/thread, edit/delete, reactions, streaming drafts |
+| Email | In/out | Conditional image, video, audio, and file | Conditional | Reply/thread and send/reply actions |
+| iMessage | In/out | Conditional image, video, audio, and file | Conditional | Reply addressing, reactions, read receipts |
+| IRC | In/out | Not declared | Not declared | Text send only |
+| Lark | In/out | Provider and media-service dependent | Conditional | Provider-specific reply/thread behavior |
+| Linq | In/out | Conditional image, video, audio, and file | Conditional | Send and typing actions |
+| Mattermost | In/out | Conditional image, video, audio, and file | Conditional | Long-tail text adapter; see its descriptor for optional actions |
+| QQ | In/out | Conditional image, video, and file; inbound support depends on ingress services | Voice output conditional | Provider-specific events and reply behavior |
+| Signal | In/out | Conditional image, video, audio, and file | Conditional | Reply addressing, reactions, read receipts |
+| Slack | In/out | Conditional image, video, audio, and file | Conditional | Reply/thread, edit/delete, reactions, streaming drafts |
+| Telegram | In/out | Conditional image, video, audio, file, and sticker | Conditional | Reply/thread, reactions, edit, streaming drafts; location/contact/buttons/polls are also declared |
+| WhatsApp Cloud | In/out | Conditional image, video, audio, file, and sticker | Conditional | Reply, reactions, read/delivery receipts; edit/delete are option-dependent |
+| WhatsApp Web | In/out | Conditional image, video, audio, file, and sticker | Conditional | Reply, reactions, read/delivery receipts; edit/delete are option-dependent |
+| Yuanbao | In/out | Image and file when media storage is wired | Voice input conditional | Provider-specific text actions |
+
+The shared long-tail text descriptor starts with bidirectional text and send.
+Each long-tail provider extends it only for behavior its adapter implements.
+The WhatsApp capability builder separately advertises typed media, voice,
+events, and edit/delete from its wired ports and configuration. These rules
+explain the conditional cells; they do not replace the runtime descriptor.
+
 ## Controller Registry
 
 The setup UI registry currently exposes definitions for:

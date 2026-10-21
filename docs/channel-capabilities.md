@@ -99,7 +99,9 @@ Exported providers include:
 - `QQChannel`
 - `SignalChannel`
 - `SlackChannel`
+- `TelegramChannel`
 - `WhatsAppChannel`
+- `WhatsAppWebChannel`
 - `YuanbaoChannel`
 
 See [Providers](channel-providers.md).
