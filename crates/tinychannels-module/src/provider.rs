@@ -1243,7 +1243,6 @@ pub(crate) struct NativePorts {
 /// keep their existing legacy listener until their own migration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LongTailListenerMode {
-    Legacy,
     Adapter,
     Webhook,
 }
@@ -1262,7 +1261,7 @@ impl NativePorts {
             edits: channel.clone(),
             deletes: channel.clone(),
             drafts: channel,
-            listener_mode: LongTailListenerMode::Legacy,
+            listener_mode: LongTailListenerMode::Adapter,
         }
     }
 
@@ -1300,9 +1299,8 @@ impl NativePorts {
 }
 
 pub(crate) struct Running {
-    pub(crate) channel: Option<Arc<dyn Channel>>,
     provider_name: String,
-    native_ports: Option<NativePorts>,
+    native_ports: NativePorts,
     pub(crate) media_account_scope: MediaScope,
     configured_instance: String,
     send: mpsc::Sender<SendCommand>,
@@ -1314,7 +1312,6 @@ pub(crate) struct Running {
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AdapterMode {
-    LegacyBacked,
     DiscordNativeV2,
     TelegramNativeV2,
     SlackNativeV2,
@@ -1620,19 +1617,6 @@ impl tinychannels::channel::ChannelStreamingDraft for NativeAdapter {
 }
 
 impl ConfiguredAdapterFactory {
-    pub(crate) fn legacy(running: Arc<Running>) -> ConfiguredAdapterHandle {
-        let configured_instance = running.configured_instance.clone();
-        let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = running;
-        ConfiguredAdapterHandle {
-            configured_instance,
-            #[cfg(test)]
-            mode: AdapterMode::LegacyBacked,
-            adapter,
-            #[cfg(test)]
-            native: None,
-        }
-    }
-
     pub(crate) fn telegram(running: Arc<Running>) -> ConfiguredAdapterHandle {
         Self::native(
             running,
@@ -1697,30 +1681,16 @@ impl Running {
     }
 
     pub(crate) fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.native_ports.as_ref().map_or_else(
-            || {
-                self.channel
-                    .as_ref()
-                    .map_or_else(Default::default, |channel| channel.capabilities())
-            },
-            |ports| ports.adapter.declared_capabilities(),
-        )
+        self.native_ports.adapter.declared_capabilities()
     }
 
     pub(crate) fn proactive_target(&self) -> Option<String> {
-        self.native_ports.as_ref().map_or_else(
-            || {
-                self.channel
-                    .as_ref()
-                    .and_then(|channel| channel.proactive_target())
-            },
-            |ports| ports.adapter.proactive_target(),
-        )
+        self.native_ports.adapter.proactive_target()
     }
 
     pub(crate) fn adapter_handle(self: &Arc<Self>) -> ConfiguredAdapterHandle {
-        if let Some(ports) = &self.native_ports {
-            match ports.provider {
+        {
+            match self.native_ports.provider {
                 "Discord" => ConfiguredAdapterFactory::discord(self.clone()),
                 "Slack" => ConfiguredAdapterFactory::slack(self.clone()),
                 "Signal" => ConfiguredAdapterFactory::native(
@@ -1747,8 +1717,6 @@ impl Running {
                 "Telegram" => ConfiguredAdapterFactory::telegram(self.clone()),
                 _ => ConfiguredAdapterFactory::long_tail(self.clone()),
             }
-        } else {
-            ConfiguredAdapterFactory::legacy(self.clone())
         }
     }
 
