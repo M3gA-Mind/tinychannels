@@ -522,8 +522,7 @@ async fn rest_requests_preserve_auth_thread_routing_and_server_errors() {
         .expect(1)
         .mount(&server)
         .await;
-    channel
-        .send(&SendMessage::new("reply", "room:root"))
+    crate::provider_test_support::send_v1(&channel, &SendMessage::new("reply", "room:root"))
         .await
         .unwrap();
     Mock::given(method("POST"))
@@ -535,8 +534,7 @@ async fn rest_requests_preserve_auth_thread_routing_and_server_errors() {
         .expect(1)
         .mount(&server)
         .await;
-    let error = channel
-        .send(&SendMessage::new("top-level", "room"))
+    let error = crate::provider_test_support::send_v1(&channel, &SendMessage::new("top-level", "room"))
         .await
         .unwrap_err();
     assert!(error.to_string().contains("403"));
@@ -559,8 +557,7 @@ async fn rest_requests_preserve_auth_thread_routing_and_server_errors() {
     );
     assert!(!crate::provider_test_support::is_healthy(&unreachable).await);
     assert!(
-        unreachable
-            .send(&SendMessage::new("hello", "room"))
+        crate::provider_test_support::send_v1(&unreachable, &SendMessage::new("hello", "room"))
             .await
             .is_err()
     );

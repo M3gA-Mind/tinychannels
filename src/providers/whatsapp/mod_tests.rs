@@ -864,8 +864,7 @@ async fn injected_cloud_client_reports_connection_failure_and_listener_stays_idl
     );
     assert_eq!(channel.verify_token(), "verify");
     assert!(
-        channel
-            .send(&SendMessage::new("hello", "+15551234567"))
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "+15551234567"))
             .await
             .is_err()
     );

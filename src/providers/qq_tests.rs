@@ -125,14 +125,12 @@ async fn oauth_cache_gateway_and_send_preserve_auth_and_routing() {
         "ws://localhost/gateway"
     );
     for recipient in ["group:room", "user:alice", "bob"] {
-        channel
-            .send(&SendMessage::new("hello", recipient))
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", recipient))
             .await
             .unwrap();
     }
     assert!(
-        channel
-            .send(&SendMessage::new("hello", "blocked"))
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "blocked"))
             .await
             .unwrap_err()
             .to_string()
@@ -201,15 +199,13 @@ async fn oauth_and_gateway_reject_invalid_responses_and_network_failures() {
     assert!(!crate::provider_test_support::is_healthy(&channel).await);
     assert!(channel.get_gateway_url("token").await.is_err());
     assert!(
-        channel
-            .send(&SendMessage::new("hello", "alice"))
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "alice"))
             .await
             .is_err()
     );
     *channel.token_cache.write().await = Some(("token".into(), u64::MAX));
     assert!(
-        channel
-            .send(&SendMessage::new("hello", "alice"))
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "alice"))
             .await
             .is_err()
     );

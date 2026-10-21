@@ -795,12 +795,10 @@ async fn send_fetches_a_token_once_and_posts_a_text_message() {
     .await;
     let channel = channel_with(&server, true);
 
-    channel
-        .send(&SendMessage::new("hello lark", "oc_chat"))
+    crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello lark", "oc_chat"))
         .await
         .unwrap();
-    channel
-        .send(&SendMessage::new("second", "oc_chat"))
+    crate::provider_test_support::send_v1(&channel, &SendMessage::new("second", "oc_chat"))
         .await
         .unwrap();
     assert!(crate::provider_test_support::is_healthy(&channel).await, "cached token stays healthy");
@@ -1157,8 +1155,7 @@ async fn send_refreshes_an_expired_token_and_retries_once() {
     .await;
     let channel = channel_with(&server, false);
 
-    channel
-        .send(&SendMessage::new("retry me", "oc_chat"))
+    crate::provider_test_support::send_v1(&channel, &SendMessage::new("retry me", "oc_chat"))
         .await
         .unwrap();
 
@@ -1212,8 +1209,7 @@ async fn token_errors_fail_send_and_health_check() {
         HttpsServer::start(|_| (200, r#"{"code":10003,"msg":"invalid app_secret"}"#.into())).await;
     let channel = channel_with(&server, true);
     assert!(!crate::provider_test_support::is_healthy(&channel).await);
-    let error = channel
-        .send(&SendMessage::new("x", "oc_chat"))
+    let error = crate::provider_test_support::send_v1(&channel, &SendMessage::new("x", "oc_chat"))
         .await
         .unwrap_err();
     assert_eq!(

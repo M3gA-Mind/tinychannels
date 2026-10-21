@@ -108,8 +108,7 @@ async fn gateway_registration_and_webhook_replies_preserve_payloads_and_errors()
     );
     assert!(crate::provider_test_support::is_healthy(&channel).await);
     assert!(
-        channel
-            .send(&SendMessage::new("reply", "unknown"))
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("reply", "unknown"))
             .await
             .unwrap_err()
             .to_string()
@@ -130,8 +129,7 @@ async fn gateway_registration_and_webhook_replies_preserve_payloads_and_errors()
         .expect(1)
         .mount(&webhook)
         .await;
-    channel
-        .send(&SendMessage::new("reply", "room"))
+    crate::provider_test_support::send_v1(&channel, &SendMessage::new("reply", "room"))
         .await
         .unwrap();
     let mut reply = SendMessage::new("custom", "room");
@@ -145,8 +143,7 @@ async fn gateway_registration_and_webhook_replies_preserve_payloads_and_errors()
         .mount(&webhook)
         .await;
     assert!(
-        channel
-            .send(&reply)
+        crate::provider_test_support::send_v1(&channel, &reply)
             .await
             .unwrap_err()
             .to_string()

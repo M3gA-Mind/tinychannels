@@ -692,8 +692,7 @@ async fn send_runs_the_escaped_script_through_the_runner() {
     let mut channel = IMessageChannel::new(vec![]);
     channel.script_command = fake_runner(&out, 0);
 
-    channel
-        .send(&SendMessage::new("say \"hi\"", "+15555550123"))
+    crate::provider_test_support::send_v1(&channel, &SendMessage::new("say \"hi\"", "+15555550123"))
         .await
         .unwrap();
 
@@ -712,8 +711,7 @@ async fn send_reports_the_runner_stderr_on_failure() {
     let mut channel = IMessageChannel::new(vec![]);
     channel.script_command = fake_runner(&dir.path().join("script.txt"), 1);
 
-    let error = channel
-        .send(&SendMessage::new("hello", "user@example.com"))
+    let error = crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "user@example.com"))
         .await
         .unwrap_err()
         .to_string();
@@ -728,8 +726,7 @@ async fn send_rejects_an_invalid_target_before_running_anything() {
     let mut channel = IMessageChannel::new(vec![]);
     channel.script_command = fake_runner(&out, 0);
 
-    let error = channel
-        .send(&SendMessage::new("hello", "not a target"))
+    let error = crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "not a target"))
         .await
         .unwrap_err()
         .to_string();
@@ -742,8 +739,7 @@ async fn send_without_a_runner_is_an_error() {
     let mut channel = IMessageChannel::new(vec![]);
     channel.script_command = Vec::new();
     assert!(
-        channel
-            .send(&SendMessage::new("hello", "+15555550123"))
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "+15555550123"))
             .await
             .is_err()
     );

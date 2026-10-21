@@ -1301,8 +1301,7 @@ fn building_a_message_rejects_a_bad_address() {
 async fn send_and_capture(content: &str) -> String {
     let (port, server) = blocking_smtp_server();
     let channel = EmailChannel::new(smtp_config(port, false));
-    channel
-        .send(&SendMessage::new(content, "to@example.com"))
+    crate::provider_test_support::send_v1(&channel, &SendMessage::new(content, "to@example.com"))
         .await
         .unwrap();
     tokio::task::spawn_blocking(move || server.join().unwrap())

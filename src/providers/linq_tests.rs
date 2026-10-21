@@ -401,8 +401,7 @@ async fn injected_linq_client_propagates_transport_failure_and_keeps_webhook_lis
     let channel =
         LinqChannel::with_http_client("token".into(), "+15551234567".into(), vec![], client);
     assert!(
-        channel
-            .send(&SendMessage::new("hello", "chat"))
+        crate::provider_test_support::send_v1(&channel, &SendMessage::new("hello", "chat"))
             .await
             .is_err()
     );
