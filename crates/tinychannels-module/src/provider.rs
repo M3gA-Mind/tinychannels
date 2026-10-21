@@ -7,7 +7,7 @@ use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::channel::ChannelAdapter;
 use tinychannels::host::{LifecycleRegistry, ShutdownHook};
-use tinychannels::{Channel, ChannelHostBuilder};
+use tinychannels::ChannelHostBuilder;
 use tinychannels_bus::{
     ChannelSupervisionPolicy, ChannelsConfig, HostEventPublication, HostTranscriptionRequest,
 };
@@ -379,7 +379,7 @@ pub(crate) struct MediaScope(Arc<MediaScopeInner>);
 #[derive(Default)]
 struct MediaScopeInner {
     fixed: Option<String>,
-    source: std::sync::OnceLock<Arc<dyn Channel>>,
+    source: std::sync::OnceLock<std::sync::Weak<dyn tinychannels::channel::ChannelAdapter>>,
 }
 
 impl From<Option<String>> for MediaScope {
@@ -404,8 +404,11 @@ impl MediaScope {
     }
 
     /// Resolve the scope from `channel`'s authenticated identity from now on.
-    pub(crate) fn bind_source(&self, channel: Arc<dyn Channel>) {
-        let _ = self.0.source.set(channel);
+    pub(crate) fn bind_source(
+        &self,
+        adapter: &Arc<dyn tinychannels::channel::ChannelAdapter>,
+    ) {
+        let _ = self.0.source.set(Arc::downgrade(adapter));
     }
 
     /// The scope now, if the account is known.
@@ -413,10 +416,11 @@ impl MediaScope {
         if let Some(fixed) = &self.0.fixed {
             return Some(fixed.clone());
         }
-        let channel = self.0.source.get()?;
-        let identity = channel.media_account_identity()?;
+        let adapter = self.0.source.get()?.upgrade()?;
+        let identity = adapter.media_account_identity()?;
+        let descriptor = adapter.descriptor();
         media_scope_digest(
-            tinychannels_bus::provider_id(channel.name()),
+            tinychannels_bus::provider_id(&descriptor.id),
             &["linked-session".to_owned(), identity],
         )
     }

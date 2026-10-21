@@ -124,7 +124,8 @@ impl WhatsAppNative {
     /// Web learns its account from the linked session; bind the media scope to it.
     fn bind_media_authority(&self, scope: &crate::provider::MediaScope) {
         if let Self::Web(channel) = self {
-            scope.bind_source(channel.clone());
+            let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = channel.clone();
+            scope.bind_source(&adapter);
         }
     }
 

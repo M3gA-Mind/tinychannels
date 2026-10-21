@@ -1215,6 +1215,10 @@ impl crate::channel::ChannelAdapter for WhatsAppWebChannel {
         }
     }
 
+    fn media_account_identity(&self) -> Option<String> {
+        self.provider_media_account_identity()
+    }
+
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         self.provider_capabilities()
     }
