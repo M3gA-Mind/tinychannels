@@ -4277,31 +4277,39 @@ async fn legacy_send_and_interaction_route_to_live_provider_and_reject_unknown_c
 
 #[tokio::test]
 async fn v1_subjects_are_normalized_only_for_providers_that_consume_them() {
-    for (provider, subject, content, expected) in [
+    for (instance, provider, subject, content, expected) in [
         (
+            "email:account-a",
             "email",
             "Weekly report",
             "All green",
             "Subject: Weekly report\nAll green",
         ),
         (
+            "dingtalk:account-a",
             "dingtalk",
             "OpenHuman",
             "custom",
             "Subject: OpenHuman\ncustom",
         ),
-        ("telegram", "ignored", "visible body", "visible body"),
+        (
+            "telegram:account-a",
+            "telegram",
+            "ignored",
+            "visible body",
+            "visible body",
+        ),
     ] {
         let (sent, mut received) = tokio::sync::mpsc::channel(1);
         let (service, _callbacks, _server) = channels_with_store_named(
-            provider,
+            instance,
             Arc::new(CaptureWireProvider { id: provider, sent }),
         )
         .await;
         let mut message = SendMessage::new(content, "recipient");
         message.subject = Some(subject.into());
         service
-            .send_message(provider.into(), message)
+            .send_message(instance.into(), message)
             .await
             .unwrap();
         let actual = received.recv().await.unwrap();
