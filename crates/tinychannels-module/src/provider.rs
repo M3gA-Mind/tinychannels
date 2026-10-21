@@ -100,6 +100,24 @@ impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelTyping for
 
 #[cfg(test)]
 #[async_trait::async_trait]
+impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelReaction for T {
+    async fn send_reaction(&self, _channel: &tinychannels_bus::channel::ChannelRef, _conversation: &tinychannels_bus::channel::ConversationRef, _provider_message_id: &str, _reaction: &tinychannels_bus::channel::ChannelReaction, _remove: bool) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { Err(test_unsupported("reaction")) }
+}
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelEdit for T {
+    async fn edit(&self, _receipt: &tinychannels_bus::channel::MessageReceipt, _intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, tinychannels::channel::ChannelSendError> { Err(test_unsupported("edit")) }
+}
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelDelete for T {
+    async fn delete(&self, _receipt: &tinychannels_bus::channel::MessageReceipt) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { Err(test_unsupported("delete")) }
+}
+
+#[cfg(test)]
+#[async_trait::async_trait]
 impl<T: TestProviderBehavior + 'static> tinychannels::channel::ChannelStreamingDraft for T {
     async fn start_draft(&self, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<Option<String>, tinychannels::channel::ChannelSendError> { self.test_start_draft(intent).await }
     async fn update_draft(&self, id: &str, intent: tinychannels_bus::ChannelOutboundIntent) -> std::result::Result<(), tinychannels::channel::ChannelSendError> { self.test_update_draft(id, intent).await }
@@ -1311,6 +1329,28 @@ pub(crate) enum LongTailListenerMode {
 }
 
 impl NativePorts {
+    #[cfg(test)]
+    fn test<T: TestProviderBehavior + 'static>(channel: Arc<T>) -> Self {
+        let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = channel.clone();
+        let typed_send: Arc<dyn tinychannels::channel::ChannelTypedSend> = channel.clone();
+        let typing: Arc<dyn tinychannels::channel::ChannelTyping> = channel.clone();
+        let reactions: Arc<dyn tinychannels::channel::ChannelReaction> = channel.clone();
+        let edits: Arc<dyn tinychannels::channel::ChannelEdit> = channel.clone();
+        let deletes: Arc<dyn tinychannels::channel::ChannelDelete> = channel.clone();
+        let drafts: Arc<dyn tinychannels::channel::ChannelStreamingDraft> = channel;
+        Self {
+            provider: "TestProvider",
+            adapter,
+            typed_send,
+            typing,
+            reactions,
+            edits,
+            deletes,
+            drafts,
+            listener_mode: LongTailListenerMode::Webhook,
+        }
+    }
+
     pub(crate) fn native(
         channel: Arc<dyn tinychannels::LongTailNative>,
         provider: &'static str,
@@ -1725,6 +1765,40 @@ impl ConfiguredAdapterFactory {
 }
 
 impl Running {
+    #[cfg(test)]
+    pub(crate) fn start_test<T: TestProviderBehavior + 'static>(
+        channel: Arc<T>,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+    ) -> Arc<Self> {
+        let provider_name = channel.test_provider_id().to_owned();
+        Self::start_inner(
+            provider_name,
+            hooks,
+            host,
+            None,
+            false,
+            NativePorts::test(channel),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_test_outbound<T: TestProviderBehavior + 'static>(
+        channel: Arc<T>,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+    ) -> Arc<Self> {
+        let provider_name = channel.test_provider_id().to_owned();
+        Self::start_inner(
+            provider_name,
+            hooks,
+            host,
+            None,
+            true,
+            NativePorts::test(channel),
+        )
+    }
+
     pub(crate) fn provider_name(&self) -> &str {
         &self.provider_name
     }
