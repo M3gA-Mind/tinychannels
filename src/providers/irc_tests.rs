@@ -296,10 +296,7 @@ fn new_uses_explicit_username() {
 #[test]
 fn name_returns_irc() {
     let ch = make_channel();
-    assert_eq!(
-        crate::channel::ChannelAdapter::descriptor(&ch).id,
-        "irc"
-    );
+    assert_eq!(crate::channel::ChannelAdapter::descriptor(&ch).id, "irc");
 }
 
 #[test]

@@ -2,12 +2,12 @@
 //! server, scripting the registration, SASL and message exchange line by line.
 
 use super::*;
-use tokio::sync::mpsc;
 use std::time::Duration;
 use tinychannels_conformance::{
     AdapterFixture, ConformanceFeature, ExpectedScope, WireObservation, check_all_features,
 };
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
 
@@ -774,8 +774,8 @@ async fn listen_registers_authenticates_and_forwards_allowed_privmsgs() {
             ..Default::default()
         },
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
     peer.expect("PRIVMSG #ops :line one").await;
     peer.expect("PRIVMSG #ops :line two").await;
 
@@ -800,9 +800,8 @@ async fn listen_continues_without_sasl_when_the_server_refuses_it() {
     });
     let (tx, _rx) = mpsc::unbounded_channel();
     let sink = InboundSink(tx);
-    let listen = tokio::spawn(async move {
-        crate::channel::ChannelAdapter::start(&channel, &sink).await
-    });
+    let listen =
+        tokio::spawn(async move { crate::channel::ChannelAdapter::start(&channel, &sink).await });
 
     let mut peer = Peer::accept(&listener, &acceptor).await;
     peer.expect("CAP REQ :sasl").await;
@@ -837,9 +836,8 @@ async fn listen_ends_sasl_on_failure_and_stops_when_the_receiver_is_gone() {
     });
     let (tx, rx) = mpsc::unbounded_channel();
     let sink = InboundSink(tx);
-    let listen = tokio::spawn(async move {
-        crate::channel::ChannelAdapter::start(&channel, &sink).await
-    });
+    let listen =
+        tokio::spawn(async move { crate::channel::ChannelAdapter::start(&channel, &sink).await });
 
     let mut peer = Peer::accept(&listener, &acceptor).await;
     peer.expect("CAP REQ :sasl").await;
@@ -879,8 +877,8 @@ async fn send_fails_before_listen_has_connected() {
             ..Default::default()
         },
     )
-        .await
-        .unwrap_err();
+    .await
+    .unwrap_err();
     assert_eq!(error.message, "IRC is not connected");
     assert!(!error.sent_before_error);
 }
@@ -918,9 +916,11 @@ async fn verified_tls_rejects_an_untrusted_certificate() {
     assert!(!channel.health_check().await);
     let (tx, _rx) = mpsc::unbounded_channel();
     let sink = InboundSink(tx);
-    assert!(crate::channel::ChannelAdapter::start(&channel, &sink)
-        .await
-        .is_err());
+    assert!(
+        crate::channel::ChannelAdapter::start(&channel, &sink)
+            .await
+            .is_err()
+    );
     tokio::time::timeout(GUARD, server).await.unwrap().unwrap();
 }
 

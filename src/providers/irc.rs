@@ -779,9 +779,7 @@ impl crate::providers::long_tail::LongTail for IrcChannel {
                     ..Default::default()
                 })?;
         let _registration = ListenerRegistration(self);
-        let result = self
-            .listen_owned(sink, Some(cancellation))
-            .await;
+        let result = self.listen_owned(sink, Some(cancellation)).await;
         result.map_err(|error| {
             tracing::debug!(%error, "IRC typed listener stopped");
             tinychannels_bus::channel::ChannelSendError {
