@@ -1116,6 +1116,68 @@ async fn listen_fails_when_gateway_lookup_is_not_json() {
     assert!(channel_at(&base, None).run_gateway_typed(tx).await.is_err());
 }
 
+#[tokio::test]
+async fn gateway_transport_and_hello_failures_return_to_the_listener() {
+    let (tx, _rx) = mpsc::channel(1);
+    let unavailable = channel_at("http://127.0.0.1:0", None);
+    assert!(
+        tokio::time::timeout(HANG_GUARD, unavailable.run_gateway_typed(tx))
+            .await
+            .expect("failed REST connection is bounded")
+            .is_err()
+    );
+
+    let failed_ws = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let failed_ws_port = failed_ws.local_addr().unwrap().port();
+    drop(failed_ws);
+    let app = Router::new().route(
+        "/gateway/bot",
+        get(
+            move || async move { Json(json!({"url": format!("ws://127.0.0.1:{failed_ws_port}")})) },
+        ),
+    );
+    let rest_base = spawn_http(app).await;
+    let (tx, _rx) = mpsc::channel(1);
+    assert!(
+        tokio::time::timeout(
+            HANG_GUARD,
+            channel_at(&rest_base, None).run_gateway_typed(tx)
+        )
+        .await
+        .expect("failed websocket connection is bounded")
+        .is_err()
+    );
+
+    let ws_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ws_url = format!("ws://{}", ws_listener.local_addr().unwrap());
+    let app = Router::new().route(
+        "/gateway/bot",
+        get(move || {
+            let url = ws_url.clone();
+            async move { Json(json!({"url": url})) }
+        }),
+    );
+    let rest_base = spawn_http(app).await;
+    let gateway = tokio::spawn(async move {
+        let (socket, _) = ws_listener.accept().await.unwrap();
+        drop(tokio_tungstenite::accept_async(socket).await.unwrap());
+    });
+    let (tx, _rx) = mpsc::channel(1);
+    assert!(
+        tokio::time::timeout(
+            HANG_GUARD,
+            channel_at(&rest_base, None).run_gateway_typed(tx)
+        )
+        .await
+        .expect("closed websocket before Hello is bounded")
+        .is_err()
+    );
+    tokio::time::timeout(HANG_GUARD, gateway)
+        .await
+        .expect("mock gateway exits")
+        .expect("mock gateway task succeeds");
+}
+
 #[test]
 fn base64_decode_handles_unpadded_padded_and_trailing_input() {
     assert_eq!(base64_decode("MQ").as_deref(), Some("1"));
