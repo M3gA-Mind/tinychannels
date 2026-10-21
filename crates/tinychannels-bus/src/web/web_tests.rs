@@ -1,22 +1,22 @@
 use super::*;
 
-const CHAT_DONE: &str = include_str!("fixtures/web/chat_done.json");
-const APPROVAL: &str = include_str!("fixtures/web/approval_request.json");
-const SUBAGENT: &str = include_str!("fixtures/web/subagent_completed.json");
-const LEGACY_CANCEL: &str = include_str!("fixtures/web/chat_error_cancelled.json");
-const CANCEL: &str = include_str!("fixtures/web/chat_cancelled.json");
-const TEXT_DELTA: &str = include_str!("fixtures/web/text_delta.json");
-const PROACTIVE: &str = include_str!("fixtures/web/proactive_message.json");
-const CHANNEL_OUTBOUND: &str = include_str!("fixtures/web/channel_outbound.json");
-const SUBAGENT_TOOL_RESULT: &str = include_str!("fixtures/web/subagent_tool_result.json");
-const CHAT_ERROR_GUARDRAIL: &str = include_str!("fixtures/web/chat_error_guardrail.json");
-const QUEUE_ITEM: &str = include_str!("fixtures/web/queue_item_queued.json");
-const THREAD_GOAL: &str = include_str!("fixtures/web/thread_goal_updated.json");
-const THREAD_TODOS: &str = include_str!("fixtures/web/thread_todos_changed.json");
-const TOOL_RESULT: &str = include_str!("fixtures/web/tool_result.json");
-const APPROVAL_DECIDED: &str = include_str!("fixtures/web/approval_decided.json");
-const ADDITIONAL_HISTORICAL_EVENTS: &str = include_str!("fixtures/web/historical_events.json");
-const WEB_SCHEMA: &str = include_str!("../schema/web-channel-event.schema.json");
+const CHAT_DONE: &str = include_str!("../fixtures/web/chat_done.json");
+const APPROVAL: &str = include_str!("../fixtures/web/approval_request.json");
+const SUBAGENT: &str = include_str!("../fixtures/web/subagent_completed.json");
+const LEGACY_CANCEL: &str = include_str!("../fixtures/web/chat_error_cancelled.json");
+const CANCEL: &str = include_str!("../fixtures/web/chat_cancelled.json");
+const TEXT_DELTA: &str = include_str!("../fixtures/web/text_delta.json");
+const PROACTIVE: &str = include_str!("../fixtures/web/proactive_message.json");
+const CHANNEL_OUTBOUND: &str = include_str!("../fixtures/web/channel_outbound.json");
+const SUBAGENT_TOOL_RESULT: &str = include_str!("../fixtures/web/subagent_tool_result.json");
+const CHAT_ERROR_GUARDRAIL: &str = include_str!("../fixtures/web/chat_error_guardrail.json");
+const QUEUE_ITEM: &str = include_str!("../fixtures/web/queue_item_queued.json");
+const THREAD_GOAL: &str = include_str!("../fixtures/web/thread_goal_updated.json");
+const THREAD_TODOS: &str = include_str!("../fixtures/web/thread_todos_changed.json");
+const TOOL_RESULT: &str = include_str!("../fixtures/web/tool_result.json");
+const APPROVAL_DECIDED: &str = include_str!("../fixtures/web/approval_decided.json");
+const ADDITIONAL_HISTORICAL_EVENTS: &str = include_str!("../fixtures/web/historical_events.json");
+const WEB_SCHEMA: &str = include_str!("../../schema/web-channel-event.schema.json");
 
 fn assert_historical_fixture_round_trips(fixture: &str) {
     let historical: serde_json::Value = serde_json::from_str(fixture).unwrap();
