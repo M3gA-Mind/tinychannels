@@ -19,7 +19,8 @@ pub(super) struct HttpsServer {
     pub requests: Arc<Mutex<Vec<Request>>>,
     /// Loopback address the fixture listens on, for clients that need to
     /// resolve hosts outside the bundled certificate's names.
-    #[expect(dead_code, reason = "used by fixtures for optional providers")]
+    // Some all-targets checks compile this fixture without those features.
+    #[allow(dead_code)]
     pub address: std::net::SocketAddr,
     task: tokio::task::JoinHandle<()>,
 }
