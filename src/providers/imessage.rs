@@ -25,9 +25,9 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
-use tokio::sync::watch;
 #[cfg(test)]
 use tokio::sync::mpsc;
+use tokio::sync::watch;
 
 type ListenerCancellationSlot = Arc<StdMutex<Option<(u64, watch::Sender<bool>)>>>;
 

@@ -5,7 +5,9 @@ use super::IMessageChannel;
 use super::db::{self, AttachmentRow, InboundRow, ReadRow};
 use super::native::{IMESSAGE_MAX_FILE_BYTES, IMESSAGE_MAX_VOICE_BYTES};
 use crate::providers::native::SeenReservationResult;
-use crate::providers::native::inbound::{InboundFile, Ingest, Ingested, assemble, channel_event, media_of};
+use crate::providers::native::inbound::{
+    InboundFile, Ingest, Ingested, assemble, channel_event, media_of,
+};
 #[cfg(test)]
 use crate::providers::native::inbound::{publish, publish_event};
 #[cfg(test)]
@@ -16,9 +18,9 @@ use tinychannels_bus::{
     ChannelEventKind, ChannelInboundEnvelope, ChannelIngress, ChannelRef, ConversationKind,
     ConversationRef, SenderRef,
 };
-use tokio::sync::watch;
 #[cfg(test)]
 use tokio::sync::mpsc;
+use tokio::sync::watch;
 
 fn imessage_ref() -> ChannelRef {
     ChannelRef {

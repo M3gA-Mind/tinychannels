@@ -283,7 +283,6 @@ impl DiscordChannel {
             }
         }
     }
-
 }
 
 #[cfg(test)]

@@ -29,12 +29,10 @@ pub struct DiscordChannel {
     /// TinyVoice codec access used for voice duration and waveform.
     pub(super) voice_codec: Option<Arc<dyn crate::host::VoiceCodec>>,
     pub(super) voice_synthesis: bool,
-    /// Module ingress and event sink. `None` falls back to the legacy
-    /// `listen` sender with text-only messages.
+    /// Module ingress and event sink for provider-specific events.
     pub(super) events: Option<Arc<dyn crate::host::EventSink>>,
     /// Channel id -> thread parent, filled from gateway events and REST lookups.
     pub(super) channel_cache: Mutex<HashMap<String, super::inbound::ChannelInfo>>,
-    /// Last streaming-draft edit per channel, for edit rate limiting.
 }
 
 impl DiscordChannel {
