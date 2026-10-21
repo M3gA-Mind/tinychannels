@@ -1,7 +1,7 @@
 //! Capability facts for a configured Linq account.
 
 use super::LinqChannel;
-use super::native::{LINQ_MAX_FILE_BYTES, LINQ_MAX_VOICE_BYTES};
+use super::outbound::{LINQ_MAX_FILE_BYTES, LINQ_MAX_VOICE_BYTES};
 use crate::providers::native::capabilities::{media_capabilities, voice_capabilities};
 use tinychannels_bus::{
     ActionCapabilities, ChannelCapabilities, ContentCapabilities, ContentCapability,

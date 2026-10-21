@@ -1,7 +1,7 @@
 //! Capability facts for a configured iMessage account.
 
 use super::IMessageChannel;
-use super::native::{IMESSAGE_MAX_FILE_BYTES, IMESSAGE_MAX_VOICE_BYTES};
+use super::outbound::{IMESSAGE_MAX_FILE_BYTES, IMESSAGE_MAX_VOICE_BYTES};
 use crate::providers::native::capabilities::{media_capabilities, voice_capabilities};
 use tinychannels_bus::{
     ActionCapabilities, ChannelCapabilities, ContentCapabilities, ContentCapability,

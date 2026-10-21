@@ -14,12 +14,15 @@ mod listener;
 mod outbound;
 
 pub use config::IMessageChannel;
-pub(super) use config::{ListenerCursor, ListenerRegistration};
-pub(super) use db::{fetch_new_messages, get_max_rowid};
-pub(super) use outbound::{escape_applescript, is_valid_chat_guid, is_valid_imessage_target};
 
 #[cfg(test)]
+use db::{fetch_new_messages, get_max_rowid};
+#[cfg(test)]
+use outbound::{escape_applescript, is_valid_imessage_target};
+#[cfg(test)]
 use rusqlite::Connection;
+#[cfg(test)]
+use std::path::Path;
 #[cfg(test)]
 use std::time::Duration;
 #[cfg(test)]

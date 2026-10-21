@@ -3,7 +3,7 @@
 
 use super::IMessageChannel;
 use super::db::{self, AttachmentRow, InboundRow, ReadRow};
-use super::native::{IMESSAGE_MAX_FILE_BYTES, IMESSAGE_MAX_VOICE_BYTES};
+use super::outbound::{IMESSAGE_MAX_FILE_BYTES, IMESSAGE_MAX_VOICE_BYTES};
 use crate::providers::native::SeenReservationResult;
 use crate::providers::native::inbound::{
     InboundFile, Ingest, Ingested, assemble, channel_event, media_of,

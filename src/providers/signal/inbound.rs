@@ -2,8 +2,9 @@
 //! notes, reactions, remote deletes and receipts, all through the ordered
 //! ingress path, with the legacy channel as the fallback for text.
 
-use super::native::{SIGNAL_MAX_FILE_BYTES, SIGNAL_MAX_VOICE_BYTES};
-use super::{DataMessage, Envelope, SignalChannel};
+use super::SignalChannel;
+use super::listener::{DataMessage, Envelope};
+use super::outbound::{GROUP_TARGET_PREFIX, SIGNAL_MAX_FILE_BYTES, SIGNAL_MAX_VOICE_BYTES};
 use crate::channel::ChannelInboundSink;
 use crate::providers::native::SeenReservationResult;
 use crate::providers::native::inbound::{

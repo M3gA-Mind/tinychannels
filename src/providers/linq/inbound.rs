@@ -2,7 +2,7 @@
 //! messages (text, images, files, voice notes) on the ordered ingress path.
 
 use super::LinqChannel;
-use super::native::{LINQ_MAX_FILE_BYTES, LINQ_MAX_VOICE_BYTES};
+use super::outbound::{LINQ_MAX_FILE_BYTES, LINQ_MAX_VOICE_BYTES};
 use crate::WebhookRejected;
 use crate::providers::native::inbound::normalize_mime;
 use crate::providers::native::inbound::{

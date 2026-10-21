@@ -15,19 +15,14 @@ mod inbound;
 mod listener;
 mod outbound;
 
-#[cfg(test)]
-pub(super) use outbound::RecipientTarget;
-
-#[cfg(test)]
-use crate::traits::ChannelMessage;
 use config::ListenerCancellationSlot;
 pub use config::SignalChannel;
 #[cfg(test)]
 use listener::{DataMessage, Envelope, GroupInfo, SseEnvelope};
 #[cfg(test)]
-use reqwest::Client;
+use outbound::RecipientTarget;
 #[cfg(test)]
-use std::sync::Arc;
+use reqwest::Client;
 #[cfg(test)]
 use std::time::Duration;
 #[cfg(test)]

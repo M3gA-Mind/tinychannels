@@ -238,7 +238,7 @@ end tell"#
     }
 
     async fn deliver_text(&self, recipient: &str, text: &str) -> Result<String, ChannelSendError> {
-        let body = format!("\"{}\"", super::escape_applescript(text));
+        let body = format!("\"{}\"", escape_applescript(text));
         let script = Self::send_script(recipient, &body)?;
         let baseline = self.sent_baseline().await?;
         self.run_script(&script).await?;
@@ -269,7 +269,7 @@ end tell"#
             .map_err(|_| failed("iMessage could not stage the attachment", false))?;
         let body = format!(
             "(POSIX file \"{}\")",
-            super::escape_applescript(&path.to_string_lossy())
+            escape_applescript(&path.to_string_lossy())
         );
         let script = Self::send_script(recipient, &body)?;
         let baseline = self.sent_baseline().await?;

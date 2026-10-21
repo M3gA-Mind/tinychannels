@@ -11,13 +11,14 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::{Value, json};
 use std::sync::Arc;
+use std::time::Duration;
 use tinychannels_bus::ChannelCapabilities;
 use tinychannels_bus::channel::{
     ChannelReaction, ChannelSendError, ConversationRef, MessageReceiptPartKind, SendErrorKind,
 };
 use uuid::Uuid;
 
-const GROUP_TARGET_PREFIX: &str = "group:";
+pub(super) const GROUP_TARGET_PREFIX: &str = "group:";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum RecipientTarget {
@@ -240,7 +241,7 @@ impl NativeProvider for SignalChannel {
             generation,
         };
         let result = self.listen_typed(sink, cancellation).await;
-        result.map_err(|error| super::native::rpc_error(&error, "listener"))
+        result.map_err(|error| rpc_error(&error, "listener"))
     }
 
     async fn stop_listener(&self) -> Result<(), ChannelSendError> {

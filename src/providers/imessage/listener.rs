@@ -1,6 +1,7 @@
 //! Cancellation-safe typed polling for the configured Messages database.
 
-use super::{IMessageChannel, ListenerCursor, ListenerRegistration};
+use super::IMessageChannel;
+use super::config::{ListenerCursor, ListenerRegistration};
 use crate::channel::ChannelInboundSink;
 use rusqlite::Connection;
 use std::sync::atomic::Ordering;
@@ -182,8 +183,6 @@ use crate::traits::ChannelMessage;
 #[cfg(test)]
 use anyhow::Context as _;
 #[cfg(test)]
-use rusqlite::Connection;
-#[cfg(test)]
 use tokio::sync::mpsc;
 
 impl IMessageChannel {
@@ -191,7 +190,7 @@ impl IMessageChannel {
     /// The readiness sender is used by tests to synchronize first-message
     /// delivery with the same cursor boundary as the production listener.
     #[cfg(test)]
-    async fn listen_with_ready(
+    pub(super) async fn listen_with_ready(
         &self,
         tx: mpsc::Sender<ChannelMessage>,
         ready: Option<tokio::sync::oneshot::Sender<()>>,

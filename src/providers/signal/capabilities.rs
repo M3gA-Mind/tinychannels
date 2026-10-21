@@ -1,7 +1,7 @@
 //! Capability facts for a configured Signal account.
 
 use super::SignalChannel;
-use super::native::{SIGNAL_MAX_FILE_BYTES, SIGNAL_MAX_VOICE_BYTES};
+use super::outbound::{SIGNAL_MAX_FILE_BYTES, SIGNAL_MAX_VOICE_BYTES};
 use crate::providers::native::capabilities::{media_capabilities, voice_capabilities};
 use tinychannels_bus::{
     ActionCapabilities, AddressingCapabilities, ChannelCapabilities, ContentCapabilities,

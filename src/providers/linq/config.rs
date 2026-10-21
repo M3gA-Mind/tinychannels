@@ -2,7 +2,6 @@
 
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::native::HostPorts as NativeState;
-use reqwest::Client;
 use std::sync::Arc;
 
 /// Linq channel — uses the Linq Partner V3 API for iMessage, RCS, and SMS.
