@@ -161,9 +161,23 @@ struct DingTalkConformanceVoice;
 impl VoiceMediaStore for DingTalkConformanceVoice {
     async fn store_voice(
         &self,
-        _request: VoiceMediaRequest,
+        request: VoiceMediaRequest,
     ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
-        anyhow::bail!("conformance fixture only reads scoped voice")
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&request.audio_base64)?;
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("dingtalk-conformance-voice".into()),
+                content_type: Some(request.mime_type),
+                codec: request.codec,
+                file_name: request.file_name,
+                size_bytes: Some(bytes.len() as u64),
+                duration_ms: request.duration_ms,
+                kind: tinychannels_bus::MediaKind::Audio,
+                ..Default::default()
+            },
+            accessible_url: None,
+        })
     }
 
     async fn read_voice(
@@ -201,6 +215,8 @@ impl crate::channel::ChannelInboundSink for ConformanceInboundSink {
 struct DingTalkStream {
     listener: tokio::task::JoinHandle<Result<(), ChannelSendError>>,
     stream: tokio::task::JoinHandle<()>,
+    voice_tx: tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
+    ingress_rx: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<tinychannels_bus::ChannelIngress>>,
 }
 
 struct FixtureHttpClients(reqwest::Client);
@@ -414,26 +430,43 @@ impl LongTailFixture {
         let next_id = Arc::new(AtomicU64::new(9000));
         let response_ids_for_server = response_ids.clone();
         let counter = next_id.clone();
-        let server = HttpsServer::start(move |request| match request.target.as_str() {
-            "/v1.0/gateway/connections/open" => (
-                200,
-                json!({"endpoint":format!("ws://{stream_address}/"),"ticket":"conformance-ticket"})
-                    .to_string(),
-            ),
-            "/v1.0/oauth2/accessToken" => (200, r#"{"accessToken":"fixture-token"}"#.into()),
-            target if target.starts_with("/media/upload?") => {
-                (200, r#"{"media_id":"dingtalk-uploaded-media"}"#.into())
-            }
-            "/v1.0/robot/groupMessages/send" => {
-                let id = counter.fetch_add(1, Ordering::SeqCst).to_string();
-                response_ids_for_server.lock().push(id.clone());
-                (200, json!({"processQueryKey":id}).to_string())
-            }
-            _ => (404, r#"{"message":"unexpected request"}"#.into()),
-        })
+        let server = HttpsServer::start_with_bytes(
+            move |request| match (request.method.as_str(), request.target.as_str()) {
+                ("POST", "/v1.0/gateway/connections/open") => (
+                    200,
+                    json!({"endpoint":format!("ws://{stream_address}/"),"ticket":"conformance-ticket"})
+                        .to_string()
+                        .into_bytes(),
+                ),
+                ("POST", "/v1.0/oauth2/accessToken") => {
+                    (200, r#"{"accessToken":"fixture-token"}"#.into())
+                }
+                ("POST", "/v1.0/robot/messageFiles/download") => (
+                    200,
+                    json!({"downloadUrl":"https://api.dingtalk.com/media/voice"})
+                        .to_string()
+                        .into_bytes(),
+                ),
+                ("GET", "/media/voice") => (
+                    200,
+                    include_bytes!("../../tests/fixtures/dingtalk/amrnb_mode0.amr").to_vec(),
+                ),
+                ("POST", target) if target.starts_with("/media/upload?") => {
+                    (200, r#"{"media_id":"dingtalk-uploaded-media"}"#.into())
+                }
+                ("POST", "/v1.0/robot/groupMessages/send") => {
+                    let id = counter.fetch_add(1, Ordering::SeqCst).to_string();
+                    response_ids_for_server.lock().push(id.clone());
+                    (200, json!({"processQueryKey":id}).to_string().into_bytes())
+                }
+                _ => (404, r#"{"message":"unexpected request}"#.into()),
+            },
+            "audio/amr",
+        )
         .await;
 
         let (callback_ready_tx, callback_ready_rx) = tokio::sync::oneshot::channel();
+        let (voice_tx, mut voice_rx) = tokio::sync::mpsc::unbounded_channel();
         let stream = tokio::spawn(async move {
             let (socket, _) =
                 tokio::time::timeout(std::time::Duration::from_secs(8), stream_listener.accept())
@@ -484,7 +517,39 @@ impl LongTailFixture {
                 .unwrap()
                 .unwrap();
             let _ = callback_ready_tx.send(());
-            std::future::pending::<()>().await;
+            while let Some(acknowledged) = voice_rx.recv().await {
+                websocket
+                    .send(Message::Text(
+                        json!({
+                            "type":"CALLBACK",
+                            "headers":{"messageId":"voice-frame-1","topic":"/v1.0/im/bot/messages/get"},
+                            "data":json!({
+                                "msgId":"voice-message-1",
+                                "msgtype":"audio",
+                                "robotCode":"conformance-robot",
+                                "senderStaffId":"conformance-user",
+                                "senderId":"$:conformance-user",
+                                "conversationType":"2",
+                                "conversationId":"chan1",
+                                "content":{"downloadCode":"voice-download-1","recognition":"turn left"}
+                            }).to_string()
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+                let ack = tokio::time::timeout(std::time::Duration::from_secs(8), websocket.next())
+                    .await
+                    .expect("DingTalk voice callback should be acknowledged after typed ingress")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_str::<Value>(&ack.to_string()).unwrap()["code"],
+                    200
+                );
+                let _ = acknowledged.send(());
+            }
         });
 
         let host: Arc<dyn crate::host::ChannelHost> = crate::ChannelHostBuilder::new()
@@ -502,7 +567,7 @@ impl LongTailFixture {
         let clients = FixtureHttpClients(server.client.clone());
         let channel = build_long_tail_channel_with_host(&config, &host, &clients, "dingtalk")
             .expect("configured DingTalk adapter built through provider factory");
-        let (sink_tx, _sink_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (sink_tx, sink_rx) = tokio::sync::mpsc::unbounded_channel();
         let sink = Arc::new(ConformanceInboundSink(sink_tx));
         let listener_channel = channel.clone();
         let listener = tokio::spawn(async move {
@@ -517,7 +582,12 @@ impl LongTailFixture {
             channel,
             server: None,
             fixed_server: Some(server),
-            dingtalk_stream: Some(DingTalkStream { listener, stream }),
+            dingtalk_stream: Some(DingTalkStream {
+                listener,
+                stream,
+                voice_tx,
+                ingress_rx: tokio::sync::Mutex::new(sink_rx),
+            }),
             response_ids,
             post_scopes: Arc::default(),
             observed: Mutex::new(Vec::new()),
@@ -943,6 +1013,109 @@ impl AdapterFixture for LongTailFixture {
         self.observed.lock().clone()
     }
 
+    async fn receive_dingtalk_voice_in(
+        &self,
+    ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
+        let stream = self.dingtalk_stream.as_ref().ok_or_else(|| ChannelSendError {
+            kind: SendErrorKind::BadFormat,
+            message: "DingTalk voice ingress fixture is not configured".into(),
+            unsupported: true,
+            ..Default::default()
+        })?;
+        let (acknowledged_tx, acknowledged_rx) = tokio::sync::oneshot::channel();
+        stream
+            .voice_tx
+            .send(acknowledged_tx)
+            .map_err(|_| ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "DingTalk voice fixture stream stopped".into(),
+                retryable: true,
+                ..Default::default()
+            })?;
+        let ingress = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.ingress_rx.lock().await.recv(),
+        )
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| ChannelSendError {
+            kind: SendErrorKind::Transient,
+            message: "DingTalk voice callback was not delivered to the configured sink".into(),
+            retryable: true,
+            ..Default::default()
+        })?;
+        tokio::time::timeout(std::time::Duration::from_secs(5), acknowledged_rx)
+            .await
+            .map_err(|_| ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "DingTalk voice callback was not acknowledged".into(),
+                retryable: true,
+                ..Default::default()
+            })?
+            .map_err(|_| ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "DingTalk voice fixture acknowledgement was dropped".into(),
+                retryable: true,
+                ..Default::default()
+            })?;
+        let tinychannels_bus::ChannelIngress::Inbound(envelope) = ingress else {
+            return Err(ChannelSendError {
+                kind: SendErrorKind::BadFormat,
+                message: "DingTalk voice fixture received a non-message ingress".into(),
+                ..Default::default()
+            });
+        };
+        assert_eq!(envelope.channel.id, "dingtalk");
+        assert_eq!(envelope.channel.account_id.as_deref(), Some("fixture-app-key"));
+        assert_eq!(envelope.conversation.id, "chan1");
+        assert_eq!(envelope.message_id, "voice-message-1");
+        let note = envelope.parts.iter().find_map(|part| match part {
+            tinychannels_bus::ContentPart::VoiceNote { voice_note } => Some(voice_note),
+            _ => None,
+        }).expect("configured DingTalk voice should be stored as a typed voice note");
+        assert_eq!(note.media.opaque_id.as_deref(), Some("dingtalk-conformance-voice"));
+        assert_eq!(note.media.kind, tinychannels_bus::MediaKind::Audio);
+        assert_eq!(
+            note.transcript.as_ref().map(|transcript| transcript.text.as_str()),
+            Some("turn left")
+        );
+        let server = self.fixed_server.as_ref().expect("DingTalk HTTPS fixture");
+        let download = server
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|request| request.target == "/v1.0/robot/messageFiles/download")
+            .expect("the configured adapter must fetch the incoming voice bytes");
+        assert_eq!(download.body["downloadCode"], "voice-download-1");
+        self.observed.lock().push(WireObservation {
+            feature: Feature::VoiceIn,
+            operation: "voice_in".into(),
+            channel: envelope.channel.clone(),
+            conversation: envelope.conversation.clone(),
+            reply_to_id: envelope.reply_to_id.clone(),
+            thread_id: envelope.conversation.thread_id.clone(),
+            payload_kinds: vec!["audio".into(), "transcript".into()],
+            platform_message_ids: vec![envelope.message_id.clone()],
+            request: json!({
+                "type":"CALLBACK",
+                "headers":{"messageId":"voice-frame-1","topic":"/v1.0/im/bot/messages/get"},
+                "data":{
+                    "msgId":"voice-message-1",
+                    "msgtype":"audio",
+                    "robotCode":"conformance-robot",
+                    "senderStaffId":"conformance-user",
+                    "senderId":"$:conformance-user",
+                    "conversationType":"2",
+                    "conversationId":"chan1",
+                    "content":{"downloadCode":"voice-download-1","recognition":"turn left"}
+                }
+            }),
+        });
+        Ok(None)
+    }
+
     async fn exercise(
         &self,
         feature: Feature,
@@ -950,6 +1123,7 @@ impl AdapterFixture for LongTailFixture {
         let channel = self.channel.as_ref();
         let target = conversation();
         match feature {
+            Feature::VoiceIn if self.id == "dingtalk" => self.receive_dingtalk_voice_in().await,
             // A platform without thread addressing has nothing to send to.
             Feature::ThreadAddressing if !channel.declared_capabilities().addressing.thread_id => {
                 let mut intent = self.intent(
