@@ -68,6 +68,22 @@ pub trait ChannelAdapter: Send + Sync {
         intent: ChannelOutboundIntent,
     ) -> Result<crate::channel::ChannelSendOutcome, ChannelSendError>;
 
+    /// Mark one provider message as read when this account exposes native
+    /// read receipts. Adapters without that operation fail explicitly.
+    async fn mark_read(
+        &self,
+        _conversation: &tinychannels_bus::channel::ConversationRef,
+        _provider_message_id: &str,
+    ) -> Result<(), ChannelSendError> {
+        Err(ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
+            message: "provider does not support read receipts".into(),
+            unsupported: true,
+            retryable: false,
+            ..Default::default()
+        })
+    }
+
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError>;
 }
 

@@ -232,9 +232,7 @@ async fn dispatch_interaction(
                 ));
             }
             native
-                .read_receipts
-                .as_ref()
-                .ok_or_else(|| Error::failed("provider read receipt port is unavailable"))?
+                .adapter
                 .mark_read(&conversation, &provider_message_id)
                 .await
                 .map_err(|_| Error::failed("provider read receipt failed"))?;
@@ -1343,7 +1341,6 @@ pub(crate) struct NativePorts {
     edits: Arc<dyn tinychannels::channel::ChannelEdit>,
     deletes: Arc<dyn tinychannels::channel::ChannelDelete>,
     drafts: Arc<dyn tinychannels::channel::ChannelStreamingDraft>,
-    read_receipts: Option<Arc<dyn tinychannels::LongTailNative>>,
     listener_mode: LongTailListenerMode,
 }
 
@@ -1371,7 +1368,6 @@ impl NativePorts {
             edits: channel.clone(),
             deletes: channel.clone(),
             drafts: channel,
-            read_receipts: None,
             listener_mode: LongTailListenerMode::Legacy,
         }
     }
@@ -1383,7 +1379,6 @@ impl NativePorts {
         provider: &'static str,
         listener_mode: LongTailListenerMode,
     ) -> Self {
-        let read_receipts = (provider == "WhatsApp").then(|| channel.clone());
         Self {
             provider,
             adapter: channel.clone(),
@@ -1393,7 +1388,6 @@ impl NativePorts {
             edits: channel.clone(),
             deletes: channel.clone(),
             drafts: channel,
-            read_receipts,
             listener_mode,
         }
     }

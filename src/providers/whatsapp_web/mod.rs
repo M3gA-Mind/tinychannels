@@ -1226,6 +1226,16 @@ impl crate::channel::ChannelAdapter for WhatsAppWebChannel {
             .map_err(WaFailure::into_send_error)
     }
 
+    async fn mark_read(
+        &self,
+        conversation: &tinychannels_bus::ConversationRef,
+        provider_message_id: &str,
+    ) -> std::result::Result<(), crate::channel::ChannelSendError> {
+        Channel::mark_read(self, conversation, provider_message_id)
+            .await
+            .map_err(WaFailure::into_send_error)
+    }
+
     async fn status(
         &self,
     ) -> std::result::Result<
