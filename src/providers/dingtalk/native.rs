@@ -265,13 +265,23 @@ impl NativeProvider for DingTalkChannel {
                 .map_err(|_| unknown_after_send("DingTalk webhook reply outcome is uncertain"))?;
             if !response.status().is_success() {
                 let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                let message = format!("DingTalk webhook reply failed ({status}): {body}");
                 return Err(if status.is_server_error() {
-                    unknown_after_send(message)
+                    unknown_after_send("DingTalk webhook reply outcome is uncertain")
                 } else {
-                    known_unsent(message)
+                    known_unsent("DingTalk webhook reply was rejected")
                 });
+            }
+            let body: serde_json::Value = response.json().await.map_err(|_| {
+                unknown_after_send("DingTalk webhook reply response could not be verified")
+            })?;
+            match body.get("errcode").and_then(serde_json::Value::as_i64) {
+                Some(0) => {}
+                Some(_) => return Err(known_unsent("DingTalk webhook reply was rejected")),
+                None => {
+                    return Err(unknown_after_send(
+                        "DingTalk webhook reply response could not be verified",
+                    ));
+                }
             }
             // Session webhooks do not return provider message IDs.
             return Ok(Vec::new());
