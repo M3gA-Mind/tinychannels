@@ -50,6 +50,140 @@ pub enum ConformanceFeature {
     ManagedThreadList,
 }
 
+/// Operations routed through the module's native provider controller path.
+/// These are separate from [`ConformanceFeature::ManagedReaction`] and the
+/// managed thread features: bot-token controller calls must reach a provider
+/// API and must never be counted as host-managed callbacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NativeControllerFeature {
+    Reaction,
+    ThreadCreate,
+    ThreadUpdate,
+    ThreadList,
+    Edit,
+    Delete,
+}
+
+impl NativeControllerFeature {
+    /// Whether the configured provider declares the operation used by the
+    /// production native controller route.
+    pub fn declared(self, capabilities: &ChannelCapabilities) -> bool {
+        let action = |name: &str| {
+            capabilities
+                .actions
+                .supported
+                .iter()
+                .any(|value| value == name)
+        };
+        match self {
+            Self::Reaction => capabilities.reactions,
+            Self::ThreadCreate => action("thread-create"),
+            Self::ThreadUpdate => action("thread-update"),
+            Self::ThreadList => action("thread-list"),
+            Self::Edit => action("edit"),
+            Self::Delete => action("delete") || action("unsend"),
+        }
+    }
+}
+
+/// One controller operation observed from the configured provider's mock
+/// transport and the production controller's returned value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeControllerObservation {
+    pub feature: NativeControllerFeature,
+    pub provider: String,
+    pub operation: String,
+    pub request: serde_json::Value,
+    pub response: serde_json::Value,
+    /// IDs returned by the actual provider/controller response, not generated
+    /// from the request or fixture expectation.
+    pub returned_ids: Vec<String>,
+}
+
+/// Fixture for native bot-token controller operations. Implementations must
+/// invoke the production controller route and derive `capabilities` from the
+/// configured provider instance. `observations` must come from real mock
+/// transport traffic and its actual response.
+#[async_trait]
+pub trait NativeControllerFixture: Send + Sync {
+    fn capabilities(&self) -> ChannelCapabilities;
+    fn provider(&self) -> &str;
+    fn managed_callback_count(&self) -> usize;
+    fn clear_observations(&self);
+    fn observations(&self) -> Vec<NativeControllerObservation>;
+    async fn exercise(
+        &self,
+        feature: NativeControllerFeature,
+    ) -> Result<(), NativeControllerError>;
+}
+
+/// Result classification from a native controller fixture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeControllerError {
+    pub unsupported: bool,
+    pub message: String,
+}
+
+/// Verify one native controller operation against its configured provider
+/// capability, actual mock-wire observation, and managed-callback counter.
+pub async fn check_native_controller_feature<F: NativeControllerFixture + ?Sized>(
+    fixture: &F,
+    feature: NativeControllerFeature,
+) -> Result<(), String> {
+    fixture.clear_observations();
+    let initial_callbacks = fixture.managed_callback_count();
+    let declared = feature.declared(&fixture.capabilities());
+    let result = fixture.exercise(feature).await;
+    let observations = fixture.observations();
+    let callbacks = fixture.managed_callback_count();
+
+    if callbacks != initial_callbacks {
+        return Err(format!(
+            "native {feature:?} invoked the managed host callback"
+        ));
+    }
+    if !declared {
+        match result {
+            Err(error) if error.unsupported => {}
+            Err(error) => {
+                return Err(format!(
+                    "undeclared {feature:?} failed without an unsupported result: {}",
+                    error.message
+                ));
+            }
+            Ok(()) => return Err(format!("undeclared {feature:?} unexpectedly succeeded")),
+        }
+        if !observations.is_empty() {
+            return Err(format!("undeclared {feature:?} reached provider transport"));
+        }
+        return Ok(());
+    }
+
+    result.map_err(|error| format!("declared {feature:?} failed: {}", error.message))?;
+    let observation = observations
+        .iter()
+        .find(|observation| {
+            observation.feature == feature && observation.provider == fixture.provider()
+        })
+        .ok_or_else(|| format!("declared {feature:?} produced no provider wire observation"))?;
+    if observation.operation.trim().is_empty()
+        || observation.request.is_null()
+        || observation.response.is_null()
+    {
+        return Err(format!(
+            "declared {feature:?} omitted its actual request or response"
+        ));
+    }
+    match feature {
+        NativeControllerFeature::ThreadCreate | NativeControllerFeature::ThreadList
+            if observation.returned_ids.is_empty() =>
+        {
+            Err(format!("declared {feature:?} returned no provider identifiers"))
+        }
+        _ => Ok(()),
+    }
+}
+
 impl ConformanceFeature {
     pub const ALL: [Self; 24] = [
         Self::Text,
