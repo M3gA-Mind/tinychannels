@@ -2,7 +2,6 @@ use super::*;
 use crate::channel::SendErrorKind;
 use crate::providers::discord::http::DiscordError;
 use crate::providers::discord::support::*;
-use crate::traits::Channel;
 use parking_lot::Mutex;
 use serde_json::json;
 use std::sync::Arc;
@@ -75,7 +74,10 @@ async fn a_fully_wired_account_declares_media_voice_and_waveforms() {
 async fn the_legacy_channel_reports_the_same_facts() {
     let server = MockServer::start().await;
     let (channel, ..) = full_channel(&server);
-    assert_eq!(Channel::capabilities(&channel), channel.v2_capabilities());
+    assert_eq!(
+        ChannelAdapter::declared_capabilities(&channel),
+        channel.v2_capabilities()
+    );
     assert!(channel.supports_reactions() && channel.supports_edit());
     assert!(channel.supports_draft_updates() && channel.supports_progressive_edits());
     assert!(channel.supports_reply_to_id() && channel.supports_thread_id());
@@ -616,14 +618,16 @@ async fn the_legacy_trait_methods_delegate_and_keep_the_typed_error() {
     let channel = channel_for(&server);
     let message = ChannelOutboundMessage::from_intent(&intent("legacy"));
 
-    Channel::send_typed(&channel, &message).await.unwrap();
+    ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
     let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
     let receipt = outcome.receipt;
     let thumbs = tinychannels_bus::ChannelReaction {
         value: "👍".into(),
         custom_emoji_id: None,
     };
-    Channel::send_reaction(&channel, &conversation(), "800", &thumbs, false)
+    ChannelReaction::send_reaction(&channel, &account(), &conversation(), "800", &thumbs, false)
         .await
         .unwrap();
     channel
@@ -663,7 +667,7 @@ async fn the_legacy_trait_methods_delegate_and_keep_the_typed_error() {
     );
     let empty = tinychannels_bus::ChannelReaction::default();
     assert!(
-        Channel::send_reaction(&channel, &conversation(), "x", &empty, false)
+        ChannelReaction::send_reaction(&channel, &account(), &conversation(), "x", &empty, false)
             .await
             .is_err()
     );
@@ -699,7 +703,7 @@ async fn the_factory_wires_every_host_service_into_the_discord_account() {
     assert!(caps.voice_out.normalized_waveform);
     assert!(!caps.voice_out.synthesis, "no synthesizer was supplied");
     assert_eq!(
-        Channel::proactive_target(built.as_ref()).as_deref(),
+        ChannelAdapter::proactive_target(built.as_ref()).as_deref(),
         Some(CHANNEL)
     );
     assert!(
