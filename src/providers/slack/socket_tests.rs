@@ -284,25 +284,51 @@ async fn typed_polling_retries_transport_errors_before_advancing_the_cursor() {
         }
     }
 
-    let server = mock_api().await;
-    mount_auth(&server, "UBOT").await;
-    let polls = Arc::new(AtomicUsize::new(0));
-    let counter = polls.clone();
-    Mock::given(method("GET"))
-        .and(path("/api/conversations.history"))
-        .respond_with(move |_| {
-            if counter.fetch_add(1, Ordering::SeqCst) == 0 {
-                ResponseTemplate::new(503).set_body_json(json!({"ok": false}))
-            } else {
-                ResponseTemplate::new(200).set_body_json(json!({"messages": [
-                    {"ts": "12.1", "user": "alice", "text": "recovered poll"}
-                ]}))
-            }
-        })
-        .mount(&server)
-        .await;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let channel = channel_for(&server, &["alice"]);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let api_url = format!("http://{}/api", listener.local_addr().unwrap());
+    let server_task = tokio::spawn(async move {
+        for attempt in 0..2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut chunk).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            assert!(request.starts_with(b"GET /api/conversations.history "));
+            if attempt == 0 {
+                // Close without an HTTP response to exercise `send().await`
+                // failure, not merely a non-success HTTP status.
+                drop(stream);
+                continue;
+            }
+            let body = json!({"messages": [
+                {"ts": "12.1", "user": "alice", "text": "recovered poll"}
+            ]})
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            return;
+        }
+        panic!("typed poller did not retry after a failed request");
+    });
+
+    let channel = SlackChannel::new("bot-token".into(), Some("C1".into()), vec!["alice".into()])
+        .with_api_base(api_url)
+        .with_timing(Duration::from_millis(5), Duration::from_millis(5));
+    *channel.bot_user_id.lock() = Some("UBOT".into());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let sink = Sink(tx);
     let poller = tokio::spawn(async move { channel.listen_polling_typed(&sink, "C1").await });
@@ -314,9 +340,9 @@ async fn typed_polling_retries_transport_errors_before_advancing_the_cursor() {
         panic!("expected a typed inbound envelope, got {ingress:?}");
     };
     assert_eq!(ingress.text, "recovered poll");
-    assert!(polls.load(Ordering::SeqCst) >= 2);
     poller.abort();
     let _ = poller.await;
+    server_task.await.unwrap();
 }
 
 #[tokio::test]
