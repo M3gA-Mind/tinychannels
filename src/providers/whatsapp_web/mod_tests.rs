@@ -685,7 +685,7 @@ async fn unparseable_recipients_are_rejected() {
         .clone();
     assert_eq!(
         empty.kind,
-        crate::channel::SendErrorKind::Forbidden,
+        crate::channel::SendErrorKind::BadFormat,
         "invalid recipient must be rejected before provider I/O"
     );
     assert!(!empty.sent_before_error);
