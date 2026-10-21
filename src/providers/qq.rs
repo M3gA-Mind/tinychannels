@@ -263,6 +263,7 @@ impl QQChannel {
     }
 
     /// Check and insert message ID for deduplication.
+    #[cfg(test)]
     async fn is_duplicate(&self, msg_id: &str) -> bool {
         if msg_id.is_empty() {
             return false;

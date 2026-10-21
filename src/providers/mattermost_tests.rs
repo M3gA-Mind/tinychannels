@@ -1,5 +1,6 @@
 use super::*;
 use crate::channel::ChannelTyping;
+use crate::traits::SendMessage;
 use serde_json::json;
 
 // Helper: create a channel with mention_only=false (legacy behavior).

@@ -412,6 +412,7 @@ impl EmailChannel {
                     _uid: uid,
                     msg_id,
                     sender,
+                    #[cfg(test)]
                     content,
                     timestamp: ts,
                     raw: body.to_vec(),
@@ -785,6 +786,7 @@ struct ParsedEmail {
     _uid: u32,
     msg_id: String,
     sender: String,
+    #[cfg(test)]
     content: String,
     timestamp: u64,
     /// The RFC 822 bytes, for the typed inbound path.

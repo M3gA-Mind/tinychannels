@@ -292,6 +292,7 @@ impl QQChannel {
     /// Build a typed QQ inbound envelope from a gateway message. Attachment
     /// downloads are restricted to HTTPS Tencent hosts, do not follow
     /// redirects, and are bounded before they reach host storage.
+    #[cfg(test)]
     pub(crate) async fn inbound_envelope(
         &self,
         event_type: &str,

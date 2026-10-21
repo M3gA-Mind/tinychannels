@@ -45,6 +45,7 @@ impl EmailChannel {
 
     /// Hand one fetched, allowed, first-seen email to the host. False when the
     /// legacy receiver is gone and the listener should stop.
+    #[cfg(test)]
     pub(super) async fn dispatch_email(
         &self,
         email: ParsedEmail,
@@ -69,6 +70,7 @@ impl EmailChannel {
     }
 
     /// Publish `email` through the compatibility event sink.
+    #[cfg(test)]
     async fn publish_typed(&self, email: &ParsedEmail) -> bool {
         let Some(envelope) = self.typed_envelope(email).await else {
             return false;
