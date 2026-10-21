@@ -885,6 +885,59 @@ async fn send_fails_before_listen_has_connected() {
 }
 
 #[tokio::test]
+async fn typed_send_uses_the_scoped_conversation_on_an_active_connection() {
+    let (listener, port) = bind().await;
+    let acceptor = acceptor(false);
+    let channel = Arc::new(IrcChannel::new(config(port)));
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
+    let mut start = tokio::spawn({
+        let channel = channel.clone();
+        async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
+    });
+    let mut peer = tokio::select! {
+        result = &mut start => panic!("IRC start returned before connecting: {result:?}"),
+        peer = Peer::accept(&listener, &acceptor) => peer,
+    };
+    peer.expect("NICK bot").await;
+    peer.expect("USER botuser 0 * :OpenHuman").await;
+    peer.say(":srv 001 bot :Welcome").await;
+
+    let outcome = crate::channel::ChannelAdapter::send(
+        channel.as_ref(),
+        tinychannels_bus::ChannelOutboundIntent {
+            idempotency_key: "irc-connected-send".into(),
+            channel_id: "irc".into(),
+            conversation_id: "#fallback".into(),
+            conversation_ref: Some(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Channel,
+                id: "#scoped".into(),
+                ..Default::default()
+            }),
+            payload: tinychannels_bus::OutboundPayload::Text {
+                text: "hello from the typed adapter".into(),
+            },
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("the active connection should accept typed text");
+    assert!(outcome.receipt.parts.is_empty());
+    peer.expect("PRIVMSG #scoped :hello from the typed adapter")
+        .await;
+
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(GUARD, start)
+        .await
+        .expect("stop should join the typed listener")
+        .unwrap()
+        .unwrap();
+    peer.close().await;
+}
+
+#[tokio::test]
 async fn health_check_completes_a_tls12_handshake_and_quits() {
     let (listener, port) = bind().await;
     let acceptor = acceptor(true);
