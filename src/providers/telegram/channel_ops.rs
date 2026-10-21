@@ -3099,13 +3099,13 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
             _ = stop.wait_for(|stopped| *stopped) => Ok(()),
             result = self.listen_loop(None, Some(sink), poll_cancellation) => result,
         }
-            .map_err(|error| crate::channel::ChannelSendError {
-                kind: tinychannels_bus::channel::SendErrorKind::Transient,
-                message: error.to_string(),
-                retryable: true,
-                sent_before_error: false,
-                ..Default::default()
-            })
+        .map_err(|error| crate::channel::ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::Transient,
+            message: error.to_string(),
+            retryable: true,
+            sent_before_error: false,
+            ..Default::default()
+        })
     }
 
     async fn stop(&self) -> Result<(), crate::channel::ChannelSendError> {
