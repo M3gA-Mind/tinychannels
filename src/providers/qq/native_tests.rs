@@ -267,6 +267,29 @@ async fn qq_inbound_attachment_rejects_non_tencent_urls_before_network_io() {
 }
 
 #[tokio::test]
+async fn qq_inbound_attachment_ignores_non_success_download_responses() {
+    let server = HttpsServer::start(|request| {
+        assert_eq!(request.target, "/attachments/not-found");
+        (404, "{}".into())
+    })
+    .await;
+    let channel = super::super::QQChannel::with_http_client(
+        "app-id".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        server.client.clone(),
+    )
+    .with_attachment_http_client(server.client.clone());
+
+    let downloaded = channel
+        .download_attachment("https://api.sgroup.qq.com/attachments/not-found", 1024)
+        .await;
+
+    assert!(downloaded.is_none());
+    assert_eq!(server.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn qq_inbound_attachment_checks_sender_allowlist_before_network_io() {
     let server = HttpsServer::start(|request| {
         panic!("unexpected QQ attachment request: {}", request.target)
