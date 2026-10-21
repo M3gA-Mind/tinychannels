@@ -237,7 +237,13 @@ async fn cancelled_typed_delivery_is_not_committed_and_provider_redelivery_succe
             .await
     });
     let pending = deliveries.recv().await.expect("provider callback queued");
-    let (cancel, mut cancellation) = tokio::sync::watch::channel(false);
+    let channel = WhatsAppWebChannel::new(
+        "test-session.db".into(),
+        None,
+        None,
+        vec!["*".into()],
+    );
+    let mut cancellation = channel.listener_cancel.subscribe();
     let sink = Arc::new(BlockingSink::default());
     let entered = sink.entered.clone();
     let shutdown = tokio::sync::Notify::new();
@@ -246,9 +252,11 @@ async fn cancelled_typed_delivery_is_not_committed_and_provider_redelivery_succe
         super::super::deliver_typed_ingress(sink.as_ref(), &ingress, &shutdown, &mut cancellation)
             .await
     });
-    entered.notified().await;
+    tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified())
+        .await
+        .expect("typed sink delivery must enter its blocked push");
     // No success acknowledgement can escape from a blocked host sink.
-    cancel.send_replace(true);
+    channel.stop().await.unwrap();
     assert!(matches!(
         delivery.await.unwrap(),
         Err(super::super::TypedDeliveryFailure::Cancelled)
