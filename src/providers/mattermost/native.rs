@@ -50,7 +50,10 @@ impl NativeProvider for MattermostChannel {
     async fn health_state(&self) -> &'static str {
         let healthy = self
             .http_client()
-            .get(format!("{}/api/v4/users/me", self.base_url))
+            .get(format!(
+                "{}/api/v4/users/me",
+                self.base_url.trim_end_matches('/')
+            ))
             .bearer_auth(&self.bot_token)
             .send()
             .await
