@@ -567,6 +567,46 @@ async fn disconnected_sends_and_typing_return_errors_without_leaving_heartbeat_t
 }
 
 #[tokio::test]
+async fn finalizing_canonical_legacy_text_reaches_the_yuanbao_sender() {
+    let ch = YuanbaoChannel::new(good_cfg()).unwrap();
+    let message = SendMessage::new("hello", "alias").in_thread(Some("thread-7".into()));
+    let intent = crate::channel::outbound_intent_from_send_message("yuanbao", &message);
+
+    let error = ChannelStreamingDraft::finalize_draft(&ch, "draft", intent)
+        .await
+        .expect_err("the disconnected provider has no sender");
+
+    assert!(!error.unsupported, "canonical text reaches the sender");
+    assert!(error.retryable, "the disconnected send remains retryable");
+}
+
+#[tokio::test]
+async fn finalizing_media_parts_remains_unsupported_for_yuanbao_drafts() {
+    let ch = YuanbaoChannel::new(good_cfg()).unwrap();
+    let intent = ChannelOutboundIntent {
+        channel_id: "yuanbao".into(),
+        conversation_id: "user-42".into(),
+        payload: OutboundPayload::Parts {
+            parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Image {
+                    url: "https://example.invalid/image.png".into(),
+                    mime_type: Some("image/png".into()),
+                    filename: None,
+                    caption: None,
+                },
+            }],
+        },
+        ..Default::default()
+    };
+
+    let error = ChannelStreamingDraft::finalize_draft(&ch, "draft", intent)
+        .await
+        .expect_err("Yuanbao has no verified draft media transport");
+
+    assert!(error.unsupported);
+}
+
+#[tokio::test]
 async fn heartbeat_task_exits_when_disconnected_send_fails() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
     ch.start_heartbeat_task("alice").await;
