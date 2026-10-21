@@ -1,6 +1,6 @@
 use super::*;
-use std::sync::{Arc, Mutex};
-use tinychannels::{ChannelMessage, SendMessage};
+use std::sync::Mutex;
+use tinychannels::SendMessage;
 
 struct NativeDescribeAdapter;
 
