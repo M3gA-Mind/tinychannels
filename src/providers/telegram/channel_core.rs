@@ -227,6 +227,11 @@ impl TelegramChannel {
         base_command == TELEGRAM_START_COMMAND
     }
 
+    pub(crate) fn has_seen_update_id(&self, update_id: i64) -> bool {
+        let window = self.recent_updates.lock();
+        window.recent_lookup.contains(&update_id) || update_id < window.max_seen_update_id
+    }
+
     pub(crate) fn track_update_id(&self, update_id: i64) -> bool {
         let mut window = self.recent_updates.lock();
         if window.recent_lookup.contains(&update_id) {

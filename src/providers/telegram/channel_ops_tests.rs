@@ -5370,6 +5370,10 @@ async fn adapter_start_polls_and_delivers_original_typed_telegram_ingress() {
     crate::channel::ChannelAdapter::stop(channel.as_ref())
         .await
         .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), &mut start)
+        .await
+        .expect("typed Telegram listener observes stop")
+        .unwrap();
 }
 
 #[tokio::test]

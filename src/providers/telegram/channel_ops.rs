@@ -1917,7 +1917,7 @@ Ensure only one `openhuman` process is using this bot token."
                         .get("update_id")
                         .and_then(serde_json::Value::as_i64)
                         .unwrap_or_default();
-                    if update_id > 0 && !self.track_update_id(update_id) {
+                    if update_id > 0 && self.has_seen_update_id(update_id) {
                         offset = offset.max(update_id.saturating_add(1));
                         continue;
                     }
