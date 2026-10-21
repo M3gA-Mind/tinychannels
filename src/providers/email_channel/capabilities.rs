@@ -61,3 +61,57 @@ impl EmailChannel {
 #[cfg(test)]
 #[path = "capabilities_tests.rs"]
 mod tests;
+
+
+use super::*;
+
+impl EmailChannel {
+    #[cfg(feature = "email")]
+    pub(crate) async fn health_probe(&self) -> bool {
+        self.health_check_with(self.connect_imap(), HEALTH_CHECK_TIMEOUT)
+            .await
+    }
+
+    /// Translate the bounded IMAP probe into the status vocabulary used by
+    /// native adapters, keeping Email's real health semantics on the typed
+    /// path as well as the legacy compatibility path.
+    async fn typed_health_state<S: ImapStream>(
+        &self,
+        connect: impl std::future::Future<Output = Result<Session<S>>>,
+        limit: Duration,
+    ) -> &'static str {
+        if self.health_check_with(connect, limit).await {
+            "healthy"
+        } else {
+            "unhealthy"
+        }
+    }
+
+    /// Bounded IMAP login probe over any session source.
+    async fn health_check_with<S: ImapStream>(
+        &self,
+        connect: impl std::future::Future<Output = Result<Session<S>>>,
+        limit: Duration,
+    ) -> bool {
+        // One deadline covers connection, authentication, and best-effort
+        // logout. A server that accepts credentials but stalls during logout
+        // must not make typed status hang indefinitely.
+        let deadline = Instant::now() + limit;
+        match timeout_at(deadline, connect).await {
+            Ok(Ok(mut session)) => {
+                // A successful login is healthy even if cleanup cannot finish
+                // before the deadline; logout is only resource cleanup.
+                let _ = timeout_at(deadline, session.logout()).await;
+                true
+            }
+            Ok(Err(e)) => {
+                debug!("Health check failed: {}", e);
+                false
+            }
+            Err(_) => {
+                debug!("Health check timed out");
+                false
+            }
+        }
+    }
+}
