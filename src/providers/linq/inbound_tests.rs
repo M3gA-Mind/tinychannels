@@ -279,4 +279,3 @@ fn linq_sender_allowed_empty() {
     let ch = LinqChannel::new("tok".into(), "+15551234567".into(), vec![]);
     assert!(!ch.is_sender_allowed("+1234567890"));
 }
-
