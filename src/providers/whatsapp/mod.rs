@@ -286,6 +286,104 @@ impl WhatsAppChannel {
     }
 }
 
+impl WhatsAppChannel {
+    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        capabilities(&CapabilitySpec {
+            media: self.media_repository.is_some(),
+            voice_store: self.voice_media_store.is_some(),
+            voice_synthesis: self.voice_synthesis && self.voice_media_store.is_some(),
+            native_waveform: false,
+            edit_delete: false,
+            limits: Self::media_limits(),
+            text_limit: outbound::TEXT_LIMIT as u64,
+        })
+    }
+
+    async fn mark_read_provider(
+        &self,
+        provider_message_id: &str,
+    ) -> anyhow::Result<()> {
+        if provider_message_id.trim().is_empty() {
+            return Err(anyhow::Error::new(WaFailure::rejected(
+                "WhatsApp read receipt needs a message id",
+            )));
+        }
+        self.post_messages(&outbound::read_body(provider_message_id, false))
+            .await
+            .map(|_| ())
+            .map_err(anyhow::Error::new)
+    }
+
+    async fn start_typing_provider(&self, recipient: &str) -> anyhow::Result<()> {
+        let digits = outbound::recipient_digits(recipient)?;
+        // The Cloud API shows "typing" only against an inbound message.
+        let anchor = self.anchors.lock().get(&format!("+{digits}"));
+        let Some(anchor) = anchor else {
+            return Err(anyhow::Error::new(WaFailure::rejected(
+                "WhatsApp typing needs a recent inbound message from this contact",
+            )));
+        };
+        self.post_messages(&outbound::read_body(&anchor, true))
+            .await
+            .map(|_| ())
+            .map_err(anyhow::Error::new)
+    }
+
+    async fn stop_typing_provider(&self) -> anyhow::Result<()> {
+        // WhatsApp clears the indicator when a reply arrives or after 25 seconds.
+        Ok(())
+    }
+
+    async fn send_reaction_provider(
+        &self,
+        conversation: &tinychannels_bus::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::ChannelReaction,
+        remove: bool,
+    ) -> anyhow::Result<()> {
+        if reaction.custom_emoji_id.is_some() {
+            return Err(anyhow::Error::new(WaFailure::unsupported(
+                "WhatsApp reactions are plain emoji",
+            )));
+        }
+        let to = outbound::recipient_digits(&conversation.id)?;
+        let emoji = if remove { "" } else { reaction.value.as_str() };
+        if !remove && emoji.trim().is_empty() {
+            return Err(anyhow::Error::new(WaFailure::rejected(
+                "WhatsApp reaction needs an emoji",
+            )));
+        }
+        self.post_messages(&outbound::reaction_body(&to, provider_message_id, emoji))
+            .await
+            .map(|_| ())
+            .map_err(anyhow::Error::new)
+    }
+
+    async fn deliver_webhook_provider(
+        &self,
+        signature: Option<&str>,
+        body: &[u8],
+    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
+        self.ingest_webhook(signature, body)
+            .await
+            .map_err(|failure| match failure {
+                WaFailure::Rejected(message) | WaFailure::Unsupported(message) => {
+                    anyhow::Error::new(tinychannels_runtime::WebhookRejected(message))
+                }
+                uncertain => anyhow::Error::new(uncertain),
+            })
+    }
+
+    fn verify_webhook_provider(
+        &self,
+        mode: &str,
+        verify_token: &str,
+        challenge: &str,
+    ) -> Option<String> {
+        self.verify_challenge(mode, verify_token, challenge)
+    }
+}
+
 /// The failure class of an error produced by the Cloud adapter.
 fn failure_of(error: &anyhow::Error) -> WaFailure {
     error
@@ -305,15 +403,7 @@ impl Channel for WhatsAppChannel {
     }
 
     fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        capabilities(&CapabilitySpec {
-            media: self.media_repository.is_some(),
-            voice_store: self.voice_media_store.is_some(),
-            voice_synthesis: self.voice_synthesis && self.voice_media_store.is_some(),
-            native_waveform: false,
-            edit_delete: false,
-            limits: Self::media_limits(),
-            text_limit: outbound::TEXT_LIMIT as u64,
-        })
+        self.declared_capabilities()
     }
 
     fn supports_remote_control(&self) -> bool {
@@ -392,23 +482,11 @@ impl Channel for WhatsAppChannel {
     }
 
     async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        let digits = outbound::recipient_digits(recipient)?;
-        // The Cloud API shows "typing" only against an inbound message.
-        let anchor = self.anchors.lock().get(&format!("+{digits}"));
-        let Some(anchor) = anchor else {
-            return Err(anyhow::Error::new(WaFailure::rejected(
-                "WhatsApp typing needs a recent inbound message from this contact",
-            )));
-        };
-        self.post_messages(&outbound::read_body(&anchor, true))
-            .await
-            .map(|_| ())
-            .map_err(anyhow::Error::new)
+        self.start_typing_provider(recipient).await
     }
 
     async fn stop_typing(&self, _recipient: &str) -> anyhow::Result<()> {
-        // WhatsApp clears the indicator when a reply arrives or after 25 seconds.
-        Ok(())
+        self.stop_typing_provider().await
     }
 
     async fn send_reaction(
@@ -418,22 +496,8 @@ impl Channel for WhatsAppChannel {
         reaction: &tinychannels_bus::ChannelReaction,
         remove: bool,
     ) -> anyhow::Result<()> {
-        if reaction.custom_emoji_id.is_some() {
-            return Err(anyhow::Error::new(WaFailure::unsupported(
-                "WhatsApp reactions are plain emoji",
-            )));
-        }
-        let to = outbound::recipient_digits(&conversation.id)?;
-        let emoji = if remove { "" } else { reaction.value.as_str() };
-        if !remove && emoji.trim().is_empty() {
-            return Err(anyhow::Error::new(WaFailure::rejected(
-                "WhatsApp reaction needs an emoji",
-            )));
-        }
-        self.post_messages(&outbound::reaction_body(&to, provider_message_id, emoji))
+        self.send_reaction_provider(conversation, provider_message_id, reaction, remove)
             .await
-            .map(|_| ())
-            .map_err(anyhow::Error::new)
     }
 
     async fn mark_read(
@@ -441,15 +505,7 @@ impl Channel for WhatsAppChannel {
         _conversation: &tinychannels_bus::ConversationRef,
         provider_message_id: &str,
     ) -> anyhow::Result<()> {
-        if provider_message_id.trim().is_empty() {
-            return Err(anyhow::Error::new(WaFailure::rejected(
-                "WhatsApp read receipt needs a message id",
-            )));
-        }
-        self.post_messages(&outbound::read_body(provider_message_id, false))
-            .await
-            .map(|_| ())
-            .map_err(anyhow::Error::new)
+        self.mark_read_provider(provider_message_id).await
     }
 
     async fn deliver_webhook(
@@ -457,19 +513,11 @@ impl Channel for WhatsAppChannel {
         signature: Option<&str>,
         body: &[u8],
     ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
-        self.ingest_webhook(signature, body)
-            .await
-            .map_err(|failure| match failure {
-                // A refused delivery is a client error, never a retryable one.
-                WaFailure::Rejected(message) | WaFailure::Unsupported(message) => {
-                    anyhow::Error::new(tinychannels_runtime::WebhookRejected(message))
-                }
-                uncertain => anyhow::Error::new(uncertain),
-            })
+        self.deliver_webhook_provider(signature, body).await
     }
 
     fn verify_webhook(&self, mode: &str, verify_token: &str, challenge: &str) -> Option<String> {
-        self.verify_challenge(mode, verify_token, challenge)
+        self.verify_webhook_provider(mode, verify_token, challenge)
     }
 }
 
@@ -488,7 +536,7 @@ impl crate::channel::ChannelAdapter for WhatsAppChannel {
     }
 
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        Channel::capabilities(self)
+        self.declared_capabilities()
     }
 
     fn supports_webhook_delivery(&self) -> bool {
@@ -500,7 +548,7 @@ impl crate::channel::ChannelAdapter for WhatsAppChannel {
         signature: Option<&str>,
         body: &[u8],
     ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
-        Channel::deliver_webhook(self, signature, body).await
+        self.deliver_webhook_provider(signature, body).await
     }
 
     fn supports_webhook_verification(&self) -> bool {
@@ -508,7 +556,7 @@ impl crate::channel::ChannelAdapter for WhatsAppChannel {
     }
 
     fn verify_webhook(&self, mode: &str, verify_token: &str, challenge: &str) -> Option<String> {
-        Channel::verify_webhook(self, mode, verify_token, challenge)
+        self.verify_webhook_provider(mode, verify_token, challenge)
     }
 
     async fn start(
@@ -539,7 +587,8 @@ impl crate::channel::ChannelAdapter for WhatsAppChannel {
         conversation: &tinychannels_bus::ConversationRef,
         provider_message_id: &str,
     ) -> Result<(), crate::channel::ChannelSendError> {
-        Channel::mark_read(self, conversation, provider_message_id)
+        let _ = conversation;
+        self.mark_read_provider(provider_message_id)
             .await
             .map_err(|error| failure_of(&error).into_send_error())
     }
@@ -585,7 +634,7 @@ impl crate::channel::ChannelTyping for WhatsAppChannel {
         &self,
         conversation_id: &str,
     ) -> Result<(), crate::channel::ChannelSendError> {
-        Channel::start_typing(self, conversation_id)
+        self.start_typing_provider(conversation_id)
             .await
             .map_err(|error| failure_of(&error).into_send_error())
     }
@@ -594,7 +643,7 @@ impl crate::channel::ChannelTyping for WhatsAppChannel {
         &self,
         conversation_id: &str,
     ) -> Result<(), crate::channel::ChannelSendError> {
-        Channel::stop_typing(self, conversation_id)
+        self.stop_typing_provider()
             .await
             .map_err(|error| failure_of(&error).into_send_error())
     }
@@ -615,7 +664,7 @@ impl crate::channel::ChannelReaction for WhatsAppChannel {
                 WaFailure::rejected("reaction channel does not match WhatsApp").into_send_error(),
             );
         }
-        Channel::send_reaction(self, conversation, provider_message_id, reaction, remove)
+        self.send_reaction_provider(conversation, provider_message_id, reaction, remove)
             .await
             .map_err(|error| failure_of(&error).into_send_error())
     }
