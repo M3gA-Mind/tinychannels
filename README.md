@@ -9,16 +9,24 @@
  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3" /></a>
 </p>
 
-**TinyChannels is a Rust library for OpenHuman channel and messaging
-primitives.** It provides the portable channel contract, channel configuration
-schema, connection metadata, route helpers, and backend delegation layer used to
-connect channel surfaces to OpenHuman harnesses without coupling this crate to
-the OpenHuman application crate.
+**TinyChannels owns channel provider behavior and portable messaging
+contracts.** The `tinychannels-bus` crate defines the typed host/module
+boundary; `tinychannels-module` runs configured providers and relays, while
+`tinychannels-runtime` contains shared provider algorithms. OpenHuman loads
+the module and retains application policy, credentials, authorization, agent
+execution, and durable conversation sessions.
 
 > **Channel contract:** the normative v2 target and migration rules are in
 > [docs/spec/contract-v2.md](docs/spec/contract-v2.md). This README describes
 > the current crate and implementation; it does not define the v2 wire
 > contract.
+
+Architecture and contract references:
+[architecture](docs/channel-architecture.md),
+[capabilities](docs/channel-capabilities.md),
+[channel contracts](docs/channel-contracts.md),
+[delivery](docs/channel-delivery.md), and
+[provider conformance](docs/channel-providers.md).
 
 Configured provider discovery, legacy intent normalization, and external-webhook
 outbound startup are confidential module operations. The catalog returns provider
@@ -91,9 +99,11 @@ preparation payload limit and fail after module shutdown.
 - adapters for OpenHuman channel surfaces
 - observability and lifecycle hooks around channel traffic
 
-Runtime side effects are pluggable through `ChannelBackend`. OpenHuman owns the
-actual backend implementation for REST/JWT/config storage, while this crate
-validates channel metadata and delegates operations through that trait.
+Provider behavior is reached through the module's TinyBus operations. OpenHuman
+implements only the host capabilities that the module contract requests, such
+as scoped media access, speech services, event publication, and relay delivery.
+Host authorization, account policy, agent execution, and durable session
+storage remain in OpenHuman.
 
 ## Provider Features
 
@@ -139,9 +149,9 @@ helpers on `lettre` alone, without the IMAP receive stack (18 fewer packages):
 tinychannels = { git = "https://github.com/tinyhumansai/tinychannels", features = ["email-send"] }
 ```
 
-`email-send` carries no `Channel` impl — a send-only build cannot `listen`, so
-the trait is gated on the full `email` feature rather than promising a
-half-working channel.
+`email-send` supplies the send-only provider helper. It does not configure an
+inbound listener; use the full `email` feature when the module must receive
+mail over IMAP as well as send through SMTP.
 
 All other providers (Telegram, Discord, Slack, Signal, iMessage, IRC, Yuanbao/钉钉, etc.) are included in the default build.
 
@@ -162,14 +172,14 @@ cargo test --features email,lark
 
 ## Repository Layout
 
-- `crates/tinychannels-bus/` holds shared message/envelope DTOs, serialized
-  channel configuration, capabilities, controller schemas/response types,
-  relay frames and errors.
+- `crates/tinychannels-bus/` holds typed message/envelope DTOs, module operation
+  requests and results, serialized channel configuration, capabilities,
+  controller schemas, relay frames, and errors.
 - `crates/tinychannels-runtime/` owns provider/adapter callbacks, listener and
-  dispatch supervision, pairing and relay crypto, persisted key/idempotency
-  algorithms, history/context processing, configuration preparation and text
-  segmentation. It re-exports the same bus DTOs.
-- `crates/tinychannels-module/` is the loadable TinyBus module.
+  dispatch supervision, pairing and relay crypto, provider normalization,
+  history/context preparation, and text segmentation.
+- `crates/tinychannels-module/` is the loadable TinyBus module that exposes
+  configured provider and web-output operations.
 - The module keeps its original `StartChannel`, `StopChannel`, `SendMessage`,
   `ListChannels` and `ChannelStatus` members, and adds relay reservation/start/
   stop/status/send plus `Shutdown`, typed `SendChannelIntent`, and send-only
@@ -206,9 +216,11 @@ cargo test --features email,lark
   `chat_approvals` capability.
 - `src/relay/` holds the relay transport loop, the WebSocket dialer and the
   process-wide transport registry.
-- `src/backend.rs` owns `ChannelBackend` and `ChannelManager`; `src/host/` is
-  the host service boundary; `src/routes.rs` and `src/runtime.rs` hold portable
-  runtime helpers.
+- `src/backend.rs` retains compatibility `ChannelBackend` and `ChannelManager`
+  APIs. OpenHuman's host integration uses typed controller operations through
+  `tinychannels-bus` and `tinychannels-module`; `src/host/` contains the module's
+  host-capability boundary, and `src/routes.rs` and `src/runtime.rs` hold
+  portable runtime helpers.
 
 The [pure-contract relocation specification](docs/spec/pure-contract-relocation.md)
 records extension-trait source migrations and subsequent module-operation work.
