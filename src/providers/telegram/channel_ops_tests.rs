@@ -5324,7 +5324,7 @@ async fn adapter_start_polls_and_delivers_original_typed_telegram_ingress() {
     let server = mock_api().await;
     mount_get_updates_once(
         &server,
-        0,
+        1,
         updates(serde_json::json!([{
             "update_id": 41,
             "message": {
