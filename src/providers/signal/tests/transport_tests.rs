@@ -256,7 +256,7 @@ async fn typed_sse_cancellation_interrupts_trailing_event_delivery() {
     let server = MockServer::start().await;
     Mock::given(wiremock::matchers::path("/api/v1/events"))
         .respond_with(ResponseTemplate::new(200).set_body_string(
-            "data: {\"envelope\":{\"sourceNumber\":\"+1111111111\",\"dataMessage\":{\"message\":\"tail\",\"timestamp\":1}}}",
+            "data: {\"envelope\":{\"sourceNumber\":\"+1111111111\",\"dataMessage\":{\"message\":\"tail\",\"timestamp\":1}}}\n",
         ))
         .expect(1)
         .mount(&server)
