@@ -18,7 +18,9 @@ centralized from `src/lib.rs` and `src/providers/mod.rs`.
 | QQ | `QQChannel` |
 | Signal | `SignalChannel` |
 | Slack | `SlackChannel` |
+| Telegram | `TelegramChannel` |
 | WhatsApp | `WhatsAppChannel` |
+| WhatsApp Web | `WhatsAppWebChannel` |
 | Yuanbao | `YuanbaoChannel` |
 
 ## Provider and host boundary
@@ -43,18 +45,22 @@ providers support every feature.
 | Discord | `providers/discord/conformance_tests.rs` |
 | Email | `providers/email_channel/conformance_tests.rs` |
 | iMessage | `providers/imessage/conformance_tests.rs` |
+| IRC | `providers/irc_listen_tests.rs` |
 | Linq | `providers/linq/conformance_tests.rs` |
 | Mattermost, QQ, DingTalk | `providers/long_tail_conformance_tests.rs` |
 | Signal | `providers/signal/conformance_tests.rs` |
 | Slack | `providers/slack/adapter_tests.rs` |
+| Telegram | `providers/telegram/channel_ops_tests.rs` |
 | Lark | `providers/lark_conformance_tests.rs` |
 | WhatsApp Cloud and Web | `providers/whatsapp*/conformance_tests.rs` |
 | Yuanbao | `providers/yuanbao/conformance_tests.rs` |
 
 The matrix names the operations being tested. The provider descriptor and
 mock-wire assertion in each suite are authoritative for its supported subset.
-Telegram has provider tests, but is not currently part of a full shared
-conformance-matrix suite.
+The Telegram suite runs the same 24 canonical cases against the configured
+adapter and mock wire. IRC has a full 24-case suite against a local protocol
+peer. Controller-mediated operations are checked separately from these 24
+provider cases.
 
 ## Controller Registry
 
