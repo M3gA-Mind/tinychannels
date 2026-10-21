@@ -8,6 +8,14 @@ use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::time::Duration;
 
+struct TelegramListenerGuard<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for TelegramListenerGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 #[derive(Debug)]
 struct TelegramPreDispatchError;
 
@@ -1744,6 +1752,439 @@ impl TelegramChannel {
     }
 }
 
+impl TelegramChannel {
+    async fn deliver_listener_event(
+        &self,
+        typed_sink: Option<&(dyn crate::channel::ChannelInboundSink + Send + Sync)>,
+        event: tinychannels_bus::ChannelEvent,
+    ) -> anyhow::Result<()> {
+        let ingress = tinychannels_bus::ChannelIngress::Event(event);
+        if let Some(sink) = typed_sink {
+            sink.push(ingress)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+        } else if let Some(events) = &self.events
+            && let Err(error) = events.publish_ingress(ingress).await
+        {
+            tracing::debug!(%error, "failed to deliver Telegram listener event");
+        }
+        Ok(())
+    }
+
+    async fn deliver_listener_inbound(
+        &self,
+        typed_sink: Option<&(dyn crate::channel::ChannelInboundSink + Send + Sync)>,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> anyhow::Result<bool> {
+        if let Some(sink) = typed_sink {
+            sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+            return Ok(true);
+        }
+        if let Some(events) = &self.events {
+            return events
+                .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await;
+        }
+        Ok(false)
+    }
+
+    async fn listen_loop(
+        &self,
+        legacy_tx: Option<tokio::sync::mpsc::Sender<ChannelMessage>>,
+        typed_sink: Option<&(dyn crate::channel::ChannelInboundSink + Send + Sync)>,
+        mut cancellation: tokio::sync::watch::Receiver<bool>,
+    ) -> anyhow::Result<()> {
+        let mut offset: i64 = 0;
+
+        if self.mention_only {
+            let _ = self.get_bot_username().await;
+        }
+
+        tracing::info!("Telegram channel listening for messages...");
+
+        loop {
+            if self.mention_only {
+                let missing_username = self.bot_username.lock().is_none();
+                if missing_username {
+                    let _ = self.get_bot_username().await;
+                }
+            }
+
+            let url = self.api_url("getUpdates");
+            let body = serde_json::json!({
+                "offset": offset,
+                "timeout": 30,
+                "allowed_updates": ["message", "edited_message", "message_reaction", "callback_query"]
+            });
+
+            let response = tokio::select! {
+                biased;
+                changed = cancellation.changed() => {
+                    if changed.is_err() || *cancellation.borrow() {
+                        return Ok(());
+                    }
+                    continue;
+                }
+                response = self.http_client().post(&url).json(&body).send() => response,
+            };
+            let resp = match response {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("Telegram poll error: {e}");
+                    tokio::select! {
+                        _ = cancellation.changed() => return Ok(()),
+                        _ = tokio::time::sleep(self.poll_error_backoff) => {}
+                    }
+                    continue;
+                }
+            };
+
+            let parsed = tokio::select! {
+                biased;
+                changed = cancellation.changed() => {
+                    if changed.is_err() || *cancellation.borrow() {
+                        return Ok(());
+                    }
+                    continue;
+                }
+                parsed = resp.json() => parsed,
+            };
+            let data: serde_json::Value = match parsed {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!("Telegram parse error: {e}");
+                    tokio::select! {
+                        _ = cancellation.changed() => return Ok(()),
+                        _ = tokio::time::sleep(self.poll_error_backoff) => {}
+                    }
+                    continue;
+                }
+            };
+
+            let ok = data
+                .get("ok")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true);
+            if !ok {
+                let error_code = data
+                    .get("error_code")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or_default();
+                let description = data
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown Telegram API error");
+
+                if error_code == 409 {
+                    let webhook_blocks_polling = description.to_lowercase().contains("webhook");
+                    if webhook_blocks_polling {
+                        tracing::warn!(
+                            "[telegram] getUpdates conflict (409): webhook is active; calling deleteWebhook"
+                        );
+                        if self.delete_webhook_for_long_polling().await {
+                            tracing::info!("[telegram] deleteWebhook ok; retrying getUpdates");
+                            continue;
+                        }
+                        tracing::warn!("[telegram] deleteWebhook did not succeed; backing off");
+                    } else {
+                        tracing::warn!(
+                            "Telegram polling conflict (409): {description}. \
+Ensure only one `openhuman` process is using this bot token."
+                        );
+                    }
+                    tokio::select! {
+                        _ = cancellation.changed() => return Ok(()),
+                        _ = tokio::time::sleep(self.poll_conflict_backoff) => {}
+                    }
+                } else {
+                    tracing::warn!(
+                        "Telegram getUpdates API error (code={}): {description}",
+                        error_code
+                    );
+                    tokio::select! {
+                        _ = cancellation.changed() => return Ok(()),
+                        _ = tokio::time::sleep(self.poll_error_backoff) => {}
+                    }
+                }
+                continue;
+            }
+
+            if let Some(results) = data.get("result").and_then(serde_json::Value::as_array) {
+                for update in results {
+                    let update_id = update
+                        .get("update_id")
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or_default();
+                    if update_id > 0 && self.has_seen_update_id(update_id) {
+                        offset = offset.max(update_id.saturating_add(1));
+                        continue;
+                    }
+                    // The update is acknowledged locally only after its
+                    // provider-owned action or typed ingress has succeeded.
+                    let commit_update = |offset: &mut i64| {
+                        if update_id > 0 {
+                            self.track_update_id(update_id);
+                        }
+                        *offset = (*offset).max(update_id.saturating_add(1));
+                    };
+
+                    if let Some(query_id) = update
+                        .get("callback_query")
+                        .and_then(|query| query.get("id"))
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        self.acknowledge_callback(query_id).await;
+                        if !self.callback_is_allowed(update) {
+                            tracing::debug!("dropped Telegram callback from a disallowed user");
+                            commit_update(&mut offset);
+                            continue;
+                        }
+                        if let Some(event) = Self::callback_event(update) {
+                            tokio::select! {
+                                _ = cancellation.changed() => return Ok(()),
+                                result = self.deliver_listener_event(typed_sink, event) => result?,
+                            }
+                        }
+                        commit_update(&mut offset);
+                        continue;
+                    }
+
+                    let reactions = self.parse_update_reactions(update);
+                    if update.get("message_reaction").is_some() {
+                        if !reactions.is_empty() {
+                            for reaction in reactions {
+                                tracing::info!(
+                                    sender = reaction.sender,
+                                    reply_target = reaction.reply_target,
+                                    target_message_id = reaction.target_message_id,
+                                    emoji = reaction.emoji,
+                                    "Telegram reaction received"
+                                );
+                                if typed_sink.is_some() || self.events.is_some() {
+                                    let source_id = reaction.update_id.clone();
+                                    let conversation = tinychannels_bus::ConversationRef {
+                                        kind: reaction.conversation_kind,
+                                        id: reaction.reply_target.clone(),
+                                        topic_id: reaction.thread_id.clone(),
+                                        ..Default::default()
+                                    };
+                                    let reaction_kind = if reaction.added {
+                                        tinychannels_bus::ChannelEventKind::ReactionAdded {
+                                            message_id: format!(
+                                                "telegram_{}_{}",
+                                                reaction.reply_target, reaction.target_message_id
+                                            ),
+                                            provider_message_id: Some(
+                                                reaction.target_message_id.clone(),
+                                            ),
+                                            actor: tinychannels_bus::SenderRef {
+                                                id: reaction.sender_id.clone(),
+                                                name: Some(reaction.sender.clone()),
+                                                ..Default::default()
+                                            },
+                                            reaction: tinychannels_bus::ChannelReaction {
+                                                value: reaction.emoji.clone(),
+                                                custom_emoji_id: reaction.custom_emoji_id.clone(),
+                                            },
+                                        }
+                                    } else {
+                                        tinychannels_bus::ChannelEventKind::ReactionRemoved {
+                                            message_id: format!(
+                                                "telegram_{}_{}",
+                                                reaction.reply_target, reaction.target_message_id
+                                            ),
+                                            provider_message_id: Some(
+                                                reaction.target_message_id.clone(),
+                                            ),
+                                            actor: tinychannels_bus::SenderRef {
+                                                id: reaction.sender_id.clone(),
+                                                name: Some(reaction.sender.clone()),
+                                                ..Default::default()
+                                            },
+                                            reaction: tinychannels_bus::ChannelReaction {
+                                                value: reaction.emoji.clone(),
+                                                custom_emoji_id: reaction.custom_emoji_id.clone(),
+                                            },
+                                        }
+                                    };
+                                    let event = tinychannels_bus::ChannelEvent {
+                                        version: 2,
+                                        event_id: source_id
+                                            .as_ref()
+                                            .map(|id| {
+                                                format!(
+                                                    "telegram:update:{id}:reaction:{}:{}:{}:{}",
+                                                    if reaction.added {
+                                                        "added"
+                                                    } else {
+                                                        "removed"
+                                                    },
+                                                    reaction.reply_target,
+                                                    reaction.target_message_id,
+                                                    reaction.emoji
+                                                )
+                                            })
+                                            .unwrap_or_else(|| {
+                                                format!(
+                                                    "telegram:reaction:{}:{}:{}:{}:{}",
+                                                    reaction.reply_target,
+                                                    reaction.target_message_id,
+                                                    reaction.sender_id,
+                                                    reaction.emoji,
+                                                    if reaction.added {
+                                                        "added"
+                                                    } else {
+                                                        "removed"
+                                                    }
+                                                )
+                                            }),
+                                        source_event_id: source_id,
+                                        source_timestamp: reaction.timestamp,
+                                        channel: tinychannels_bus::ChannelRef {
+                                            id: "telegram".into(),
+                                            account_id: None,
+                                        },
+                                        conversation: Some(conversation),
+                                        event: reaction_kind,
+                                    };
+                                    tokio::select! {
+                                        _ = cancellation.changed() => return Ok(()),
+                                        result = self.deliver_listener_event(typed_sink, event) => result?,
+                                    }
+                                }
+                            }
+                            commit_update(&mut offset);
+                            continue;
+                        }
+                        commit_update(&mut offset);
+                        continue;
+                    }
+
+                    // Telegram edits arrive as a distinct update field. Keep
+                    // them out of the inbound-new-message path even when no
+                    // host event sink is installed.
+                    if let Some(edited) = update.get("edited_message") {
+                        if let Some(message) = self.parse_update_message(update)
+                            && (typed_sink.is_some() || self.events.is_some())
+                        {
+                            let source_id = update
+                                .get("update_id")
+                                .and_then(serde_json::Value::as_i64)
+                                .map(|id| id.to_string());
+                            let thread_id = edited
+                                .get("message_thread_id")
+                                .and_then(serde_json::Value::as_i64)
+                                .map(|id| id.to_string());
+                            let event = tinychannels_bus::ChannelEvent {
+                                version: 2,
+                                event_id: source_id
+                                    .as_ref()
+                                    .map(|id| format!("telegram:update:{id}:edit:{}", message.id))
+                                    .unwrap_or_else(|| format!("telegram:edit:{}", message.id)),
+                                source_event_id: source_id,
+                                source_timestamp: edited
+                                    .get("edit_date")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .map(|seconds| seconds.saturating_mul(1000)),
+                                channel: tinychannels_bus::ChannelRef {
+                                    id: "telegram".into(),
+                                    account_id: None,
+                                },
+                                conversation: Some(tinychannels_bus::ConversationRef {
+                                    kind: match edited
+                                        .get("chat")
+                                        .and_then(|chat| chat.get("type"))
+                                        .and_then(serde_json::Value::as_str)
+                                    {
+                                        Some("private") => tinychannels_bus::ConversationKind::Dm,
+                                        Some("group" | "supergroup") => {
+                                            tinychannels_bus::ConversationKind::Group
+                                        }
+                                        Some("channel") => {
+                                            tinychannels_bus::ConversationKind::Channel
+                                        }
+                                        _ => tinychannels_bus::ConversationKind::Unknown,
+                                    },
+                                    id: edited
+                                        .get("chat")
+                                        .and_then(|chat| chat.get("id"))
+                                        .and_then(serde_json::Value::as_i64)
+                                        .map(|id| id.to_string())
+                                        .unwrap_or_else(|| message.reply_target.clone()),
+                                    topic_id: thread_id,
+                                    ..Default::default()
+                                }),
+                                event: tinychannels_bus::ChannelEventKind::MessageUpdated {
+                                    message_id: message.id,
+                                    provider_message_id: edited
+                                        .get("message_id")
+                                        .and_then(serde_json::Value::as_i64)
+                                        .map(|id| id.to_string()),
+                                    parts: vec![tinychannels_bus::ContentPart::Text {
+                                        text: message.content,
+                                        markdown_dialect: None,
+                                    }],
+                                },
+                            };
+                            tokio::select! {
+                                _ = cancellation.changed() => return Ok(()),
+                                result = self.deliver_listener_event(typed_sink, event) => result?,
+                            }
+                        }
+                        commit_update(&mut offset);
+                        continue;
+                    }
+
+                    let Some(msg) = self.parse_update_message_or_voice(update).await else {
+                        self.handle_unauthorized_message(update).await;
+                        commit_update(&mut offset);
+                        continue;
+                    };
+
+                    let voice_note = match self.voice_note_for_ingress(update, &msg).await {
+                        Ok(note) => note,
+                        Err(error) if Self::parse_update_voice_attachment(update).is_some() => {
+                            tracing::warn!(
+                                "Telegram voice could not be durably persisted: {error}"
+                            );
+                            None
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let media_parts = match self.media_parts_for_ingress(update, &msg).await {
+                        Ok(parts) => parts,
+                        Err(_) => {
+                            tracing::warn!(
+                                "Telegram attachment could not be persisted as typed media"
+                            );
+                            return Err(anyhow::anyhow!("Telegram attachment persistence failed"));
+                        }
+                    };
+                    let ingress =
+                        Self::inbound_envelope_with_media(update, &msg, voice_note, media_parts);
+                    let delivered = if typed_sink.is_some() || self.events.is_some() {
+                        tokio::select! {
+                            _ = cancellation.changed() => return Ok(()),
+                            result = self.deliver_listener_inbound(typed_sink, ingress) => result?,
+                        }
+                    } else {
+                        false
+                    };
+                    if !delivered
+                        && let Some(tx) = &legacy_tx
+                        && tx.send(msg).await.is_err()
+                    {
+                        return Ok(());
+                    }
+                    commit_update(&mut offset);
+                }
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl Channel for TelegramChannel {
     fn name(&self) -> &str {
@@ -2071,360 +2512,8 @@ impl Channel for TelegramChannel {
     }
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        let mut offset: i64 = 0;
-
-        if self.mention_only {
-            let _ = self.get_bot_username().await;
-        }
-
-        tracing::info!("Telegram channel listening for messages...");
-
-        loop {
-            if self.mention_only {
-                let missing_username = self.bot_username.lock().is_none();
-                if missing_username {
-                    let _ = self.get_bot_username().await;
-                }
-            }
-
-            let url = self.api_url("getUpdates");
-            let body = serde_json::json!({
-                "offset": offset,
-                "timeout": 30,
-                "allowed_updates": ["message", "edited_message", "message_reaction", "callback_query"]
-            });
-
-            let resp = match self.http_client().post(&url).json(&body).send().await {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!("Telegram poll error: {e}");
-                    tokio::time::sleep(self.poll_error_backoff).await;
-                    continue;
-                }
-            };
-
-            let data: serde_json::Value = match resp.json().await {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::warn!("Telegram parse error: {e}");
-                    tokio::time::sleep(self.poll_error_backoff).await;
-                    continue;
-                }
-            };
-
-            let ok = data
-                .get("ok")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(true);
-            if !ok {
-                let error_code = data
-                    .get("error_code")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or_default();
-                let description = data
-                    .get("description")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("unknown Telegram API error");
-
-                if error_code == 409 {
-                    let webhook_blocks_polling = description.to_lowercase().contains("webhook");
-                    if webhook_blocks_polling {
-                        tracing::warn!(
-                            "[telegram] getUpdates conflict (409): webhook is active; calling deleteWebhook"
-                        );
-                        if self.delete_webhook_for_long_polling().await {
-                            tracing::info!("[telegram] deleteWebhook ok; retrying getUpdates");
-                            continue;
-                        }
-                        tracing::warn!("[telegram] deleteWebhook did not succeed; backing off");
-                    } else {
-                        tracing::warn!(
-                            "Telegram polling conflict (409): {description}. \
-Ensure only one `openhuman` process is using this bot token."
-                        );
-                    }
-                    tokio::time::sleep(self.poll_conflict_backoff).await;
-                } else {
-                    tracing::warn!(
-                        "Telegram getUpdates API error (code={}): {description}",
-                        error_code
-                    );
-                    tokio::time::sleep(self.poll_error_backoff).await;
-                }
-                continue;
-            }
-
-            if let Some(results) = data.get("result").and_then(serde_json::Value::as_array) {
-                for update in results {
-                    let update_id = update
-                        .get("update_id")
-                        .and_then(serde_json::Value::as_i64)
-                        .unwrap_or_default();
-                    if update_id > 0 && !self.track_update_id(update_id) {
-                        continue;
-                    }
-
-                    // Advance offset past this update
-                    if let Some(uid) = update.get("update_id").and_then(serde_json::Value::as_i64) {
-                        offset = uid + 1;
-                    }
-
-                    if let Some(query_id) = update
-                        .get("callback_query")
-                        .and_then(|query| query.get("id"))
-                        .and_then(serde_json::Value::as_str)
-                    {
-                        self.acknowledge_callback(query_id).await;
-                        if !self.callback_is_allowed(update) {
-                            tracing::debug!("dropped Telegram callback from a disallowed user");
-                            continue;
-                        }
-                        if let (Some(event), Some(events)) =
-                            (Self::callback_event(update), &self.events)
-                            && let Err(error) = events
-                                .publish_ingress(tinychannels_bus::ChannelIngress::Event(event))
-                                .await
-                        {
-                            tracing::debug!(%error, "failed to deliver Telegram button callback");
-                        }
-                        continue;
-                    }
-
-                    let reactions = self.parse_update_reactions(update);
-                    if update.get("message_reaction").is_some() {
-                        if !reactions.is_empty() {
-                            for reaction in reactions {
-                                tracing::info!(
-                                    sender = reaction.sender,
-                                    reply_target = reaction.reply_target,
-                                    target_message_id = reaction.target_message_id,
-                                    emoji = reaction.emoji,
-                                    "Telegram reaction received"
-                                );
-                                if let Some(events) = &self.events {
-                                    let source_id = reaction.update_id.clone();
-                                    let conversation = tinychannels_bus::ConversationRef {
-                                        kind: reaction.conversation_kind,
-                                        id: reaction.reply_target.clone(),
-                                        topic_id: reaction.thread_id.clone(),
-                                        ..Default::default()
-                                    };
-                                    let reaction_kind = if reaction.added {
-                                        tinychannels_bus::ChannelEventKind::ReactionAdded {
-                                            message_id: format!(
-                                                "telegram_{}_{}",
-                                                reaction.reply_target, reaction.target_message_id
-                                            ),
-                                            provider_message_id: Some(
-                                                reaction.target_message_id.clone(),
-                                            ),
-                                            actor: tinychannels_bus::SenderRef {
-                                                id: reaction.sender_id.clone(),
-                                                name: Some(reaction.sender.clone()),
-                                                ..Default::default()
-                                            },
-                                            reaction: tinychannels_bus::ChannelReaction {
-                                                value: reaction.emoji.clone(),
-                                                custom_emoji_id: reaction.custom_emoji_id.clone(),
-                                            },
-                                        }
-                                    } else {
-                                        tinychannels_bus::ChannelEventKind::ReactionRemoved {
-                                            message_id: format!(
-                                                "telegram_{}_{}",
-                                                reaction.reply_target, reaction.target_message_id
-                                            ),
-                                            provider_message_id: Some(
-                                                reaction.target_message_id.clone(),
-                                            ),
-                                            actor: tinychannels_bus::SenderRef {
-                                                id: reaction.sender_id.clone(),
-                                                name: Some(reaction.sender.clone()),
-                                                ..Default::default()
-                                            },
-                                            reaction: tinychannels_bus::ChannelReaction {
-                                                value: reaction.emoji.clone(),
-                                                custom_emoji_id: reaction.custom_emoji_id.clone(),
-                                            },
-                                        }
-                                    };
-                                    let event = tinychannels_bus::ChannelEvent {
-                                        version: 2,
-                                        event_id: source_id
-                                            .as_ref()
-                                            .map(|id| {
-                                                format!(
-                                                    "telegram:update:{id}:reaction:{}:{}:{}:{}",
-                                                    if reaction.added {
-                                                        "added"
-                                                    } else {
-                                                        "removed"
-                                                    },
-                                                    reaction.reply_target,
-                                                    reaction.target_message_id,
-                                                    reaction.emoji
-                                                )
-                                            })
-                                            .unwrap_or_else(|| {
-                                                format!(
-                                                    "telegram:reaction:{}:{}:{}:{}:{}",
-                                                    reaction.reply_target,
-                                                    reaction.target_message_id,
-                                                    reaction.sender_id,
-                                                    reaction.emoji,
-                                                    if reaction.added {
-                                                        "added"
-                                                    } else {
-                                                        "removed"
-                                                    }
-                                                )
-                                            }),
-                                        source_event_id: source_id,
-                                        source_timestamp: reaction.timestamp,
-                                        channel: tinychannels_bus::ChannelRef {
-                                            id: "telegram".into(),
-                                            account_id: None,
-                                        },
-                                        conversation: Some(conversation),
-                                        event: reaction_kind,
-                                    };
-                                    if let Err(error) = events
-                                        .publish_ingress(tinychannels_bus::ChannelIngress::Event(
-                                            event,
-                                        ))
-                                        .await
-                                    {
-                                        tracing::debug!(%error, "failed to deliver Telegram reaction event");
-                                    }
-                                }
-                            }
-                            continue;
-                        }
-                        continue;
-                    }
-
-                    // Telegram edits arrive as a distinct update field. Keep
-                    // them out of the inbound-new-message path even when no
-                    // host event sink is installed.
-                    if let Some(edited) = update.get("edited_message") {
-                        if let Some(message) = self.parse_update_message(update)
-                            && let Some(events) = &self.events
-                        {
-                            let source_id = update
-                                .get("update_id")
-                                .and_then(serde_json::Value::as_i64)
-                                .map(|id| id.to_string());
-                            let thread_id = edited
-                                .get("message_thread_id")
-                                .and_then(serde_json::Value::as_i64)
-                                .map(|id| id.to_string());
-                            let event = tinychannels_bus::ChannelEvent {
-                                version: 2,
-                                event_id: source_id
-                                    .as_ref()
-                                    .map(|id| format!("telegram:update:{id}:edit:{}", message.id))
-                                    .unwrap_or_else(|| format!("telegram:edit:{}", message.id)),
-                                source_event_id: source_id,
-                                source_timestamp: edited
-                                    .get("edit_date")
-                                    .and_then(serde_json::Value::as_u64)
-                                    .map(|seconds| seconds.saturating_mul(1000)),
-                                channel: tinychannels_bus::ChannelRef {
-                                    id: "telegram".into(),
-                                    account_id: None,
-                                },
-                                conversation: Some(tinychannels_bus::ConversationRef {
-                                    kind: match edited
-                                        .get("chat")
-                                        .and_then(|chat| chat.get("type"))
-                                        .and_then(serde_json::Value::as_str)
-                                    {
-                                        Some("private") => tinychannels_bus::ConversationKind::Dm,
-                                        Some("group" | "supergroup") => {
-                                            tinychannels_bus::ConversationKind::Group
-                                        }
-                                        Some("channel") => {
-                                            tinychannels_bus::ConversationKind::Channel
-                                        }
-                                        _ => tinychannels_bus::ConversationKind::Unknown,
-                                    },
-                                    id: edited
-                                        .get("chat")
-                                        .and_then(|chat| chat.get("id"))
-                                        .and_then(serde_json::Value::as_i64)
-                                        .map(|id| id.to_string())
-                                        .unwrap_or_else(|| message.reply_target.clone()),
-                                    topic_id: thread_id,
-                                    ..Default::default()
-                                }),
-                                event: tinychannels_bus::ChannelEventKind::MessageUpdated {
-                                    message_id: message.id,
-                                    provider_message_id: edited
-                                        .get("message_id")
-                                        .and_then(serde_json::Value::as_i64)
-                                        .map(|id| id.to_string()),
-                                    parts: vec![tinychannels_bus::ContentPart::Text {
-                                        text: message.content,
-                                        markdown_dialect: None,
-                                    }],
-                                },
-                            };
-                            if let Err(error) = events
-                                .publish_ingress(tinychannels_bus::ChannelIngress::Event(event))
-                                .await
-                            {
-                                tracing::debug!(%error, "failed to deliver Telegram edit event");
-                            }
-                        }
-                        continue;
-                    }
-
-                    let Some(msg) = self.parse_update_message_or_voice(update).await else {
-                        self.handle_unauthorized_message(update).await;
-                        continue;
-                    };
-
-                    let voice_note = match self.voice_note_for_ingress(update, &msg).await {
-                        Ok(note) => note,
-                        Err(error) if Self::parse_update_voice_attachment(update).is_some() => {
-                            tracing::warn!(
-                                "Telegram voice could not be durably persisted: {error}"
-                            );
-                            None
-                        }
-                        Err(error) => return Err(error),
-                    };
-                    let media_parts = match self.media_parts_for_ingress(update, &msg).await {
-                        Ok(parts) => parts,
-                        Err(_) => {
-                            tracing::warn!(
-                                "Telegram attachment could not be persisted as typed media"
-                            );
-                            return Err(anyhow::anyhow!("Telegram attachment persistence failed"));
-                        }
-                    };
-                    let ingress =
-                        Self::inbound_envelope_with_media(update, &msg, voice_note, media_parts);
-                    let delivered_by_event_sink = if let Some(events) = &self.events {
-                        match events
-                            .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(ingress))
-                            .await
-                        {
-                            Ok(delivered) => delivered,
-                            Err(error) => {
-                                tracing::debug!(%error, "failed to deliver Telegram inbound through module ingress");
-                                return Err(error);
-                            }
-                        }
-                    } else {
-                        false
-                    };
-                    if !delivered_by_event_sink && tx.send(msg).await.is_err() {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let (_cancel_tx, cancellation) = tokio::sync::watch::channel(false);
+        self.listen_loop(Some(tx), None, cancellation).await
     }
 
     async fn health_check(&self) -> bool {
@@ -2987,15 +3076,42 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
 
     async fn start(
         &self,
-        _sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
     ) -> Result<(), crate::channel::ChannelSendError> {
-        // The configured module's Running task owns the single long-poll loop
-        // and publishes the same Telegram-normalized ingress into TinyBus.
-        let _ = _sink;
-        Ok(())
+        use std::sync::atomic::Ordering;
+
+        if self
+            .listener_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(crate::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
+                message: "Telegram listener is already running".into(),
+                retryable: false,
+                ..Default::default()
+            });
+        }
+        let _guard = TelegramListenerGuard(&self.listener_running);
+        self.listener_cancel.send_replace(false);
+        let mut stop = self.listener_cancel.subscribe();
+        let poll_cancellation = stop.clone();
+        tokio::select! {
+            biased;
+            _ = stop.wait_for(|stopped| *stopped) => Ok(()),
+            result = self.listen_loop(None, Some(sink), poll_cancellation) => result,
+        }
+        .map_err(|error| crate::channel::ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::Transient,
+            message: error.to_string(),
+            retryable: true,
+            sent_before_error: false,
+            ..Default::default()
+        })
     }
 
     async fn stop(&self) -> Result<(), crate::channel::ChannelSendError> {
+        self.listener_cancel.send_replace(true);
         Ok(())
     }
 
