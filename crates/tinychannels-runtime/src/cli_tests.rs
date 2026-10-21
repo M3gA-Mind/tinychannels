@@ -25,6 +25,27 @@ impl ChannelInboundSink for MpscSink {
     }
 }
 
+struct NotifyingSink {
+    started: Arc<Notify>,
+    sender: tokio::sync::mpsc::Sender<tinychannels_bus::ChannelIngress>,
+}
+
+#[async_trait]
+impl ChannelInboundSink for NotifyingSink {
+    async fn push(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), ChannelSendError> {
+        self.started.notify_one();
+        self.sender.send(ingress).await.map_err(|_| ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::Transient,
+            message: "CLI test receiver closed".into(),
+            retryable: true,
+            ..Default::default()
+        })
+    }
+}
+
 #[tokio::test]
 async fn cli_adapter_reports_configured_text_capabilities_and_status() {
     let cli = CliChannel::new();
@@ -187,4 +208,33 @@ async fn stop_cancels_blocked_reader_and_adapter_can_restart() {
         panic!("CLI emits only inbound messages");
     };
     assert_eq!(envelope.text, "again");
+}
+
+#[tokio::test]
+async fn stop_cancels_blocked_inbound_sink_push() {
+    let cli = CliChannel::new();
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    tx.try_send(ChannelIngress::Inbound(ChannelInboundEnvelope::default()))
+        .expect("fill the sink before starting the CLI");
+    let started = Arc::new(Notify::new());
+    let sink = Arc::new(NotifyingSink {
+        started: started.clone(),
+        sender: tx,
+    });
+    let running_cli = cli.clone();
+    let running_sink = sink.clone();
+    let task = tokio::spawn(async move {
+        running_cli
+            .start_with_reader("blocked\n".as_bytes(), running_sink.as_ref())
+            .await;
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
+        .await
+        .expect("sink push should begin");
+    cli.stop().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), task)
+        .await
+        .expect("stop should release a blocked inbound sink push")
+        .unwrap();
 }

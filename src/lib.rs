@@ -83,7 +83,7 @@ pub use factory::{
 pub use host::{ChannelHost, ChannelHostBuilder, HostCapabilities, NoopHost, ProviderContext};
 pub use providers::long_tail::LongTailNative;
 pub use providers::{
-    DingTalkChannel, DiscordChannel, IMessageChannel, IrcChannel, IrcChannelConfig, LinqChannel,
+    CliChannel, DingTalkChannel, DiscordChannel, IMessageChannel, IrcChannel, IrcChannelConfig, LinqChannel,
     MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel, WhatsAppChannel,
     WhatsAppWebChannel, YuanbaoChannel,
 };
