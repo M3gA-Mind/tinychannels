@@ -39,7 +39,7 @@ fn draft_intent(
     let is_telegram = descriptor.id == "telegram";
     let mut intent = tinychannels::outbound_intent_from_send_message(&descriptor.id, message);
     intent.channel_ref = Some(tinychannels_bus::ChannelRef {
-        id: descriptor.id,
+        id: descriptor.id.clone(),
         // Account scope belongs to the configured module instance. Some raw
         // provider adapters (including SlackChannel) intentionally have no
         // account identity in their descriptor.

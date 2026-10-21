@@ -4308,7 +4308,7 @@ async fn v1_subjects_are_normalized_only_for_providers_that_consume_them() {
         assert_eq!(actual.channel_id, provider);
         assert_eq!(actual.conversation_id, "recipient");
         assert_eq!(
-            tinychannels::provider::test_message_text(&actual),
+            crate::provider::test_message_text(&actual),
             expected,
             "v1 subject projection for {provider}"
         );
