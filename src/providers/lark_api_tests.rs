@@ -836,10 +836,7 @@ async fn send_fetches_a_token_once_and_posts_a_text_message() {
         "/open-apis/im/v1/messages?receive_id_type=chat_id"
     );
     assert_eq!(header(send, "authorization"), Some("Bearer t-1"));
-    assert_eq!(
-        header(send, "content-type"),
-        Some("application/json")
-    );
+    assert_eq!(header(send, "content-type"), Some("application/json"));
     assert_eq!(send.body["receive_id"], "oc_chat");
     assert_eq!(send.body["msg_type"], "text");
     assert_eq!(
