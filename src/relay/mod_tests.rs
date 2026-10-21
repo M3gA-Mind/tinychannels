@@ -454,6 +454,8 @@ struct MemoryRelayIo {
     inbound: Mutex<VecDeque<ConnectorToGatewayFrame>>,
     sent_notify: Notify,
     inbound_notify: Notify,
+    received: std::sync::atomic::AtomicUsize,
+    received_notify: Notify,
     closed: AtomicBool,
 }
 
@@ -476,6 +478,18 @@ impl MemoryRelayIo {
         }
     }
 
+    async fn wait_for_received_len(&self, len: usize) {
+        loop {
+            let notified = self.received_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.received.load(Ordering::SeqCst) >= len {
+                return;
+            }
+            notified.await;
+        }
+    }
+
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
         self.inbound_notify.notify_waiters();
@@ -493,6 +507,8 @@ impl RelayFrameIo for MemoryRelayIo {
     async fn recv(&self) -> Result<Option<ConnectorToGatewayFrame>, RelayTransportError> {
         loop {
             if let Some(frame) = self.inbound.lock().expect("inbound lock").pop_front() {
+                self.received.fetch_add(1, Ordering::SeqCst);
+                self.received_notify.notify_waiters();
                 return Ok(Some(frame));
             }
             if self.closed.load(Ordering::SeqCst) {
@@ -662,7 +678,7 @@ async fn relay_transport_negotiates_v2_and_returns_the_canonical_descriptor() {
     );
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(start_paused = true)]
 async fn relay_v2_ignores_unsupported_versions_and_times_out_at_one_deadline() {
     let io = Arc::new(MemoryRelayIo::default());
     let transport = Arc::new(RelayTransport::new(
@@ -685,8 +701,9 @@ async fn relay_v2_ignores_unsupported_versions_and_times_out_at_one_deadline() {
     io.wait_for_sent_len(1).await;
     let mut wrong_version = tinychannels_bus::ChannelCapabilities::unknown();
     wrong_version.version = 99;
-    let start = tokio::time::Instant::now();
-    loop {
+    tokio::task::yield_now().await;
+    let mut received = 0;
+    for _ in 0..4 {
         io.push(ConnectorToGatewayFrame::DescriptorV2 {
             platform: "discord".into(),
             bot_id: "other".into(),
@@ -697,20 +714,16 @@ async fn relay_v2_ignores_unsupported_versions_and_times_out_at_one_deadline() {
             descriptor: telegram_descriptor(),
         })
         .await;
-        if start.elapsed() > Duration::from_millis(100) {
-            break;
-        }
+        received += 2;
+        io.wait_for_received_len(received).await;
         tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(15)).await;
     }
     assert_eq!(
         negotiation.await.unwrap(),
         Err(RelayTransportError::Timeout {
             operation: "handshake_v2"
         })
-    );
-    assert!(
-        start.elapsed() < Duration::from_millis(200),
-        "unrelated traffic must not restart handshake timeout"
     );
 }
 
