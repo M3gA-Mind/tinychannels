@@ -1838,52 +1838,23 @@ impl Running {
         let worker_scope = media_account_scope.clone();
         let worker_native = native_ports.clone();
         let worker_provider_name = provider_name.clone();
-        let native_listener = worker_native
-            .as_ref()
-            .is_some_and(|ports| ports.listener_mode == LongTailListenerMode::Adapter);
-        let external_webhook = worker_native
-            .as_ref()
-            .is_some_and(|ports| ports.listener_mode == LongTailListenerMode::Webhook);
-        let legacy_listener = !native_listener && !external_webhook;
+        let listener_mode = worker_native.listener_mode;
         let worker = tokio::spawn(async move {
             let name = worker_provider_name;
             host.report_status(&name, "connecting", None).await;
-            let (tx, rx) = if legacy_listener {
-                let (tx, rx) = tokio::sync::mpsc::channel(256);
-                (Some(tx), Some(rx))
-            } else {
-                (None, None)
-            };
-            let mut forwarder = if legacy_listener {
-                let forward_host = host.clone();
-                let forward_name = name.clone();
-                Some(AbortOnDrop(tokio::spawn(async move {
-                    let mut rx = rx.expect("legacy listener owns its inbound receiver");
-                    while let Some(message) = rx.recv().await {
-                        let envelope = tinychannels::inbound_envelope_from_legacy_message(&message);
-                        forward_host.deliver_inbound(&forward_name, envelope).await;
-                    }
-                })))
-            } else {
-                None
-            };
             let listener_host = host.clone();
             let listener_cancel = worker_cancel.subscribe();
-            let listener_native = worker_native.clone();
             let listener_instance = worker_instance.clone();
             let listener_scope = worker_scope.clone();
             let listener_name = name.clone();
             let mut listener = AbortOnDrop(tokio::spawn(async move {
-                if native_listener {
-                    let Some(native) = listener_native else {
-                        return Err(anyhow::anyhow!("native listener ports are unavailable"));
-                    };
+                if listener_mode == LongTailListenerMode::Adapter {
                     let sink = Arc::new(ModuleEvents(
                         listener_host.clone(),
                         listener_instance,
                         listener_scope,
                     ));
-                    let adapter = Arc::clone(&native.adapter);
+                    let adapter = Arc::clone(&worker_native.adapter);
                     let mut listener_cancel = listener_cancel;
                     if outbound_only {
                         let _ = listener_cancel.wait_for(|value| *value).await;
@@ -1900,23 +1871,10 @@ impl Running {
                         )
                         .await
                     }
-                } else if external_webhook {
+                } else {
                     let mut listener_cancel = listener_cancel;
                     let _ = listener_cancel.wait_for(|value| *value).await;
                     Ok(())
-                } else if outbound_only {
-                    // Keep the inbound sender alive until cancellation so the forwarder
-                    // has the same explicit cleanup path as native listeners.
-                    let _inbound = tx.expect("legacy listener owns its inbound sender");
-                    std::future::pending::<anyhow::Result<()>>().await
-                } else {
-                    listen_with_supervision(
-                        listen_channel.expect("legacy listener has a legacy provider"),
-                        tx.expect("legacy listener owns its inbound sender"),
-                        listener_host,
-                        supervision,
-                    )
-                    .await
                 }
             }));
             let mut send_cancel = send_cancel;
@@ -1930,11 +1888,10 @@ impl Running {
                     let _ = command.started.send(());
                     let result = match command.operation {
                         ProviderOperation::SendTyped(message) => {
-                            let sent = if let Some(native) = &worker_native {
-                                match native.typed_send.send_typed(&message).await {
-                                    Ok(outcome) => Ok(outcome),
-                                    Err(error) => {
-                                        Ok(tinychannels_bus::channel::ChannelSendOutcome {
+                            let sent = match worker_native.typed_send.send_typed(&message).await {
+                                Ok(outcome) => Ok(outcome),
+                                Err(error) => {
+                                    Ok(tinychannels_bus::channel::ChannelSendOutcome {
                                             receipt: tinychannels_bus::channel::MessageReceipt {
                                                 idempotency_key: Some(
                                                     message.idempotency_key.clone(),
@@ -1971,17 +1928,7 @@ impl Running {
                                                 ..Default::default()
                                             },
                                             error: Some(error),
-                                        })
-                                    }
-                                }
-                            } else {
-                                match &send_channel {
-                                    Some(channel) => {
-                                        channel.send_typed_with_receipt(&message).await
-                                    }
-                                    None => Err(anyhow::anyhow!(
-                                        "provider typed-send port is unavailable"
-                                    )),
+                                    })
                                 }
                             };
                             sent.map(|mut outcome| {
@@ -2014,8 +1961,8 @@ impl Running {
                             .map_err(|_| Error::failed("provider typed send failed"))
                         }
                         ProviderOperation::NativeDraft(previous, intent) => {
-                            if let Some(native) = &worker_native {
-                                match native
+                            {
+                                match worker_native
                                     .drafts
                                     .upsert_draft(previous.as_ref(), intent.clone())
                                     .await
@@ -2045,13 +1992,10 @@ impl Running {
                                         )),
                                     ),
                                 }
-                            } else {
-                                Err(Error::failed("native draft port is unavailable"))
                             }
                         }
                         ProviderOperation::Interaction(interaction) => {
                             dispatch_interaction(
-                                send_channel.clone(),
                                 worker_native.clone(),
                                 &worker_instance,
                                 interaction,
@@ -2069,7 +2013,7 @@ impl Running {
                         .send(Err(Error::failed("provider is stopping")));
                 }
             }));
-            let outcome = if native_listener {
+            let outcome = if listener_mode == LongTailListenerMode::Adapter {
                 tokio::select! { biased;
                     _ = async { let _ = canceled.wait_for(|value| *value).await; } => {
                         let _ = (&mut listener.0).await;
@@ -2091,9 +2035,6 @@ impl Running {
             // Join listener first: it cannot register another native hook later.
             hooks.drain().await;
             let _ = (&mut sender.0).await;
-            if let Some(forwarder) = &mut forwarder {
-                let _ = (&mut forwarder.0).await;
-            }
             host.report_status(
                 &name,
                 if outcome.is_some_and(|outcome| !matches!(outcome, Ok(Ok(())))) {
@@ -2107,7 +2048,6 @@ impl Running {
             task_finished.store(true, Ordering::SeqCst);
         });
         Arc::new(Self {
-            channel,
             provider_name,
             native_ports,
             media_account_scope,
@@ -2119,9 +2059,7 @@ impl Running {
         })
     }
     fn native_provider(&self) -> &'static str {
-        self.native_ports
-            .as_ref()
-            .map_or("Provider", |ports| ports.provider)
+        self.native_ports.provider
     }
 
     pub(crate) fn is_finished(&self) -> bool {
@@ -2153,12 +2091,7 @@ impl Running {
                 ),
                 (
                     "adapterMode".into(),
-                    if self.native_ports.is_some() {
-                        "native-v2"
-                    } else {
-                        "legacy-backed"
-                    }
-                    .into(),
+                    "native-v2".into(),
                 ),
             ]),
             ..Default::default()
@@ -2206,11 +2139,6 @@ impl Running {
         previous: Option<tinychannels_bus::channel::MessageReceipt>,
         mut intent: tinychannels_bus::ChannelOutboundIntent,
     ) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, RunningSendError> {
-        if self.native_ports.is_none() {
-            return Err(RunningSendError::NotDispatched(
-                "native draft port is unavailable".into(),
-            ));
-        }
         self.validate_adapter_intent(&intent)
             .map_err(|e| RunningSendError::NotDispatched(e.message))?;
         let expected_channel = tinychannels_bus::ChannelRef {
@@ -2364,22 +2292,15 @@ impl Running {
         &self,
         interaction: tinychannels_bus::ChannelInteraction,
     ) -> Result<tinychannels_bus::ChannelInteractionResult> {
-        if let Some(native) = &self.native_ports
-            && let Some(result) = crate::interaction::dispatch_native_webhook(
-                native.adapter.as_ref(),
-                interaction.clone(),
-            )
-            .await
+        if let Some(result) = crate::interaction::dispatch_native_webhook(
+            self.native_ports.adapter.as_ref(),
+            interaction.clone(),
+        )
+        .await
         {
             return result;
         }
-        crate::interaction::dispatch(
-            self.channel
-                .as_deref()
-                .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
-            interaction,
-        )
-        .await
+        Err(Error::failed("provider does not support this webhook operation"))
     }
 
     async fn submit(
@@ -2555,17 +2476,9 @@ impl tinychannels::channel::ChannelAdapter for Running {
         tinychannels::controllers::ChannelAccountSnapshot,
         tinychannels::channel::ChannelSendError,
     > {
-        let healthy = if let Some(native) = &self.native_ports {
-            native
-                .adapter
-                .status()
-                .await
-                .is_ok_and(|snapshot| snapshot.health_state.as_deref() == Some("healthy"))
-        } else if let Some(channel) = &self.channel {
-            channel.health_check().await
-        } else {
-            false
-        };
+        let healthy = self.native_ports.adapter.status().await.is_ok_and(|snapshot| {
+            snapshot.health_state.as_deref() == Some("healthy")
+        });
         Ok(tinychannels::controllers::ChannelAccountSnapshot {
             channel_id: tinychannels_bus::provider_id(self.provider_name()).into(),
             account_id: Some(self.configured_instance.clone()),
