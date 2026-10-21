@@ -223,7 +223,8 @@ async fn dispatch_interaction(
             let native = native
                 .as_ref()
                 .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?;
-            if channel_ref.id != configured_instance
+            if channel_ref.id != tinychannels_bus::provider_id(configured_instance)
+                || channel_ref.account_id.as_deref() != Some(configured_instance)
                 || conversation.id.trim().is_empty()
                 || provider_message_id.trim().is_empty()
             {
