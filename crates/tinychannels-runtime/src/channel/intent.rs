@@ -96,7 +96,11 @@ pub fn legacy_message_value_from_outbound_intent(intent: &ChannelOutboundIntent)
         OutboundPayload::NativeChannelData { data } => data.clone(),
         OutboundPayload::Parts { parts } => serde_json::json!({ "parts": parts }),
     };
-    with_idempotency_key(payload, &intent.idempotency_key)
+    let mut message = with_idempotency_key(payload, &intent.idempotency_key);
+    if let Some(turn_id) = intent.turn_id.as_deref() {
+        message["turnId"] = Value::String(turn_id.to_owned());
+    }
+    message
 }
 
 fn explicit_idempotency_key(message: &Value) -> Option<String> {
