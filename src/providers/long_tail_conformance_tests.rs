@@ -988,44 +988,6 @@ fn media(kind: MediaKind) -> MediaReference {
     }
 }
 
-#[async_trait]
-impl AdapterFixture for LongTailFixture {
-    fn adapter(&self) -> &dyn ChannelAdapter {
-        self.channel.as_ref()
-    }
-
-    fn expected_scope(&self, _feature: Feature) -> ExpectedScope {
-        ExpectedScope {
-            channel: account(self.id),
-            conversation: if self.id == "qq" {
-                ConversationRef {
-                    kind: tinychannels_bus::ConversationKind::Dm,
-                    id: CHANNEL.into(),
-                    ..Default::default()
-                }
-            } else if self.id == "dingtalk" {
-                ConversationRef {
-                    kind: tinychannels_bus::ConversationKind::Group,
-                    id: CHANNEL.into(),
-                    ..Default::default()
-                }
-            } else {
-                conversation()
-            },
-            reply_to_id: None,
-            thread_id: (self.id != "qq" && self.id != "dingtalk").then(|| ROOT.into()),
-        }
-    }
-
-    fn clear_observations(&self) {
-        self.observed.lock().clear();
-    }
-
-    fn observations(&self) -> Vec<WireObservation> {
-        self.observed.lock().clone()
-    }
-}
-
 impl LongTailFixture {
     async fn receive_dingtalk_voice_in(
         &self,
@@ -1146,6 +1108,41 @@ impl LongTailFixture {
 
 #[async_trait]
 impl AdapterFixture for LongTailFixture {
+    fn adapter(&self) -> &dyn ChannelAdapter {
+        self.channel.as_ref()
+    }
+
+    fn expected_scope(&self, _feature: Feature) -> ExpectedScope {
+        ExpectedScope {
+            channel: account(self.id),
+            conversation: if self.id == "qq" {
+                ConversationRef {
+                    kind: tinychannels_bus::ConversationKind::Dm,
+                    id: CHANNEL.into(),
+                    ..Default::default()
+                }
+            } else if self.id == "dingtalk" {
+                ConversationRef {
+                    kind: tinychannels_bus::ConversationKind::Group,
+                    id: CHANNEL.into(),
+                    ..Default::default()
+                }
+            } else {
+                conversation()
+            },
+            reply_to_id: None,
+            thread_id: (self.id != "qq" && self.id != "dingtalk").then(|| ROOT.into()),
+        }
+    }
+
+    fn clear_observations(&self) {
+        self.observed.lock().clear();
+    }
+
+    fn observations(&self) -> Vec<WireObservation> {
+        self.observed.lock().clone()
+    }
+
     async fn exercise(
         &self,
         feature: Feature,
@@ -1153,7 +1150,9 @@ impl AdapterFixture for LongTailFixture {
         let channel = self.channel.as_ref();
         let target = conversation();
         match feature {
-            Feature::VoiceIn if self.id == "dingtalk" => self.receive_dingtalk_voice_in().await,
+            Feature::VoiceIn if self.id == "dingtalk" => {
+                LongTailFixture::receive_dingtalk_voice_in(self).await
+            }
             // A platform without thread addressing has nothing to send to.
             Feature::ThreadAddressing if !channel.declared_capabilities().addressing.thread_id => {
                 let mut intent = self.intent(
