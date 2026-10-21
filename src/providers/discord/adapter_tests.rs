@@ -671,10 +671,7 @@ async fn typed_operations_preserve_errors_and_receipts() {
     let failed = crate::channel::ChannelEdit::edit(&channel, &receipt, intent(&"x".repeat(2001)))
         .await
         .unwrap_err();
-    assert_eq!(
-        failed.kind,
-        SendErrorKind::TooLong
-    );
+    assert_eq!(failed.kind, SendErrorKind::TooLong);
     assert!(
         crate::channel::ChannelDelete::delete(&channel, &MessageReceipt::default())
             .await
