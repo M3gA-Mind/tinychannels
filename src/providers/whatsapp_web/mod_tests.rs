@@ -780,30 +780,50 @@ async fn typed_adapter_start_can_stop_and_restart_without_retaining_a_legacy_lis
         ingress: tokio::sync::Mutex::new(Vec::new()),
     });
 
-    for _ in 0..2 {
+    for iteration in 0..2 {
         let adapter = Arc::clone(&channel);
-        let sink = Arc::clone(&sink);
+        let listener_sink = Arc::clone(&sink);
         let listener = tokio::spawn(async move {
             adapter
-                .start_typed_with(sink.as_ref(), OfflineTransport, OfflineHttp)
+                .start_typed_with(listener_sink.as_ref(), OfflineTransport, OfflineHttp)
                 .await
         });
 
         wait_for_client(&channel).await;
         assert!(channel.bot_handle.lock().is_some());
         assert!(channel.tx.lock().is_some());
-        tokio::time::timeout(HANG_GUARD, channel.stop())
-            .await
-            .expect("typed stop must cancel the active bot")
-            .unwrap();
-        tokio::time::timeout(HANG_GUARD, listener)
-            .await
-            .expect("typed listener must return after stop")
-            .expect("typed listener task panicked")
-            .unwrap();
+        let second_start = channel
+            .start_typed_with(sink.as_ref(), OfflineTransport, OfflineHttp)
+            .await;
+        assert!(
+            second_start.is_err(),
+            "only one typed listener may own the bot"
+        );
+        if iteration == 0 {
+            listener.abort();
+            assert!(listener.await.unwrap_err().is_cancelled());
+        } else {
+            tokio::time::timeout(HANG_GUARD, channel.stop())
+                .await
+                .expect("typed stop must cancel the active bot")
+                .unwrap();
+            tokio::time::timeout(HANG_GUARD, listener)
+                .await
+                .expect("typed listener must return after stop")
+                .expect("typed listener task panicked")
+                .unwrap();
+        }
+        tokio::time::timeout(HANG_GUARD, async {
+            while channel.typed_listener_active.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("typed listener ownership must be released before restart");
         assert!(channel.bot_handle.lock().is_none());
         assert!(channel.client.lock().is_none());
         assert!(channel.tx.lock().is_none());
+        assert!(!channel.typed_listener_active.load(Ordering::Acquire));
     }
 
     assert!(sink.ingress.lock().await.is_empty());
@@ -1228,17 +1248,6 @@ mod v2 {
                 .unsupported
         );
         assert!(channel.stop().await.is_ok());
-        struct NoSink;
-        #[async_trait]
-        impl crate::channel::ChannelInboundSink for NoSink {
-            async fn push(
-                &self,
-                _ingress: tinychannels_bus::ChannelIngress,
-            ) -> Result<(), crate::channel::ChannelSendError> {
-                Ok(())
-            }
-        }
-        assert!(channel.start(&NoSink).await.is_ok());
     }
 
     #[tokio::test]

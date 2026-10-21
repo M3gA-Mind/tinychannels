@@ -6,6 +6,7 @@ use crate::providers::whatsapp_shared::inbound::{
     self, DownloadedAttachment, InboundKind, MAX_INBOUND_MEDIA_BYTES, MAX_INBOUND_VOICE_BYTES,
 };
 use crate::providers::whatsapp_shared::vcard;
+use sha2::Digest as _;
 use tinychannels_bus::{
     ChannelEvent, ChannelEventKind, ChannelInboundEnvelope, ChannelIngress, ChannelReaction,
     ChannelRef, ContentPart, ConversationRef, SenderRef,
@@ -184,12 +185,16 @@ impl InboundState {
         sender_name: Option<String>,
         is_group: bool,
     ) -> Result<bool, WaFailure> {
+        let _delivery = self.typed_delivery.lock().await;
         if self.events.is_none() && self.typed_tx.is_none() {
             return Ok(false);
         }
         let info = &inbound.info;
         let id = if info.id.is_empty() && self.typed_tx.is_some() {
-            uuid::Uuid::new_v4().to_string()
+            let material = serde_json::to_vec(&**info)
+                .map_err(|_| WaFailure::uncertain("WhatsApp message identity is unavailable"))?;
+            let digest = sha2::Sha256::digest(material);
+            format!("wa-web-{}", hex::encode(digest))
         } else {
             info.id.clone()
         };
@@ -327,9 +332,18 @@ impl InboundState {
                 .map_err(|_| {
                     WaFailure::uncertain("WhatsApp ingress queue is no longer available")
                 })?;
-            result.await.map_err(|_| {
-                WaFailure::uncertain("WhatsApp ingress acknowledgement was cancelled")
-            })?
+            result
+                .await
+                .map_err(|_| {
+                    WaFailure::uncertain("WhatsApp ingress acknowledgement was cancelled")
+                })?
+                .map(|()| true)
+                .map_err(|error| {
+                    WaFailure::uncertain(format!(
+                        "WhatsApp ingress delivery failed: {}",
+                        error.message
+                    ))
+                })?
         } else if let Some(sink) = &self.events {
             sink.publish_ingress(ingress).await.map_err(|_| {
                 WaFailure::uncertain("WhatsApp ingress could not be delivered to the host")
@@ -496,7 +510,7 @@ impl InboundState {
                     })
                     .await
                     .is_ok()
-                    && result.await.unwrap_or(false)
+                    && result.await.is_ok_and(|result| result.is_ok())
             } else if let Some(sink) = &self.events {
                 sink.publish_ingress(ChannelIngress::Event(event))
                     .await

@@ -99,6 +99,7 @@ struct InboundState {
     client: Arc<Mutex<Option<Arc<dyn OutboundClient>>>>,
     /// Provider message ids already published (the SDK may redeliver).
     seen: Arc<Mutex<SeenSet>>,
+    typed_delivery: Arc<tokio::sync::Mutex<()>>,
     /// Author of each recent inbound message, for group reactions and quotes.
     authors: Arc<Mutex<BoundedMap>>,
     identity: Arc<identity::LinkedIdentity>,
@@ -107,7 +108,72 @@ struct InboundState {
 #[cfg(feature = "whatsapp-web")]
 struct TypedIngressDelivery {
     ingress: tinychannels_bus::ChannelIngress,
-    accepted: tokio::sync::oneshot::Sender<bool>,
+    accepted:
+        tokio::sync::oneshot::Sender<std::result::Result<(), crate::channel::ChannelSendError>>,
+}
+
+#[cfg(feature = "whatsapp-web")]
+struct TypedListenerOwnership {
+    active: Arc<AtomicBool>,
+    bot_handle: Arc<Mutex<Option<whatsapp_rust::bot::BotHandle>>>,
+    client: Arc<Mutex<Option<Arc<dyn OutboundClient>>>>,
+    connected: Arc<AtomicBool>,
+    tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ChannelMessage>>>>,
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[derive(Debug)]
+enum TypedDeliveryFailure {
+    Cancelled,
+    Rejected(crate::channel::ChannelSendError),
+}
+
+#[cfg(feature = "whatsapp-web")]
+async fn deliver_typed_ingress(
+    sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ingress: &tinychannels_bus::ChannelIngress,
+    shutdown: &tokio::sync::Notify,
+    cancellation: &mut tokio::sync::watch::Receiver<bool>,
+) -> std::result::Result<(), TypedDeliveryFailure> {
+    loop {
+        let result = tokio::select! {
+            biased;
+            _ = shutdown.notified() => return Err(TypedDeliveryFailure::Cancelled),
+            _ = cancellation.wait_for(|value| *value) => return Err(TypedDeliveryFailure::Cancelled),
+            result = sink.push(ingress.clone()) => result,
+        };
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error) if error.retryable => {
+                tokio::select! {
+                    biased;
+                    _ = shutdown.notified() => return Err(TypedDeliveryFailure::Cancelled),
+                    _ = cancellation.wait_for(|value| *value) => return Err(TypedDeliveryFailure::Cancelled),
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+                }
+            }
+            Err(error) => return Err(TypedDeliveryFailure::Rejected(error)),
+        }
+    }
+}
+
+#[cfg(feature = "whatsapp-web")]
+impl Drop for TypedListenerOwnership {
+    fn drop(&mut self) {
+        self.connected.store(false, Ordering::Release);
+        *self.client.lock() = None;
+        *self.tx.lock() = None;
+        if let Some(handle) = self.bot_handle.lock().take() {
+            handle.abort();
+            let active = Arc::clone(&self.active);
+            tokio::spawn(async move {
+                let _ = handle.await;
+                active.store(false, Ordering::Release);
+            });
+        } else {
+            self.active.store(false, Ordering::Release);
+        }
+    }
 }
 
 #[cfg(feature = "whatsapp-web")]
@@ -304,6 +370,8 @@ pub struct WhatsAppWebChannel {
     allowed_numbers: Vec<String>,
     /// Bot run handle, retained for graceful shutdown.
     bot_handle: Arc<Mutex<Option<whatsapp_rust::bot::BotHandle>>>,
+    /// Guards the typed listener's single-owner lifecycle.
+    typed_listener_active: Arc<AtomicBool>,
     /// Live client used for outbound calls; populated after `Bot::build` returns.
     client: Arc<Mutex<Option<Arc<dyn OutboundClient>>>>,
     /// Liveness signal driven by upstream `Event::Connected` / `LoggedOut` /
@@ -336,6 +404,7 @@ pub struct WhatsAppWebChannel {
     /// Where typed inbound messages and events are published.
     events: Option<Arc<dyn crate::host::EventSink>>,
     seen: Arc<Mutex<SeenSet>>,
+    typed_delivery: Arc<tokio::sync::Mutex<()>>,
     authors: Arc<Mutex<BoundedMap>>,
     /// The account the linked session is authenticated as.
     identity: Arc<identity::LinkedIdentity>,
@@ -364,6 +433,7 @@ impl WhatsAppWebChannel {
             pair_code,
             allowed_numbers,
             bot_handle: Arc::new(Mutex::new(None)),
+            typed_listener_active: Arc::new(AtomicBool::new(false)),
             client: Arc::new(Mutex::new(None)),
             connected: Arc::new(AtomicBool::new(false)),
             allowed_groups: Arc::new(Mutex::new(HashSet::new())),
@@ -376,6 +446,7 @@ impl WhatsAppWebChannel {
             voice_synthesis: false,
             events: None,
             seen: Arc::new(Mutex::new(SeenSet::new(4096))),
+            typed_delivery: Arc::new(tokio::sync::Mutex::new(())),
             authors: Arc::new(Mutex::new(BoundedMap::new(4096))),
             identity: Arc::new(identity::LinkedIdentity::default()),
         }
@@ -648,6 +719,7 @@ impl WhatsAppWebChannel {
             voice_media_store: self.voice_media_store.clone(),
             client: Arc::clone(&self.client),
             seen: Arc::clone(&self.seen),
+            typed_delivery: Arc::clone(&self.typed_delivery),
             authors: Arc::clone(&self.authors),
             identity: Arc::clone(&self.identity),
         }
@@ -774,7 +846,7 @@ impl WhatsAppWebChannel {
             );
         }
 
-        loop {
+        'listener: loop {
             tokio::select! {
                 biased;
                 _ = shutdown_notify.notified() => break,
@@ -792,23 +864,48 @@ impl WhatsAppWebChannel {
                     }
                 } => {
                     let Some(delivery) = delivery else { break; };
-                    let accepted = if let Some(sink) = typed_sink {
-                        tokio::select! {
-                            biased;
-                            _ = shutdown_notify.notified() => false,
-                            _ = async {
-                                if let Some(cancellation) = cancellation.as_mut() {
-                                    let _ = cancellation.wait_for(|value| *value).await;
-                                } else {
-                                    std::future::pending::<()>().await;
-                                }
-                            } => false,
-                            result = sink.push(delivery.ingress) => result.is_ok(),
-                        }
-                    } else {
-                        false
+                    let Some(sink) = typed_sink else {
+                        let _ = delivery.accepted.send(Err(crate::channel::ChannelSendError {
+                            kind: crate::channel::SendErrorKind::Forbidden,
+                            message: "WhatsApp Web typed ingress has no host sink".into(),
+                            ..Default::default()
+                        }));
+                        continue;
                     };
-                    let _ = delivery.accepted.send(accepted);
+                    let Some(cancellation) = cancellation.as_mut() else {
+                        let _ = delivery.accepted.send(Err(crate::channel::ChannelSendError {
+                            kind: crate::channel::SendErrorKind::Forbidden,
+                            message: "WhatsApp Web typed listener has no cancellation owner".into(),
+                            ..Default::default()
+                        }));
+                        continue;
+                    };
+                    match deliver_typed_ingress(
+                        sink,
+                        &delivery.ingress,
+                        shutdown_notify.as_ref(),
+                        cancellation,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            let _ = delivery.accepted.send(Ok(()));
+                        }
+                        Err(TypedDeliveryFailure::Cancelled) => {
+                            let _ = delivery.accepted.send(Err(crate::channel::ChannelSendError {
+                                kind: crate::channel::SendErrorKind::Transient,
+                                message: "WhatsApp Web listener stopped before ingress acceptance".into(),
+                                retryable: true,
+                                ..Default::default()
+                            }));
+                            break 'listener;
+                        }
+                        Err(TypedDeliveryFailure::Rejected(error)) => {
+                            let _ = delivery.accepted.send(Err(error.clone()));
+                            self.stop_bot().await;
+                            return Err(anyhow!("WhatsApp Web typed ingress was rejected: {}", error.message));
+                        }
+                    }
                 }
             }
         }
@@ -843,6 +940,16 @@ impl WhatsAppWebChannel {
         T: whatsapp_rust::transport::TransportFactory + 'static,
         H: whatsapp_rust::http::HttpClient + 'static,
     {
+        self.typed_listener_active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| anyhow!("WhatsApp Web listener is already running"))?;
+        let _ownership = TypedListenerOwnership {
+            active: Arc::clone(&self.typed_listener_active),
+            bot_handle: Arc::clone(&self.bot_handle),
+            client: Arc::clone(&self.client),
+            connected: Arc::clone(&self.connected),
+            tx: Arc::clone(&self.tx),
+        };
         self.listener_cancel.send_replace(false);
         self.listen_typed_with(
             sink,

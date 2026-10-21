@@ -105,6 +105,7 @@ async fn typed_listener_retries_rejected_ingress_and_dedupes_only_after_acceptan
     let (typed_tx, mut deliveries) = tokio::sync::mpsc::channel(2);
     rig.state.typed_tx = Some(typed_tx);
     let inbound = dm("web-typed-1", text("hello from WhatsApp Web"));
+    let sink = RetryOnceSink::default();
 
     let state = rig.state.clone();
     let first_inbound = inbound.clone();
@@ -119,24 +120,12 @@ async fn typed_listener_retries_rejected_ingress_and_dedupes_only_after_acceptan
             )
             .await
     });
-    let rejected = deliveries.recv().await.expect("typed ingress was queued");
-    let tinychannels_bus::ChannelIngress::Inbound(envelope) = &rejected.ingress else {
-        panic!("text message must retain its inbound envelope");
-    };
-    assert_eq!(envelope.message_id, "web-typed-1");
-    assert_eq!(envelope.channel.id, "whatsapp");
-    assert_eq!(envelope.conversation.id, "+15550001111");
-    assert_eq!(envelope.sender.name.as_deref(), Some("Ada"));
-    assert_eq!(envelope.text, "hello from WhatsApp Web");
-    rejected.accepted.send(false).unwrap();
-    assert!(first.await.unwrap().is_err());
-
     let state = rig.state.clone();
-    let retry_inbound = inbound.clone();
-    let retry = tokio::spawn(async move {
+    let duplicate_inbound = inbound.clone();
+    let duplicate = tokio::spawn(async move {
         state
             .publish_typed(
-                &retry_inbound,
+                &duplicate_inbound,
                 "+15550001111",
                 "+15550001111",
                 Some("Ada".into()),
@@ -144,16 +133,36 @@ async fn typed_listener_retries_rejected_ingress_and_dedupes_only_after_acceptan
             )
             .await
     });
-    let accepted = deliveries
-        .recv()
-        .await
-        .expect("rejected item must be retried");
-    assert!(matches!(
-        accepted.ingress,
-        tinychannels_bus::ChannelIngress::Inbound(_)
-    ));
-    accepted.accepted.send(true).unwrap();
-    assert!(retry.await.unwrap().unwrap());
+    let delivery = deliveries.recv().await.expect("typed ingress was queued");
+    let tinychannels_bus::ChannelIngress::Inbound(envelope) = &delivery.ingress else {
+        panic!("text message must retain its inbound envelope");
+    };
+    assert_eq!(envelope.message_id, "web-typed-1");
+    assert_eq!(envelope.channel.id, "whatsapp");
+    assert_eq!(envelope.conversation.id, "+15550001111");
+    assert_eq!(envelope.sender.name.as_deref(), Some("Ada"));
+    assert_eq!(envelope.text, "hello from WhatsApp Web");
+    let (_cancel, mut cancellation) = tokio::sync::watch::channel(false);
+    super::super::deliver_typed_ingress(
+        &sink,
+        &delivery.ingress,
+        &tokio::sync::Notify::new(),
+        &mut cancellation,
+    )
+    .await
+    .expect("retryable sink rejection should retry the pending ingress");
+    delivery.accepted.send(Ok(())).unwrap();
+    assert!(first.await.unwrap().unwrap());
+    assert!(duplicate.await.unwrap().unwrap());
+    assert_eq!(sink.attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+    let accepted = sink.accepted.lock().await;
+    assert_eq!(accepted.len(), 1, "one provider callback is accepted once");
+    let tinychannels_bus::ChannelIngress::Inbound(accepted_envelope) = &accepted[0] else {
+        panic!("accepted callback must preserve the inbound envelope");
+    };
+    assert_eq!(accepted_envelope.message_id, "web-typed-1");
+    assert_eq!(accepted_envelope.text, "hello from WhatsApp Web");
+    drop(accepted);
 
     assert!(
         rig.state
@@ -171,6 +180,154 @@ async fn typed_listener_retries_rejected_ingress_and_dedupes_only_after_acceptan
         deliveries.try_recv().is_err(),
         "accepted duplicate is suppressed"
     );
+}
+
+#[tokio::test]
+async fn missing_provider_message_id_uses_a_stable_deduplication_identity() {
+    let mut rig = rig();
+    rig.state.events = None;
+    let (typed_tx, mut deliveries) = tokio::sync::mpsc::channel(2);
+    rig.state.typed_tx = Some(typed_tx);
+    let inbound = dm("", text("message without provider id"));
+    let state = rig.state.clone();
+    let first_inbound = inbound.clone();
+    let first = tokio::spawn(async move {
+        state
+            .publish_typed(
+                &first_inbound,
+                "+15550001111",
+                "+15550001111",
+                Some("Ada".into()),
+                false,
+            )
+            .await
+    });
+    let accepted = deliveries.recv().await.expect("typed message is queued");
+    let tinychannels_bus::ChannelIngress::Inbound(envelope) = &accepted.ingress else {
+        panic!("typed message must retain its envelope");
+    };
+    assert!(envelope.message_id.starts_with("wa-web-"));
+    accepted.accepted.send(Ok(())).unwrap();
+    assert!(first.await.unwrap().unwrap());
+    assert!(publish(&rig, &inbound).await.unwrap());
+    assert!(
+        deliveries.try_recv().is_err(),
+        "redelivery with a missing provider id must reuse its stable fallback identity"
+    );
+}
+
+#[tokio::test]
+async fn cancelled_typed_delivery_is_not_committed_and_provider_redelivery_succeeds() {
+    let mut rig = rig();
+    rig.state.events = None;
+    let (typed_tx, mut deliveries) = tokio::sync::mpsc::channel(2);
+    rig.state.typed_tx = Some(typed_tx);
+    let inbound = dm("web-cancel-retry", text("retry after stop"));
+    let state = rig.state.clone();
+    let inbound_for_first = inbound.clone();
+    let first = tokio::spawn(async move {
+        state
+            .publish_typed(
+                &inbound_for_first,
+                "+15550001111",
+                "+15550001111",
+                Some("Ada".into()),
+                false,
+            )
+            .await
+    });
+    let pending = deliveries.recv().await.expect("provider callback queued");
+    let (cancel, mut cancellation) = tokio::sync::watch::channel(false);
+    let sink = Arc::new(BlockingSink::default());
+    let entered = sink.entered.clone();
+    let shutdown = tokio::sync::Notify::new();
+    let ingress = pending.ingress.clone();
+    let delivery = tokio::spawn(async move {
+        super::super::deliver_typed_ingress(sink.as_ref(), &ingress, &shutdown, &mut cancellation)
+            .await
+    });
+    entered.notified().await;
+    // No success acknowledgement can escape from a blocked host sink.
+    cancel.send_replace(true);
+    assert!(matches!(
+        delivery.await.unwrap(),
+        Err(super::super::TypedDeliveryFailure::Cancelled)
+    ));
+    pending
+        .accepted
+        .send(Err(crate::channel::ChannelSendError {
+            kind: crate::channel::SendErrorKind::Transient,
+            message: "listener stopped before acceptance".into(),
+            retryable: true,
+            ..Default::default()
+        }))
+        .unwrap();
+    assert!(first.await.unwrap().is_err());
+
+    let state = rig.state.clone();
+    let inbound_for_retry = inbound.clone();
+    let retry = tokio::spawn(async move {
+        state
+            .publish_typed(
+                &inbound_for_retry,
+                "+15550001111",
+                "+15550001111",
+                Some("Ada".into()),
+                false,
+            )
+            .await
+    });
+    let redelivery = deliveries
+        .recv()
+        .await
+        .expect("unaccepted event is redelivered");
+    redelivery.accepted.send(Ok(())).unwrap();
+    assert!(retry.await.unwrap().unwrap());
+}
+
+#[derive(Default)]
+struct RetryOnceSink {
+    attempts: std::sync::atomic::AtomicUsize,
+    accepted: tokio::sync::Mutex<Vec<tinychannels_bus::ChannelIngress>>,
+}
+
+#[derive(Default)]
+struct BlockingSink {
+    entered: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait::async_trait]
+impl crate::channel::ChannelInboundSink for BlockingSink {
+    async fn push(
+        &self,
+        _ingress: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.entered.notify_one();
+        std::future::pending().await
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::channel::ChannelInboundSink for RetryOnceSink {
+    async fn push(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        if self
+            .attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            == 0
+        {
+            return Err(crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::Transient,
+                message: "temporary sink outage".into(),
+                retryable: true,
+                ..Default::default()
+            });
+        }
+        self.accepted.lock().await.push(ingress);
+        Ok(())
+    }
 }
 
 fn envelopes(rig: &Rig) -> Vec<ChannelInboundEnvelope> {
