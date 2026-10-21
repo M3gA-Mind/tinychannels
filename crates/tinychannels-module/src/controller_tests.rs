@@ -2417,7 +2417,11 @@ async fn configured_mattermost_reactions_use_native_v4_without_managed_fallback(
         )
         .await
         .expect_err("native API rejection must be returned to the caller");
-    assert!(api_error.to_string().contains("HTTP 403"));
+    assert!(
+        api_error
+            .to_string()
+            .contains("Mattermost reaction was rejected")
+    );
 
     let before_invalid = server.received_requests().await.unwrap().len();
     assert!(
