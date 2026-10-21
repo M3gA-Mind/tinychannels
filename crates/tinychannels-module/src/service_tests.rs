@@ -4325,7 +4325,6 @@ async fn v1_discord_send_uses_configured_channel_when_recipient_is_empty() {
     Mock::given(method("POST"))
         .and(path("/channels/555000111/messages"))
         .and(header("authorization", "Bot MTIzNDU2.ts.hmac"))
-        .and(body_json(serde_json::json!({"content": "v1 proactive"})))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "id": "123456789012345678"
         })))
@@ -4362,11 +4361,14 @@ async fn v1_discord_send_uses_configured_channel_when_recipient_is_empty() {
         .await
         .insert(instance.clone(), running);
 
-    channels
+    let result = channels
         .send_message(instance, SendMessage::new("v1 proactive", ""))
-        .await
-        .expect("the configured Discord channel is the v1 fallback target");
+        .await;
     let requests = rest.received_requests().await.unwrap();
+    assert!(
+        result.is_ok(),
+        "configured Discord target should be used; result={result:?}, requests={requests:?}"
+    );
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].url.path(), "/channels/555000111/messages");
     assert_eq!(
