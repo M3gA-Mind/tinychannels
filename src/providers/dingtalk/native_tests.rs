@@ -199,7 +199,8 @@ async fn session_webhook_errors_are_sanitized_and_keep_delivery_uncertainty() {
                 &Step::Text("reply".into()),
             )
             .await
-            .expect_err("non-success webhook status must not produce success");
+            .err()
+            .expect("non-success webhook status must not produce success");
 
         assert_eq!(error.kind, expected_kind);
         assert_eq!(error.sent_before_error, expected_sent);
@@ -238,7 +239,8 @@ async fn session_webhook_rejects_nonzero_application_error_codes() {
             &Step::Text("reply".into()),
         )
         .await
-        .expect_err("HTTP 200 does not mean the webhook accepted the message");
+        .err()
+        .expect("HTTP 200 does not mean the webhook accepted the message");
 
     assert_eq!(error.kind, SendErrorKind::BadFormat);
     assert!(!error.sent_before_error);
