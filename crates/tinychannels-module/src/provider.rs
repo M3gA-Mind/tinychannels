@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tinybus::{Error, Result};
-use tinychannels::host::{EventSink, LifecycleRegistry, ShutdownHook};
+use tinychannels::host::{LifecycleRegistry, ShutdownHook};
 use tinychannels::{Channel, ChannelHostBuilder, SendMessage};
 use tinychannels_bus::{ChannelSupervisionPolicy, HostEventPublication, HostTranscriptionRequest};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
@@ -335,6 +335,30 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
 
 pub(crate) struct ModuleEvents(pub(crate) HostChannels, pub(crate) String);
 
+fn scope_channel_event(
+    account_id: &str,
+    mut event: tinychannels_bus::ChannelEvent,
+) -> tinychannels_bus::ChannelEvent {
+    // The module start call is the authenticated source of instance scope;
+    // provider payloads cannot choose or spoof their account identity.
+    event.channel.id = tinychannels_bus::provider_id(account_id).to_owned();
+    event.channel.account_id = Some(account_id.to_owned());
+    let kind = match &event.event {
+        tinychannels_bus::ChannelEventKind::Typing { .. } => "typing",
+        tinychannels_bus::ChannelEventKind::ReadReceipt { .. } => "read_receipt",
+        tinychannels_bus::ChannelEventKind::DeliveredReceipt { .. } => "delivered_receipt",
+        tinychannels_bus::ChannelEventKind::ReactionAdded { .. } => "reaction_added",
+        tinychannels_bus::ChannelEventKind::ReactionRemoved { .. } => "reaction_removed",
+        tinychannels_bus::ChannelEventKind::OutboundReaction { .. } => "outbound_reaction",
+        tinychannels_bus::ChannelEventKind::MessageUpdated { .. } => "message_updated",
+        tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "message_deleted",
+        tinychannels_bus::ChannelEventKind::Presence { .. } => "presence",
+        tinychannels_bus::ChannelEventKind::Lifecycle { .. } => "lifecycle",
+    };
+    event.event_id = format!("{account_id}:{kind}:{}", event.event_id);
+    event
+}
+
 #[async_trait::async_trait]
 impl tinychannels::host::EventSink for ModuleEvents {
     async fn publish(
@@ -355,25 +379,9 @@ impl tinychannels::host::EventSink for ModuleEvents {
 
     async fn publish_channel_event(
         &self,
-        mut event: tinychannels_bus::ChannelEvent,
+        event: tinychannels_bus::ChannelEvent,
     ) -> anyhow::Result<()> {
-        // The module start call is the authenticated source of instance scope;
-        // provider payloads cannot choose or spoof their account identity.
-        event.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
-        event.channel.account_id = Some(self.1.clone());
-        let kind = match &event.event {
-            tinychannels_bus::ChannelEventKind::Typing { .. } => "typing",
-            tinychannels_bus::ChannelEventKind::ReadReceipt { .. } => "read_receipt",
-            tinychannels_bus::ChannelEventKind::DeliveredReceipt { .. } => "delivered_receipt",
-            tinychannels_bus::ChannelEventKind::ReactionAdded { .. } => "reaction_added",
-            tinychannels_bus::ChannelEventKind::ReactionRemoved { .. } => "reaction_removed",
-            tinychannels_bus::ChannelEventKind::OutboundReaction { .. } => "outbound_reaction",
-            tinychannels_bus::ChannelEventKind::MessageUpdated { .. } => "message_updated",
-            tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "message_deleted",
-            tinychannels_bus::ChannelEventKind::Presence { .. } => "presence",
-            tinychannels_bus::ChannelEventKind::Lifecycle { .. } => "lifecycle",
-        };
-        event.event_id = format!("{}:{}:{kind}", self.1, event.event_id);
+        let event = scope_channel_event(&self.1, event);
         self.0.deliver_event(event).await.map_err(|error| {
             tracing::warn!(%error, "channel host ingress callback failed");
             anyhow::anyhow!(error.to_string())
@@ -449,22 +457,13 @@ impl tinychannels::channel::ChannelInboundSink for ModuleEvents {
         &self,
         event: tinychannels_bus::ChannelEvent,
     ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
-        self.publish_channel_event(event)
+        self.0
+            .try_deliver_event(scope_channel_event(&self.1, event))
             .await
-            .map(|_| ())
             .map_err(|error| {
-                tracing::warn!(%error, "channel host ingress callback failed");
-                host_ingress_error()
+                tracing::warn!(message = %error.message, "channel host ingress callback failed");
+                error
             })
-    }
-}
-
-fn host_ingress_error() -> tinychannels::channel::ChannelSendError {
-    tinychannels::channel::ChannelSendError {
-        kind: tinychannels::channel::SendErrorKind::Transient,
-        message: "channel host ingress callback failed".into(),
-        retryable: true,
-        ..Default::default()
     }
 }
 

@@ -632,6 +632,61 @@ async fn module_adapter_ingress_returns_retryable_error_when_host_rejects_event(
 }
 
 #[tokio::test]
+async fn module_adapter_ingress_returns_non_retryable_error_when_event_is_oversized() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, _callback, _server) = connected_host().await;
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    let error = sink
+        .push_event(tinychannels_bus::ChannelEvent {
+            version: 2,
+            event_id: "too-large".into(),
+            source_event_id: None,
+            source_timestamp: None,
+            channel: Default::default(),
+            conversation: None,
+            event: tinychannels_bus::ChannelEventKind::Lifecycle {
+                state: "connected".into(),
+                reason: Some("x".repeat(140 * 1024)),
+            },
+        })
+        .await
+        .expect_err("oversized event must be rejected without requesting retry");
+
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::BadFormat);
+    assert!(!error.retryable);
+    assert_eq!(error.message, "channel host rejected ingress payload");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_adapter_ingress_returns_non_retryable_error_when_event_host_is_closed() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, _callback, _server) = connected_host().await;
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    host.shutdown().await.unwrap();
+    let error = sink
+        .push_event(tinychannels_bus::ChannelEvent {
+            version: 2,
+            event_id: "after-shutdown".into(),
+            source_event_id: None,
+            source_timestamp: None,
+            channel: Default::default(),
+            conversation: None,
+            event: tinychannels_bus::ChannelEventKind::Lifecycle {
+                state: "connected".into(),
+                reason: None,
+            },
+        })
+        .await
+        .expect_err("closed event consumer must be reported as non-retryable");
+
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Unknown);
+    assert!(!error.retryable);
+}
+
+#[tokio::test]
 async fn module_adapter_ingress_returns_retryable_error_when_inbound_is_oversized() {
     use tinychannels::channel::ChannelInboundSink;
 
@@ -644,7 +699,7 @@ async fn module_adapter_ingress_returns_retryable_error_when_inbound_is_oversize
 
     assert_eq!(error.kind, tinychannels::channel::SendErrorKind::BadFormat);
     assert!(!error.retryable);
-    assert_eq!(error.message, "channel host rejected inbound payload");
+    assert_eq!(error.message, "channel host rejected ingress payload");
     host.shutdown().await.unwrap();
 }
 
