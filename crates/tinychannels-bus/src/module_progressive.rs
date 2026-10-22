@@ -252,8 +252,11 @@ pub enum ProgressiveResult {
     Updated,
     /// Canonical output events were observed; typed terminal delivery results
     /// are returned in event order and retain receipts and partial failures.
+    /// Failed output-event callbacks are reported by sequence without
+    /// discarding provider delivery results.
     OutputUpdated {
         deliveries: Vec<ProgressiveTransportResult>,
+        output_event_failures: Vec<u64>,
     },
     Closed,
 }

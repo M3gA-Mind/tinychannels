@@ -47,6 +47,11 @@ struct FeedOutput {
     events: Vec<ChannelOutputEvent>,
 }
 
+struct AppliedOutput {
+    deliveries: Vec<ProgressiveTransportResult>,
+    output_event_failures: Vec<u64>,
+}
+
 impl Sender {
     async fn output_event(
         &self,
@@ -311,13 +316,16 @@ impl Replies {
                     .await
                     .map_err(|_| Error::failed("progressive reply is closed"))?;
                 drop(closing);
-                let deliveries = wait
+                let applied = wait
                     .await
                     .map_err(|_| Error::failed("progressive worker stopped"))??;
-                if deliveries.is_empty() {
+                if applied.deliveries.is_empty() && applied.output_event_failures.is_empty() {
                     Ok(ProgressiveResult::Updated)
                 } else {
-                    Ok(ProgressiveResult::OutputUpdated { deliveries })
+                    Ok(ProgressiveResult::OutputUpdated {
+                        deliveries: applied.deliveries,
+                        output_event_failures: applied.output_event_failures,
+                    })
                 }
             }
             ProgressiveCommand::Finish { handle, text } => {
@@ -563,11 +571,22 @@ async fn apply_output(
     scope: &OutputScope,
     sequence: u64,
     events: Vec<ChannelOutputEvent>,
-) -> Result<Vec<ProgressiveTransportResult>> {
+) -> Result<AppliedOutput> {
+    let event_count =
+        u64::try_from(events.len()).map_err(|_| Error::failed("progressive sequence overflow"))?;
+    if event_count > 0 {
+        sequence
+            .checked_add(event_count - 1)
+            .ok_or_else(|| Error::failed("progressive sequence overflow"))?;
+    }
     let mut deliveries = Vec::new();
+    let mut output_event_failures = Vec::new();
     for (offset, event) in events.into_iter().enumerate() {
         let sequence = sequence
-            .checked_add(offset as u64)
+            .checked_add(
+                u64::try_from(offset)
+                    .map_err(|_| Error::failed("progressive sequence overflow"))?,
+            )
             .ok_or_else(|| Error::failed("progressive sequence overflow"))?;
         let event = match event {
             ChannelOutputEvent::FinalMessage {
@@ -577,7 +596,8 @@ async fn apply_output(
             } => {
                 let delivery = sender
                     .send_typed(scope, sequence, parts.clone(), text.clone())
-                    .await?;
+                    .await
+                    .unwrap_or(ProgressiveTransportResult::Failed);
                 let receipt = match &delivery {
                     ProgressiveTransportResult::Outcome(outcome) => Some(outcome.receipt.clone()),
                     _ => original_receipt,
@@ -591,7 +611,13 @@ async fn apply_output(
             }
             event => event,
         };
-        sender.output_event(scope, sequence, event.clone()).await?;
+        if sender
+            .output_event(scope, sequence, event.clone())
+            .await
+            .is_err()
+        {
+            output_event_failures.push(sequence);
+        }
         match event {
             ChannelOutputEvent::TextDelta { text, .. } => reply.on_text_delta(&text),
             ChannelOutputEvent::ThinkingDelta { text, .. } => reply.on_thinking_delta(&text),
@@ -602,7 +628,10 @@ async fn apply_output(
             _ => {}
         }
     }
-    Ok(deliveries)
+    Ok(AppliedOutput {
+        deliveries,
+        output_event_failures,
+    })
 }
 
 fn apply(reply: &mut ProgressiveReply, events: Vec<ProgressiveEvent>) -> Result<()> {

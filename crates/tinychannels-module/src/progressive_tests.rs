@@ -8,6 +8,7 @@ struct Callback {
     sends: Arc<Mutex<Vec<Value>>>,
     requests: Arc<Mutex<Vec<ProgressiveTransportRequest>>>,
     result: Arc<Mutex<Option<ProgressiveTransportResult>>>,
+    failed_output_sequences: Arc<Mutex<Vec<u64>>>,
     block: bool,
     entered: Arc<Notify>,
     released: Arc<Notify>,
@@ -23,6 +24,13 @@ impl Callback {
             return Err(Error::failed("unexpected callback"));
         };
         self.requests.lock().await.push((*request).clone());
+        if let ProgressiveTransportRequest::OutputEvent { sequence, .. } = &*request {
+            if self.failed_output_sequences.lock().await.contains(sequence) {
+                return Ok(ChannelBackendResult::ProgressiveTransport(
+                    ProgressiveTransportResult::Failed,
+                ));
+            }
+        }
         if let ProgressiveTransportRequest::Send { message, .. } = &*request {
             self.sends.lock().await.push(message.clone());
             if self.block {
@@ -412,8 +420,18 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
             .execute(ProgressiveCommand::FeedOutput {
                 handle: handle.clone(),
                 turn_id: Some("turn-1".into()),
-                channel_ref: None,
-                conversation: None,
+                channel_ref: Some(Box::new(tinychannels_bus::ChannelRef {
+                    id: "channel-ref".into(),
+                    account_id: Some("account-1".into()),
+                })),
+                conversation: Some(Box::new(tinychannels_bus::ConversationRef {
+                    kind: tinychannels_bus::ConversationKind::Thread,
+                    id: "conversation-1".into(),
+                    scope_id: Some("scope-1".into()),
+                    parent_id: Some("parent-1".into()),
+                    thread_id: Some("thread-1".into()),
+                    topic_id: None,
+                })),
                 sequence: 40,
                 events: events.clone(),
             })
@@ -425,6 +443,7 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
                 outcome.receipt.primary_platform_message_id = Some("fixture-message".into());
                 outcome
             }))],
+            output_event_failures: vec![],
         }
     );
     let requests = callback.requests.lock().await;
@@ -436,6 +455,8 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
         send_request,
         ProgressiveTransportRequest::SendTyped {
             turn_id: Some(turn_id),
+            channel_ref: Some(channel_ref),
+            conversation: Some(conversation),
             sequence: Some(41),
             idempotency_key: Some(key),
             parts,
@@ -443,6 +464,10 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
             ..
         } if turn_id == "turn-1"
             && key == &format!("progressive:{handle}:41")
+            && channel_ref.id == "channel-ref"
+            && channel_ref.account_id.as_deref() == Some("account-1")
+            && conversation.id == "conversation-1"
+            && conversation.thread_id.as_deref() == Some("thread-1")
             && parts == &final_parts
             && text == "complete"
     ));
@@ -455,10 +480,15 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
         output_requests[0],
         ProgressiveTransportRequest::OutputEvent {
             turn_id: Some(turn_id),
+            channel_ref: Some(channel_ref),
+            conversation: Some(conversation),
             sequence: 40,
             event,
             ..
-        } if turn_id == "turn-1" && **event == events[0]
+        } if turn_id == "turn-1"
+            && channel_ref.id == "channel-ref"
+            && conversation.id == "conversation-1"
+            && **event == events[0]
     ));
     assert!(matches!(
         output_requests[1],
@@ -471,6 +501,72 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
             && matches!(**event, ChannelOutputEvent::FinalMessage { receipt: Some(_), .. })
     ));
     drop(requests);
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn feed_output_returns_prior_and_current_receipts_when_output_event_callbacks_fail() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    *callback.failed_output_sequences.lock().await = vec![40];
+    let events = vec![
+        ChannelOutputEvent::FinalMessage {
+            text: "first".into(),
+            parts: vec![],
+            receipt: None,
+        },
+        ChannelOutputEvent::FinalMessage {
+            text: "second".into(),
+            parts: vec![],
+            receipt: None,
+        },
+    ];
+
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            turn_id: Some("turn-1".into()),
+            channel_ref: None,
+            conversation: None,
+            sequence: 40,
+            events,
+        })
+        .await
+        .expect("callback failures must not erase completed provider deliveries");
+
+    let ProgressiveResult::OutputUpdated {
+        deliveries,
+        output_event_failures,
+    } = result
+    else {
+        panic!("expected typed partial output result");
+    };
+    assert_eq!(deliveries.len(), 2);
+    for delivery in deliveries {
+        let ProgressiveTransportResult::Outcome(outcome) = delivery else {
+            panic!("expected provider receipt for each successful send");
+        };
+        assert_eq!(
+            outcome.receipt.primary_platform_message_id.as_deref(),
+            Some("fixture-message")
+        );
+    }
+    assert_eq!(output_event_failures, vec![40]);
+    assert_eq!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .filter(|request| matches!(request, ProgressiveTransportRequest::OutputEvent { .. }))
+            .count(),
+        2,
+        "a failed observation callback must not prevent later events from being processed"
+    );
     replies
         .execute(ProgressiveCommand::Close { handle })
         .await
