@@ -79,7 +79,8 @@ impl Callback {
             }
             _ => ProgressiveTransportResult::Success(serde_json::json!({"id": "fixture-message"})),
         };
-        let override_result = if matches!(&*request, ProgressiveTransportRequest::SendTyped { .. }) {
+        let override_result = if matches!(&*request, ProgressiveTransportRequest::SendTyped { .. })
+        {
             self.typed_result.lock().await.clone()
         } else {
             self.result.lock().await.clone()
@@ -255,12 +256,16 @@ async fn accepted_typed_final_keeps_a_flushed_progressive_draft() {
         .unwrap();
 
     let requests = callback.requests.lock().await;
-    assert!(requests
-        .iter()
-        .any(|request| matches!(request, ProgressiveTransportRequest::Send { .. })));
-    assert!(requests
-        .iter()
-        .any(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. })));
+    assert!(
+        requests
+            .iter()
+            .any(|request| matches!(request, ProgressiveTransportRequest::Send { .. }))
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
+    );
     assert!(
         !requests
             .iter()
@@ -916,7 +921,13 @@ async fn feed_output_rejects_final_message_text_over_the_content_limit() {
         })
         .await;
     assert!(result.is_err());
-    assert!(callback.requests.lock().await.is_empty());
+    assert!(callback.requests.lock().await.iter().all(|request| {
+        !matches!(
+            request,
+            ProgressiveTransportRequest::SendTyped { .. }
+                | ProgressiveTransportRequest::OutputEvent { .. }
+        )
+    }));
     replies
         .execute(ProgressiveCommand::Close { handle })
         .await

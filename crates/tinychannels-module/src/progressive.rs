@@ -692,8 +692,9 @@ async fn apply_scoped_output(
     events: Vec<ChannelOutputEvent>,
     output_replay: &Mutex<Option<OutputBatchReplay>>,
 ) -> Result<AppliedOutput> {
+    let applied = apply_output(reply, sender, scope, sequence, events, output_replay).await?;
     sender.set_scope(Some(scope.clone())).await;
-    apply_output(reply, sender, scope, sequence, events, output_replay).await
+    Ok(applied)
 }
 
 async fn apply_output(
@@ -729,10 +730,11 @@ async fn apply_output(
     let text = events
         .iter()
         .filter_map(|event| match event {
-            ChannelOutputEvent::TextDelta { text, .. } => Some(text.len()),
+            ChannelOutputEvent::TextDelta { text, .. }
+            | ChannelOutputEvent::FinalMessage { text, .. } => Some(text.len()),
             _ => None,
         })
-        .sum::<usize>();
+        .fold(0usize, usize::saturating_add);
     let thinking = events
         .iter()
         .filter_map(|event| match event {
@@ -771,17 +773,16 @@ async fn apply_output(
                     .send_typed(scope, sequence, parts.clone(), text.clone())
                     .await
                     .unwrap_or(ProgressiveTransportResult::Failed);
-                final_message_delivered = matches!(
-                    &delivery,
-                    ProgressiveTransportResult::Accepted | ProgressiveTransportResult::Success(_)
-                ) || matches!(
-                    &delivery,
-                    ProgressiveTransportResult::Outcome(outcome)
-                        if outcome.error.is_none()
-                            || outcome.receipt.primary_platform_message_id.is_some()
-                            || !outcome.receipt.platform_message_ids.is_empty()
-                            || !outcome.receipt.parts.is_empty()
-                );
+                final_message_delivered =
+                    matches!(&delivery, ProgressiveTransportResult::Success(_))
+                        || matches!(
+                            &delivery,
+                            ProgressiveTransportResult::Outcome(outcome)
+                                if outcome.error.is_none()
+                                    || outcome.receipt.primary_platform_message_id.is_some()
+                                    || !outcome.receipt.platform_message_ids.is_empty()
+                                    || !outcome.receipt.parts.is_empty()
+                        );
                 let receipt = match &delivery {
                     ProgressiveTransportResult::Outcome(outcome) => Some(outcome.receipt.clone()),
                     _ => original_receipt,
