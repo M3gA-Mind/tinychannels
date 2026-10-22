@@ -249,7 +249,10 @@ async fn channel_send_short_message_retries_plain_preserving_thread_and_reply() 
         .and(body_partial_json(
             serde_json::json!({ "parse_mode": "Markdown" }),
         ))
-        .respond_with(ResponseTemplate::new(400).set_body_string("can't parse entities"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "ok": false,
+            "description": "Bad Request: can't parse entities"
+        })))
         .with_priority(1)
         .mount(&server)
         .await;
