@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use super::bubbles::{flush_thinking_message, send_filler_message, send_typing_indicator};
 use super::draft::flush_streaming_edit;
-use super::finalize::{finalize_channel_reply, send_channel_reply};
 use super::finalize::cleanup_after_external_reply;
+use super::finalize::{finalize_channel_reply, send_channel_reply};
 use super::state::{StreamingState, TypingState};
 use super::{ProgressiveSender, channel_supports_progressive_ui};
 use tinychannels_bus::ChannelCapabilities;
