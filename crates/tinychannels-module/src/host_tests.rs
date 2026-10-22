@@ -861,6 +861,34 @@ async fn module_event_enrichment_separates_accounts_and_overwrites_provider_auth
 }
 
 #[tokio::test]
+async fn legacy_module_event_ingress_preserves_host_callback_failure() {
+    use tinychannels::host::EventSink;
+
+    let (host, callback, _server) = connected_host().await;
+    callback.event_failures.store(1, Ordering::SeqCst);
+    let error = crate::provider::ModuleEvents(host.clone(), "telegram:account-a".into())
+        .publish_ingress(tinychannels_bus::ChannelIngress::Event(
+            tinychannels_bus::ChannelEvent {
+                version: 2,
+                event_id: "callback-failure".into(),
+                source_event_id: None,
+                source_timestamp: None,
+                channel: Default::default(),
+                conversation: None,
+                event: tinychannels_bus::ChannelEventKind::Lifecycle {
+                    state: "connected".into(),
+                    reason: None,
+                },
+            },
+        ))
+        .await
+        .expect_err("legacy event ingress must report the host callback failure");
+
+    assert!(error.to_string().contains("fixture event failure"));
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 #[allow(
     deprecated,
     reason = "this test covers the legacy inbound bridge ordering contract"
