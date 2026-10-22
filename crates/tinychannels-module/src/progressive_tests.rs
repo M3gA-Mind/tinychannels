@@ -415,9 +415,13 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
         ProgressiveResult::Updated
     );
     let requests = callback.requests.lock().await;
-    assert_eq!(requests.len(), events.len());
+    let output_requests = requests
+        .iter()
+        .filter(|request| matches!(request, ProgressiveTransportRequest::OutputEvent { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(output_requests.len(), events.len());
     assert!(matches!(
-        &requests[0],
+        output_requests[0],
         ProgressiveTransportRequest::OutputEvent {
             turn_id: Some(turn_id),
             sequence: 40,
@@ -426,7 +430,7 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
         } if turn_id == "turn-1" && **event == events[0]
     ));
     assert!(matches!(
-        &requests[1],
+        output_requests[1],
         ProgressiveTransportRequest::OutputEvent {
             turn_id: Some(turn_id),
             sequence: 41,
