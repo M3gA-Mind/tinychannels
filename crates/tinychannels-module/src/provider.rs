@@ -355,7 +355,7 @@ fn scope_channel_event(
         tinychannels_bus::ChannelEventKind::Presence { .. } => "presence",
         tinychannels_bus::ChannelEventKind::Lifecycle { .. } => "lifecycle",
     };
-    event.event_id = format!("{account_id}:{kind}:{}", event.event_id);
+    event.event_id = format!("{account_id}:{}:{kind}", event.event_id);
     event
 }
 
