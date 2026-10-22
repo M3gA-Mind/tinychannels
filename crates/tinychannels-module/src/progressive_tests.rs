@@ -939,7 +939,7 @@ async fn rejected_output_keeps_the_previous_progressive_sender_scope() {
     };
     let mut reply = ProgressiveReply::new(
         Arc::new(sender.clone()),
-        "discord:fixture".into(),
+        "discord:fixture",
         Default::default(),
     );
     let output_replay = Mutex::new(None);
