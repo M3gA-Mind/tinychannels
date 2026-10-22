@@ -333,6 +333,29 @@ async fn prepared_legacy_payloads_use_the_legacy_provider_send_path() {
 }
 
 #[tokio::test]
+async fn prepared_legacy_provider_failure_keeps_the_named_send_error() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (channels, _callbacks, _server) =
+        channels_with_store(Arc::new(FailingChannel(calls.clone()))).await;
+    let intent = tinychannels::outbound_intent_from_legacy_message(
+        "fixture",
+        serde_json::json!({"content": "hello", "recipient": "room-7"}),
+    );
+
+    let error = channels
+        .send_channel_intent("fixture".into(), intent)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        BusError::MethodFailed { name, .. } if name == SEND_FAILED_ERROR
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    channels.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
     let bus = tinybus::transport::memory::MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
