@@ -76,6 +76,57 @@ impl Callback {
         })
     }
 
+    async fn transcribe_voice(
+        &self,
+        request: tinychannels_bus::HostVoiceTranscriptionRequest,
+    ) -> Result<tinychannels_bus::HostTranscriptionResult> {
+        assert_eq!(request.scope.turn_id, "turn-voice");
+        self.events.lock().await.push("scoped_transcription".into());
+        Ok(tinychannels_bus::HostTranscriptionResult {
+            text: "scoped words".into(),
+            language: request.language,
+            duration_secs: Some(2.0),
+        })
+    }
+
+    async fn synthesize_speech(
+        &self,
+        request: tinychannels_bus::HostSpeechSynthesisRequest,
+    ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
+        assert_eq!(request.scope.turn_id, "turn-voice");
+        self.events.lock().await.push("speech_synthesis".into());
+        Ok(tinychannels_bus::HostSpeechSynthesisResult {
+            audio_base64: "AQID".into(),
+            mime_type: "audio/ogg".into(),
+            duration_ms: Some(1250),
+        })
+    }
+
+    async fn store_voice_media(
+        &self,
+        request: tinychannels_bus::HostStoreVoiceMediaRequest,
+    ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        assert_eq!(request.scope.turn_id, "turn-voice");
+        self.events.lock().await.push("store_voice_media".into());
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media: request.media_reference.unwrap_or_default(),
+            accessible_url: None,
+        })
+    }
+
+    async fn get_voice_reply_policy(
+        &self,
+        request: tinychannels_bus::HostVoiceReplyPolicyRequest,
+    ) -> Result<tinychannels_bus::HostVoiceReplyPolicy> {
+        assert_eq!(request.scope.turn_id, "turn-voice");
+        self.events.lock().await.push("voice_reply_policy".into());
+        Ok(tinychannels_bus::HostVoiceReplyPolicy {
+            mode: tinychannels_bus::HostVoiceReplyMode::Mirror,
+            inbound_has_voice: true,
+            explicitly_requested: false,
+        })
+    }
+
     async fn publish_event(
         &self,
         publication: tinychannels_bus::HostEventPublication,
@@ -154,6 +205,74 @@ impl Callback {
             .push(format!("allowlist:{channel}:{identity}"));
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn scoped_voice_callbacks_preserve_scope_and_typed_results() {
+    let (host, callback, _server) = connected_host().await;
+    let scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: "telegram".into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: tinychannels_bus::provider_id("telegram").into(),
+            account_id: Some("telegram".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            id: "chat-7".into(),
+            ..Default::default()
+        },
+        turn_id: "turn-voice".into(),
+    };
+
+    let transcript = host
+        .transcribe_voice(tinychannels_bus::HostVoiceTranscriptionRequest {
+            scope: scope.clone(),
+            audio_base64: "AQID".into(),
+            mime_type: Some("audio/ogg".into()),
+            file_name: Some("note.oga".into()),
+            language: Some("en".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(transcript.text, "scoped words");
+    assert_eq!(transcript.duration_secs, Some(2.0));
+
+    let speech = host
+        .synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
+            scope: scope.clone(),
+            text: "hello".into(),
+            voice: Some("voice-a".into()),
+            format: Some("ogg".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(speech.audio_base64, "AQID");
+    assert_eq!(speech.duration_ms, Some(1250));
+
+    host.store_voice_media(tinychannels_bus::HostStoreVoiceMediaRequest {
+        scope: scope.clone(),
+        direction: tinychannels_bus::HostVoiceMediaDirection::Outbound,
+        audio_base64: "AQID".into(),
+        media_reference: None,
+    })
+    .await
+    .unwrap();
+
+    let policy = host
+        .get_voice_reply_policy(tinychannels_bus::HostVoiceReplyPolicyRequest { scope })
+        .await
+        .unwrap();
+    assert_eq!(policy.mode, tinychannels_bus::HostVoiceReplyMode::Mirror);
+    assert!(policy.inbound_has_voice);
+    assert_eq!(
+        callback.events.lock().await.as_slice(),
+        [
+            "scoped_transcription",
+            "speech_synthesis",
+            "store_voice_media",
+            "voice_reply_policy"
+        ]
+    );
+    host.shutdown().await.unwrap();
 }
 
 async fn connected_host() -> (HostChannels, Callback, Connection) {

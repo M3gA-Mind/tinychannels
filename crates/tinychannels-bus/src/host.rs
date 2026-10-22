@@ -17,9 +17,10 @@ pub struct HostVoiceScope {
 
 /// Whether stored channel media arrived from a provider or was prepared for
 /// outbound delivery.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HostVoiceMediaDirection {
+    #[default]
     Inbound,
     Outbound,
 }
@@ -48,6 +49,86 @@ pub struct HostTranscriptionResult {
     pub language: Option<String>,
     /// Audio duration, when known.
     pub duration_secs: Option<f64>,
+}
+
+/// Scoped request for host-owned speech recognition of one channel turn.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostVoiceTranscriptionRequest {
+    pub scope: HostVoiceScope,
+    pub audio_base64: String,
+    pub mime_type: Option<String>,
+    pub file_name: Option<String>,
+    pub language: Option<String>,
+}
+
+/// Scoped request for host-owned speech synthesis.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostSpeechSynthesisRequest {
+    pub scope: HostVoiceScope,
+    pub text: String,
+    pub voice: Option<String>,
+    pub format: Option<String>,
+}
+
+/// Audio produced by host-owned speech synthesis.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostSpeechSynthesisResult {
+    pub audio_base64: String,
+    pub mime_type: String,
+    pub duration_ms: Option<u64>,
+}
+
+/// Request for host policy controlling whether a channel reply is spoken.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostVoiceReplyPolicyRequest {
+    pub scope: HostVoiceScope,
+}
+
+/// Configured behavior for producing spoken channel replies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HostVoiceReplyMode {
+    Mirror,
+    Always,
+    Never,
+    SpeakReply,
+}
+
+impl Default for HostVoiceReplyMode {
+    fn default() -> Self {
+        Self::Never
+    }
+}
+
+/// Host-authoritative facts and mode for one spoken-reply decision.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostVoiceReplyPolicy {
+    pub mode: HostVoiceReplyMode,
+    pub inbound_has_voice: bool,
+    pub explicitly_requested: bool,
+}
+
+/// Store raw host-processed voice audio under the authenticated turn scope.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostStoreVoiceMediaRequest {
+    pub scope: HostVoiceScope,
+    pub direction: HostVoiceMediaDirection,
+    pub audio_base64: String,
+    pub media_reference: Option<crate::MediaReference>,
+}
+
+/// Durable reference returned after storing scoped voice audio.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostStoreVoiceMediaResult {
+    pub media: crate::MediaReference,
+    pub accessible_url: Option<String>,
 }
 
 /// An event published by a provider through the host's event sink.
