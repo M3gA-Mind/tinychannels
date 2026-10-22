@@ -544,7 +544,7 @@ impl HostChannels {
             channel: channel.to_owned(),
             message,
         })
-        .await;
+        .await?;
         Ok(())
     }
 
