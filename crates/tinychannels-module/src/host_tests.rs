@@ -626,7 +626,7 @@ async fn module_adapter_ingress_returns_retryable_error_when_host_rejects_event(
 
     assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Transient);
     assert!(error.retryable);
-    assert!(!error.unsupported);
+    assert!(!error.is_unsupported());
     assert_eq!(error.message, "channel host ingress callback failed");
     host.shutdown().await.unwrap();
 }

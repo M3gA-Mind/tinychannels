@@ -245,6 +245,13 @@ impl HostChannels {
                     continue;
                 }
                 if let Notification::DeliverEvent { event, reply } = notification {
+                    // Typed events share provider ingress order with messages.
+                    // Scoped runtimes may still be processing an earlier
+                    // message in the parallel dispatcher after its notification
+                    // left this queue, so drain that accepted frontier first.
+                    if let Some(dispatcher) = dispatcher.as_ref() {
+                        dispatcher.flush().await;
+                    }
                     let result = async {
                         let proxy = callback_connection.proxy(
                             HOST_BUS_NAME,

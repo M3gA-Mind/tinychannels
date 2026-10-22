@@ -2,6 +2,18 @@ use super::*;
 
 #[test]
 fn unsupported_error_marker_preserves_the_public_struct_layout() {
+    let legacy_literal = ChannelSendError {
+        kind: SendErrorKind::BadFormat,
+        message: "old downstream literal".into(),
+        retryable: false,
+        sent_before_error: false,
+        retry_after: None,
+        chat_level_not_found: false,
+        continuation_message_ids: Vec::new(),
+        partial_overflow: None,
+    };
+    assert!(!legacy_literal.is_unsupported());
+
     let legacy: ChannelSendError = serde_json::from_value(serde_json::json!({
         "kind": "bad_format",
         "message": "unsupported operation"
