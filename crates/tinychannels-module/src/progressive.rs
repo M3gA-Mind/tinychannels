@@ -213,10 +213,7 @@ impl ProgressiveSender for Sender {
 
 enum Command {
     Feed(Vec<ProgressiveEvent>, oneshot::Sender<Result<()>>),
-    FeedOutput(
-        Box<FeedOutput>,
-        oneshot::Sender<Result<Vec<ProgressiveTransportResult>>>,
-    ),
+    FeedOutput(Box<FeedOutput>, oneshot::Sender<Result<AppliedOutput>>),
     Finish(String, oneshot::Sender<()>),
 }
 
