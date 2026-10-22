@@ -149,6 +149,28 @@ impl Channels {
         }
     }
 
+    #[cfg(feature = "test-support")]
+    async fn register_test_remote_channel(&self, name: String) -> BusResult<()> {
+        let mut running = self.running.lock().await;
+        if running.contains_key(&name) {
+            return Err(BusError::failed("test channel is already registered"));
+        }
+        let channel = Arc::new(TestRemoteChannel { name: name.clone() });
+        let provider =
+            Running::start_outbound(channel, Arc::new(Hooks::default()), self.host.clone());
+        running.insert(name, provider);
+        Ok(())
+    }
+
+    #[cfg(feature = "test-support")]
+    async fn unregister_test_remote_channel(&self, name: String) -> BusResult<()> {
+        let provider = self.running.lock().await.remove(&name);
+        if let Some(provider) = provider {
+            provider.stop().await?;
+        }
+        Ok(())
+    }
+
     async fn media_activation(&self, instance: &str) -> BusResult<ProviderActivation> {
         let running = self.running.lock().await;
         if running
@@ -242,6 +264,42 @@ impl Channels {
             &name,
         )
         .await
+    }
+}
+
+#[cfg(feature = "test-support")]
+#[allow(
+    deprecated,
+    reason = "test-only provider exercises the legacy listener seam"
+)]
+struct TestRemoteChannel {
+    name: String,
+}
+
+#[cfg(feature = "test-support")]
+#[allow(
+    deprecated,
+    reason = "test-only provider exercises the legacy listener seam"
+)]
+#[async_trait::async_trait]
+impl tinychannels::Channel for TestRemoteChannel {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+
+    fn supports_remote_control(&self) -> bool {
+        true
     }
 }
 
@@ -339,6 +397,34 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
 )]
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.Channels")]
 impl Channels {
+    /// Register a network-free remote-control channel for host integration tests.
+    #[tinybus(confidential)]
+    async fn test_register_remote_channel(&self, name: String) -> BusResult<()> {
+        #[cfg(feature = "test-support")]
+        {
+            self.register_test_remote_channel(name).await
+        }
+        #[cfg(not(feature = "test-support"))]
+        {
+            let _ = name;
+            Err(BusError::failed("TinyChannels test support is disabled"))
+        }
+    }
+
+    /// Remove a network-free remote-control channel registered by a test.
+    #[tinybus(confidential)]
+    async fn test_unregister_remote_channel(&self, name: String) -> BusResult<()> {
+        #[cfg(feature = "test-support")]
+        {
+            self.unregister_test_remote_channel(name).await
+        }
+        #[cfg(not(feature = "test-support"))]
+        {
+            let _ = name;
+            Err(BusError::failed("TinyChannels test support is disabled"))
+        }
+    }
+
     /// Reserve an inert identity-scoped runtime and immutable callback paths.
     #[tinybus(confidential)]
     async fn reserve_runtime(&self) -> BusResult<tinychannels_bus::ChannelRuntimeReservation> {
@@ -490,7 +576,13 @@ impl Channels {
             }
             _ => "",
         };
-        let capabilities = configured_capabilities(&self.running, name).await;
+        let capabilities = match &request {
+            tinychannels_bus::module_control::ChannelControlRequest::Route {
+                capabilities: Some(capabilities),
+                ..
+            } => capabilities.as_ref().clone(),
+            _ => configured_capabilities(&self.running, name).await,
+        };
         crate::control::prepare(&self.host, request, capabilities).await
     }
 
@@ -622,6 +714,8 @@ impl Channels {
         };
         let prepared = PreparedChannelInbound {
             history_key: tinychannels::context::conversation_history_key(&message),
+            history_key_ignores_thread:
+                tinychannels::context::legacy_v21_history_key_ignores_thread(&message.channel),
             thread_id: tinychannels::channel::derive_inbound_thread_id(
                 &message.channel,
                 Some(&message.sender),
@@ -1550,7 +1644,9 @@ fn delivery_store_error(error: DeliveryQueueError) -> BusError {
     reason = "generated C ABI symbols are documented by the TinyBus module SDK"
 )]
 pub(crate) mod exports {
-    tinybus_module::module_export_optional_static! {
+    macro_rules! export_channels_module {
+        ($($extra_method:literal),* $(,)?) => {
+            tinybus_module::module_export_optional_static! {
         setup = super::setup,
         worker_threads = 4,
         provides = ["ai.tinyhumans.tinychannels.Channels"],
@@ -1572,6 +1668,7 @@ pub(crate) mod exports {
             "PrepareChannelInbound", "PrepareChannelIdentity", "ExecuteProgressive", "ExecuteRemote", "PrepareChannelControl", "StartRuntimeWithDispatch", "PrepareRuntimeCommand",
             "BeginMediaUpload", "AppendMediaUploadChunk", "FinishMediaUpload", "AbortMediaUpload",
             "BeginMediaRead", "ReadMediaChunk", "AbortMediaRead",
+            $($extra_method),*
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:
@@ -1580,6 +1677,14 @@ pub(crate) mod exports {
         optional = ["ai.tinyhumans.tinychannels.ChannelsHost"],
         lazy = false,
     }
+        };
+    }
+
+    #[cfg(feature = "test-support")]
+    export_channels_module!("TestRegisterRemoteChannel", "TestUnregisterRemoteChannel");
+
+    #[cfg(not(feature = "test-support"))]
+    export_channels_module!();
 }
 
 #[cfg(test)]

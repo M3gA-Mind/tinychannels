@@ -2,6 +2,34 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn route_control_accepts_legacy_wire_without_host_capabilities() {
+    let request = module_control::ChannelControlRequest::Route {
+        workspace_dir: "workspace".into(),
+        message: Box::new(ChannelMessage::default()),
+        capabilities: None,
+        route: module_remote::RemoteRoute {
+            provider: "fixture".into(),
+            model: "fixture".into(),
+        },
+        history_len: 0,
+        providers: vec![],
+    };
+    let mut wire = serde_json::to_value(request).unwrap();
+    wire["request"]
+        .as_object_mut()
+        .unwrap()
+        .remove("capabilities");
+
+    assert!(matches!(
+        serde_json::from_value::<module_control::ChannelControlRequest>(wire).unwrap(),
+        module_control::ChannelControlRequest::Route {
+            capabilities: None,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn relay_passthrough_body_preserves_base64_wire_and_legacy_invalid_input() {
     let wire = json!({"platform":"test", "botId":"bot", "method":"POST", "path":"/fixture", "headers":[], "bodyB64":"AP8q"});
     let decoded: relay::PassthroughForward = serde_json::from_value(wire.clone()).unwrap();
