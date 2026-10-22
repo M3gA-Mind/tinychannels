@@ -140,6 +140,7 @@ fn intent(payload: OutboundPayload) -> ChannelOutboundIntent {
         conversation_ref: None,
         reply_to_id: None,
         thread_id: None,
+        turn_id: None,
         durability: DeliveryDurability::Required,
         payload,
     }

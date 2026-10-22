@@ -73,7 +73,7 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::CHANNEL_STATUS,
         ]
     );
-    assert_eq!(METHODS.len(), 37);
+    assert_eq!(METHODS.len(), 44);
     assert_eq!(METHODS[7], methods::START_RELAY_V2);
     assert_eq!(METHODS[10], methods::RELAY_CAPABILITIES_V2);
     assert_eq!(
@@ -103,6 +103,13 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::PREPARE_CHANNEL_CONTROL,
             methods::START_RUNTIME_WITH_DISPATCH,
             methods::PREPARE_RUNTIME_COMMAND,
+            methods::BEGIN_MEDIA_UPLOAD,
+            methods::APPEND_MEDIA_UPLOAD_CHUNK,
+            methods::FINISH_MEDIA_UPLOAD,
+            methods::ABORT_MEDIA_UPLOAD,
+            methods::BEGIN_MEDIA_READ,
+            methods::READ_MEDIA_CHUNK,
+            methods::ABORT_MEDIA_READ,
         ]
     );
 }

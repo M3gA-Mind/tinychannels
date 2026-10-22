@@ -144,6 +144,7 @@ impl std::fmt::Display for RunningSendError {
 pub(crate) struct Hooks {
     hooks: StdMutex<Vec<ShutdownHook>>,
     configured_instance: StdMutex<Option<String>>,
+    media_account_scope: StdMutex<Option<String>>,
 }
 impl LifecycleRegistry for Hooks {
     fn register_shutdown(&self, _name: &str, hook: ShutdownHook) {
@@ -158,14 +159,24 @@ impl Hooks {
         self: &Arc<Self>,
         callbacks: HostChannels,
         configured_instance: String,
+        media_account_scope: Option<String>,
     ) -> Arc<dyn tinychannels::host::ChannelHost> {
         *self
             .configured_instance
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(configured_instance.clone());
+        *self
+            .media_account_scope
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = media_account_scope.clone();
         ChannelHostBuilder::new()
             .lifecycle(self.clone())
             .transcriber(Arc::new(ModuleTranscriber(callbacks.clone())))
+            .media_repository(Arc::new(ModuleMediaRepository(
+                callbacks.clone(),
+                configured_instance.clone(),
+                media_account_scope,
+            )))
             .events(Arc::new(ModuleEvents(
                 callbacks.clone(),
                 configured_instance,
@@ -179,6 +190,92 @@ impl Hooks {
         for hook in hooks {
             hook().await;
         }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ModuleMediaRepository(
+    pub(crate) HostChannels,
+    pub(crate) String,
+    pub(crate) Option<String>,
+);
+
+impl ModuleMediaRepository {
+    fn bind_scope(&self, scope: &mut tinychannels::host::MediaScope) -> anyhow::Result<()> {
+        if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
+            anyhow::bail!("media scope requires a conversation and originating turn");
+        }
+        let account = self
+            .2
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("configured account has no stable media identity"))?;
+        scope.configured_instance = self.1.clone();
+        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        scope.channel.account_id = Some(account.to_owned());
+        Ok(())
+    }
+
+    async fn scoped_store(&self) -> anyhow::Result<tinychannels::host::ScopedMediaStore> {
+        let storage = self.0.storage().await.map_err(|error| {
+            anyhow::anyhow!("module scoped storage is unavailable: {:?}", error.kind())
+        })?;
+        Ok(tinychannels::host::ScopedMediaStore::new(
+            Arc::clone(storage.documents()),
+            Arc::clone(storage.blobs()),
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::media::MediaPersistence for ModuleMediaRepository {
+    async fn store_public_media(
+        &self,
+        request: tinychannels::host::MediaStoreRequest,
+    ) -> tinybus::Result<tinychannels_bus::MediaReference> {
+        <Self as tinychannels::host::MediaRepository>::store_media(self, request)
+            .await
+            .map_err(|_| Error::failed("media could not be stored"))
+    }
+}
+
+#[async_trait::async_trait]
+impl tinychannels::host::MediaRepository for ModuleMediaRepository {
+    async fn store_media(
+        &self,
+        mut request: tinychannels::host::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        self.bind_scope(&mut request.metadata.scope)?;
+        self.scoped_store().await?.store(request).await
+    }
+
+    async fn store_media_stream(
+        &self,
+        mut request: tinychannels::host::MediaStreamRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        self.bind_scope(&mut request.metadata.scope)?;
+        self.scoped_store().await?.store_stream(request).await
+    }
+
+    async fn read_media(
+        &self,
+        mut scope: tinychannels::host::MediaScope,
+        opaque_id: String,
+        max_bytes: u64,
+    ) -> anyhow::Result<tinychannels::host::StoredMedia> {
+        self.bind_scope(&mut scope)?;
+        self.scoped_store()
+            .await?
+            .read(scope, &opaque_id, max_bytes)
+            .await
+    }
+
+    async fn delete_media(
+        &self,
+        mut scope: tinychannels::host::MediaScope,
+        opaque_id: String,
+    ) -> anyhow::Result<bool> {
+        self.bind_scope(&mut scope)?;
+        self.scoped_store().await?.delete(scope, &opaque_id).await
     }
 }
 

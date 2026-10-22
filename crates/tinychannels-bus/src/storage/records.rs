@@ -50,6 +50,8 @@ pub struct StoredIntent {
     pub conversation_ref: Option<ConversationRef>,
     pub reply_to_id: Option<String>,
     pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
     pub durability: DeliveryDurability,
     #[serde(with = "stored_payload")]
     pub payload: OutboundPayload,
@@ -65,6 +67,7 @@ impl From<&ChannelOutboundIntent> for StoredIntent {
             conversation_ref: intent.conversation_ref.clone(),
             reply_to_id: intent.reply_to_id.clone(),
             thread_id: intent.thread_id.clone(),
+            turn_id: intent.turn_id.clone(),
             durability: intent.durability,
             payload: intent.payload.clone(),
         }
@@ -81,6 +84,7 @@ impl From<StoredIntent> for ChannelOutboundIntent {
             conversation_ref: stored.conversation_ref,
             reply_to_id: stored.reply_to_id,
             thread_id: stored.thread_id,
+            turn_id: stored.turn_id,
             durability: stored.durability,
             payload: stored.payload,
         }

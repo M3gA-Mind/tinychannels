@@ -58,6 +58,7 @@ pub(crate) async fn prepare(
             route,
             history_len,
             providers,
+            ..
         } => {
             let remote = crate::remote::execute(
                 host,

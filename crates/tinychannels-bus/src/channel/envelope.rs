@@ -74,6 +74,11 @@ pub enum MediaKind {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MediaReference {
+    /// Host-owned identifier for media stored outside the provider. It is
+    /// opaque and only meaningful with the full channel, conversation, and
+    /// turn scope used to store it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opaque_id: Option<String>,
     pub path: Option<String>,
     pub url: Option<String>,
     pub content_type: Option<String>,

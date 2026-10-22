@@ -101,6 +101,7 @@ pub fn translate_output_event(
         conversation_ref: Some(turn.envelope.conversation.clone()),
         reply_to_id: Some(turn.envelope.message_id.clone()).filter(|id| !id.is_empty()),
         thread_id: turn.envelope.conversation.thread_id.clone(),
+        turn_id: Some(turn.id.clone()),
         durability: options.durability,
         payload,
     }]

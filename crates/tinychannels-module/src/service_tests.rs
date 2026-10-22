@@ -2,6 +2,67 @@ use super::*;
 use tinychannels_bus::ChannelsConfig;
 use tinychannels_bus::config::WhatsAppConfig;
 
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn test_remote_channel_fixture_registers_and_cleans_up_without_network() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let channels = Channels::new(HostChannels::new(connection), None);
+
+    channels
+        .register_test_remote_channel("telegram".into())
+        .await
+        .unwrap();
+    assert!(
+        configured_capabilities(&channels.running, "telegram")
+            .await
+            .remote_control
+    );
+
+    channels
+        .unregister_test_remote_channel("telegram".into())
+        .await
+        .unwrap();
+    assert!(
+        !configured_capabilities(&channels.running, "telegram")
+            .await
+            .remote_control
+    );
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn test_remote_channel_fixture_rejects_duplicates_and_ignores_missing_cleanup() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let channels = Channels::new(HostChannels::new(connection), None);
+
+    channels
+        .test_register_remote_channel("telegram".into())
+        .await
+        .unwrap();
+    let duplicate = channels
+        .test_register_remote_channel("telegram".into())
+        .await
+        .unwrap_err();
+    assert!(duplicate.to_string().contains("already registered"));
+
+    channels
+        .test_unregister_remote_channel("missing".into())
+        .await
+        .unwrap();
+    channels
+        .test_unregister_remote_channel("telegram".into())
+        .await
+        .unwrap();
+}
+
 /// Mirrors the predicate in `start_channel`.
 ///
 /// Extracted rather than duplicated in the test so the two cannot disagree:
@@ -132,7 +193,10 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         )),
         host: host.clone(),
         email: crate::email::EmailSender::new(),
+        media_uploads: Arc::new(crate::media::MediaUploads::default()),
+        media_reads: Arc::new(crate::media::MediaReads::default()),
         running: Arc::new(Mutex::new(running)),
+        provider_activations: Mutex::new(HashMap::new()),
         relays: Arc::new(Relays::new(host.clone())),
         terminal: AtomicBool::new(false),
         runtimes: None,
@@ -158,6 +222,7 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         conversation_ref: None,
         reply_to_id: Some("message-3".to_owned()),
         thread_id: Some("thread-9".to_owned()),
+        turn_id: None,
         durability: tinychannels::DeliveryDurability::BestEffort,
         payload: tinychannels::OutboundPayload::Text {
             text: "hello".to_owned(),
@@ -218,7 +283,10 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         )),
         host: host.clone(),
         email: crate::email::EmailSender::new(),
+        media_uploads: Arc::new(crate::media::MediaUploads::default()),
+        media_reads: Arc::new(crate::media::MediaReads::default()),
         running: Arc::new(Mutex::new(running)),
+        provider_activations: Mutex::new(HashMap::new()),
         relays: Arc::new(Relays::new(host.clone())),
         terminal: AtomicBool::new(false),
         runtimes: None,
@@ -473,6 +541,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                         }),
                         reply_to_id: Some("source-message".into()),
                         thread_id: Some("thread".into()),
+                        turn_id: None,
                         durability: tinychannels_bus::DeliveryDurability::BestEffort,
                         payload,
                     },
@@ -677,7 +746,10 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
         )),
         host: host.clone(),
         email: crate::email::EmailSender::new(),
+        media_uploads: Arc::new(crate::media::MediaUploads::default()),
+        media_reads: Arc::new(crate::media::MediaReads::default()),
         running: Arc::new(Mutex::new(running)),
+        provider_activations: Mutex::new(HashMap::new()),
         relays: Arc::new(Relays::new(host.clone())),
         terminal: AtomicBool::new(false),
         runtimes: None,
@@ -1104,7 +1176,10 @@ async fn channels_with_store(
         )),
         host,
         email: crate::email::EmailSender::new(),
+        media_uploads: Arc::new(crate::media::MediaUploads::default()),
+        media_reads: Arc::new(crate::media::MediaReads::default()),
         running: Arc::new(Mutex::new(running)),
+        provider_activations: Mutex::new(HashMap::new()),
         relays,
         terminal: AtomicBool::new(false),
         runtimes: None,
@@ -1112,6 +1187,148 @@ async fn channels_with_store(
         delivery_admission: Arc::new(Mutex::new(())),
     };
     (channels, callbacks, server)
+}
+
+#[tokio::test]
+async fn module_media_handlers_roundtrip_only_within_the_provider_turn_scope() {
+    let (sink, _received) = tokio::sync::mpsc::channel(1);
+    let (channels, _callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sink))).await;
+    channels.provider_activations.lock().await.insert(
+        "fixture".into(),
+        ProviderActivation {
+            generation: "fixture-generation".into(),
+            media_account_scope: Some("private-account-digest".into()),
+        },
+    );
+    let scope = tinychannels_bus::HostVoiceScope {
+        conversation: tinychannels_bus::ConversationRef {
+            id: "room-7".into(),
+            ..Default::default()
+        },
+        turn_id: "turn-9".into(),
+        ..Default::default()
+    };
+    let bytes = b"private media payload".to_vec();
+    let mut invalid_scope = scope.clone();
+    invalid_scope.turn_id.clear();
+    assert!(
+        channels
+            .begin_media_upload(tinychannels_bus::MediaUploadBegin {
+                instance: "fixture".into(),
+                scope: invalid_scope,
+                kind: tinychannels_bus::MediaKind::Document,
+                content_type: "text/plain".into(),
+                file_name: None,
+                duration_ms: None,
+                codec: None,
+                byte_count: bytes.len(),
+            })
+            .await
+            .is_err()
+    );
+    let upload = channels
+        .begin_media_upload(tinychannels_bus::MediaUploadBegin {
+            instance: "fixture".into(),
+            scope: scope.clone(),
+            kind: tinychannels_bus::MediaKind::Document,
+            content_type: "text/plain".into(),
+            file_name: Some("note.txt".into()),
+            duration_ms: None,
+            codec: None,
+            byte_count: bytes.len(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        channels
+            .append_media_upload_chunk(tinychannels_bus::MediaUploadChunk {
+                handle: upload.clone(),
+                sequence: 0,
+                bytes: bytes.clone(),
+            })
+            .await
+            .unwrap(),
+        1
+    );
+    let media = channels
+        .finish_media_upload(tinychannels_bus::MediaUploadFinish(upload))
+        .await
+        .unwrap();
+    assert!(
+        media
+            .opaque_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("tinychannels_media_v1_"))
+    );
+    assert_eq!(media.url, None);
+    assert_eq!(media.path, None);
+
+    let cancelled_upload = channels
+        .begin_media_upload(tinychannels_bus::MediaUploadBegin {
+            instance: "fixture".into(),
+            scope: scope.clone(),
+            kind: tinychannels_bus::MediaKind::Document,
+            content_type: "text/plain".into(),
+            file_name: None,
+            duration_ms: None,
+            codec: None,
+            byte_count: bytes.len(),
+        })
+        .await
+        .unwrap();
+    channels
+        .abort_media_upload(tinychannels_bus::MediaUploadFinish(cancelled_upload))
+        .await
+        .unwrap();
+
+    let mut wrong_turn = scope.clone();
+    wrong_turn.turn_id = "other-turn".into();
+    assert!(
+        channels
+            .begin_media_read(tinychannels_bus::MediaReadBegin {
+                instance: "fixture".into(),
+                scope: wrong_turn,
+                media: media.clone(),
+                max_bytes: 1024,
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        channels
+            .begin_media_read(tinychannels_bus::MediaReadBegin {
+                instance: "fixture".into(),
+                scope: scope.clone(),
+                media: media.clone(),
+                max_bytes: 0,
+            })
+            .await
+            .is_err()
+    );
+
+    let read = channels
+        .begin_media_read(tinychannels_bus::MediaReadBegin {
+            instance: "fixture".into(),
+            scope,
+            media,
+            max_bytes: 1024,
+        })
+        .await
+        .unwrap();
+    let chunk = channels
+        .read_media_chunk(tinychannels_bus::MediaReadChunk {
+            handle: read.handle.clone(),
+            sequence: 0,
+        })
+        .await
+        .unwrap();
+    assert_eq!(chunk.bytes, bytes);
+    assert!(chunk.done);
+    channels
+        .abort_media_read(tinychannels_bus::MediaReadFinish(read.handle))
+        .await
+        .unwrap();
+    channels.shutdown().await.unwrap();
 }
 
 fn required_intent(id: &str, text: &str) -> ChannelOutboundIntent {
@@ -1485,6 +1702,33 @@ async fn changed_intent_cannot_reuse_a_terminal_result_key() {
 async fn stop_channel_keeps_provider_running_when_queue_recovery_fails() {
     let (sent, _received) = tokio::sync::mpsc::channel(1);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
+    let media_request = |instance: &str| tinychannels_bus::MediaUploadBegin {
+        instance: instance.into(),
+        scope: tinychannels_bus::HostVoiceScope {
+            conversation: tinychannels_bus::ConversationRef {
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "turn".into(),
+            ..Default::default()
+        },
+        kind: tinychannels_bus::MediaKind::Document,
+        content_type: "text/plain".into(),
+        file_name: None,
+        duration_ms: None,
+        codec: None,
+        byte_count: 1,
+    };
+    let fixture_upload = channels
+        .media_uploads
+        .begin(media_request("fixture"), "fixture-generation".into())
+        .await
+        .unwrap();
+    let second_fixture_upload = channels
+        .media_uploads
+        .begin(media_request("fixture"), "fixture-generation".into())
+        .await
+        .unwrap();
     callbacks
         .storage
         .faults
@@ -1493,6 +1737,13 @@ async fn stop_channel_keeps_provider_running_when_queue_recovery_fails() {
 
     assert!(channels.stop_channel("fixture".into()).await.is_err());
     assert!(channels.running.lock().await.contains_key("fixture"));
+    assert!(
+        channels
+            .media_uploads
+            .binding(&tinychannels_bus::MediaUploadFinish(fixture_upload))
+            .await
+            .is_ok()
+    );
 
     callbacks
         .storage
@@ -1501,6 +1752,20 @@ async fn stop_channel_keeps_provider_running_when_queue_recovery_fails() {
         .store(false, Ordering::SeqCst);
     channels.stop_channel("fixture".into()).await.unwrap();
     assert!(!channels.running.lock().await.contains_key("fixture"));
+    assert!(
+        channels
+            .media_uploads
+            .binding(&tinychannels_bus::MediaUploadFinish(second_fixture_upload))
+            .await
+            .is_err()
+    );
+    assert!(
+        channels
+            .media_uploads
+            .begin(media_request("other"), "other-generation".into())
+            .await
+            .is_ok()
+    );
     channels.shutdown().await.unwrap();
 }
 
@@ -2356,7 +2621,15 @@ fn exported_manifest_preserves_the_complete_contract_member_order() {
         .iter()
         .map(|method| method.as_str())
         .collect();
-    assert_eq!(actual, tinychannels_bus::METHODS);
+    #[cfg(feature = "test-support")]
+    let expected = {
+        let mut expected = tinychannels_bus::METHODS.to_vec();
+        expected.extend(["TestRegisterRemoteChannel", "TestUnregisterRemoteChannel"]);
+        expected
+    };
+    #[cfg(not(feature = "test-support"))]
+    let expected = tinychannels_bus::METHODS.to_vec();
+    assert_eq!(actual, expected);
 }
 
 #[tokio::test]
@@ -2434,6 +2707,10 @@ async fn remote_help_is_parsed_and_rendered_inside_the_module() {
                     "content":"/help", "channel":"telegram:fixture", "timestamp":1
                 }))
                 .unwrap(),
+                capabilities: Some(Box::new(tinychannels_bus::ChannelCapabilities {
+                    remote_control: true,
+                    ..Default::default()
+                })),
                 route: RemoteRoute {
                     provider: "fixture".into(),
                     model: "fixture".into(),
@@ -2555,6 +2832,7 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
         Request::Route {
         workspace_dir: ".".into(),
         message: serde_json::from_value(serde_json::json!({"id":"fixture","sender":"sender","reply_target":"chat","content":content,"channel":channel,"timestamp":1})).unwrap(),
+        capabilities: None,
         route: RemoteRoute { provider: "old".into(), model: "model".into() }, history_len: 3,
         providers: vec![ProviderDescriptor { name: "approved".into(), aliases: vec!["alias".into()] }],
     }
@@ -2628,6 +2906,49 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
             tinychannels::runtime::select_acknowledgment_reaction("hello fixture").to_owned()
         )
     );
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn route_remote_commands_use_host_capabilities_for_isolated_runtime() {
+    use tinychannels_bus::module_control::{
+        ChannelControlRequest as Request, ChannelControlResult as Response, ProviderDescriptor,
+    };
+    use tinychannels_bus::module_remote::RemoteRoute;
+
+    let service = inbound_preparation_service().await;
+    let response = service
+        .prepare_channel_control(Request::Route {
+            workspace_dir: ".".into(),
+            message: serde_json::from_value(serde_json::json!({
+                "id":"fixture", "sender":"sender", "reply_target":"chat",
+                "content":"/help", "channel":"telegram", "timestamp":1
+            }))
+            .unwrap(),
+            capabilities: Some(Box::new(tinychannels_bus::ChannelCapabilities {
+                remote_control: true,
+                ..Default::default()
+            })),
+            route: RemoteRoute {
+                provider: "fixture".into(),
+                model: "fixture".into(),
+            },
+            history_len: 0,
+            providers: vec![ProviderDescriptor {
+                name: "fixture".into(),
+                aliases: vec![],
+            }],
+        })
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        response,
+        Response::Route {
+            reply: Some(reply),
+            ..
+        } if reply == tinychannels::remote::build_remote_help_response()
+    ));
     service.shutdown().await.unwrap();
 }
 

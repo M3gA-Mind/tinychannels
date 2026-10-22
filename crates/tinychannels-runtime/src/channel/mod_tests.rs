@@ -757,12 +757,28 @@ fn outbound_intent_carries_idempotency_key() {
         conversation_ref: None,
         reply_to_id: None,
         thread_id: Some("topic-99".into()),
+        turn_id: None,
         durability: DeliveryDurability::Required,
         payload: OutboundPayload::NativeChannelData {
             data: json!({"x": 1}),
         },
     };
     assert_eq!(intent.idempotency_key, "idem-1");
+}
+
+#[test]
+fn legacy_outbound_adapter_preserves_originating_turn_identity() {
+    let intent = outbound_intent_from_legacy_message(
+        "telegram",
+        json!({"text": "hello", "turnId": "turn-42"}),
+    );
+    assert_eq!(intent.turn_id.as_deref(), Some("turn-42"));
+    assert_eq!(
+        legacy_message_value_from_outbound_intent(&intent)["turnId"],
+        "turn-42"
+    );
+    let typed = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
+    assert_eq!(typed.turn_id.as_deref(), Some("turn-42"));
 }
 
 #[test]

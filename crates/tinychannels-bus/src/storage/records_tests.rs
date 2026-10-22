@@ -11,6 +11,7 @@ fn stored_delivery_round_trip_preserves_v22_scope_and_partial_receipt() {
     };
     let entry = DeliveryQueueEntry {
         intent: ChannelOutboundIntent {
+            turn_id: Some("turn-42".into()),
             channel_ref: Some(ChannelRef {
                 id: "telegram".into(),
                 account_id: Some("account".into()),
@@ -36,6 +37,7 @@ fn stored_delivery_round_trip_preserves_v22_scope_and_partial_receipt() {
         entry.intent.conversation_ref
     );
     assert_eq!(restored.partial_receipt, Some(receipt));
+    assert_eq!(restored.intent.turn_id.as_deref(), Some("turn-42"));
 }
 
 #[test]

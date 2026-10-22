@@ -23,6 +23,7 @@ pub mod module_email;
 pub mod module_inbound;
 #[allow(deprecated, reason = "v21 module DTOs remain for one release")]
 pub mod module_interaction;
+pub mod module_media;
 pub mod module_progressive;
 pub mod module_relay;
 #[allow(deprecated, reason = "v21 module DTOs remain for one release")]
@@ -41,6 +42,7 @@ pub mod storage;
 )]
 pub mod traits;
 pub mod version;
+pub mod web;
 pub use capabilities::{
     AccountCapabilities, ActionCapabilities, AddressingCapabilities,
     ButtonPresentationCapabilities, ChannelCapabilities, ContentCapabilities, ContentCapability,
@@ -58,7 +60,10 @@ pub use config::ChannelsConfig;
 pub use controllers::{ChannelAuthMode, ChannelDefinition};
 pub use error::{Result, TinyChannelsError};
 pub use health::{ChannelHealthReport, ChannelHealthState};
-pub use host::{HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult};
+pub use host::{
+    HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult,
+    HostVoiceMediaDirection, HostVoiceScope,
+};
 pub use http::HttpProxyPolicy;
 pub use module_controller::{
     ChannelBackendRequest, ChannelBackendResult, ChannelControllerRequest, ChannelControllerResult,
@@ -68,6 +73,13 @@ pub use module_email::{
     EmailAttachment, EmailAttachmentUpload, EmailSendRequest, EmailUploadBegin, EmailUploadChunk,
     EmailUploadHandle,
 };
+pub use module_media::{
+    MEDIA_READ_CAPACITY, MEDIA_READ_CHUNK_BYTES, MEDIA_UPLOAD_BEGIN_MAX_BYTES,
+    MEDIA_UPLOAD_CAPACITY, MEDIA_UPLOAD_CHUNK_BYTES, MEDIA_UPLOAD_MAX_BYTES,
+    MEDIA_UPLOAD_MAX_CHUNKS, MediaReadBegin, MediaReadChunk, MediaReadChunkResult, MediaReadFinish,
+    MediaReadHandle, MediaReadInfo, MediaUploadBegin, MediaUploadChunk, MediaUploadFinish,
+    MediaUploadHandle, MediaUploadResult,
+};
 pub use names::{BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH, methods};
 #[allow(
     deprecated,
@@ -75,6 +87,15 @@ pub use names::{BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH,
 )]
 pub use traits::{Channel, ChannelIngress, ChannelMessage, ChannelSendExt, SendMessage};
 pub use version::{CONTRACT_VERSION, is_compatible};
+pub use web::{
+    ChatRequestMetadata, ChatSuggestion, GuardrailPayload, GuardrailReason,
+    MAX_WEB_TOOL_PAYLOAD_BYTES, QueueItemPayload, QueueMode, SubagentProgressDetail,
+    SubagentUsagePayload, TurnCostThrottle, TurnTimingPayload, TurnTimingSnapshot, TurnTimingState,
+    TurnUsagePayload, WebChannelEvent, WebCostSource, WebEventContext, WebEventPayload,
+    WebGuardrailPayload, WebGuardrailReason, WebQueueItemPayload, WebSubagentProgressDetail,
+    WebSubagentUsagePayload, WebTurnTimingPayload, WebTurnUsagePayload, cap_web_args,
+    cap_web_output, legacy_event_alias, tokens_per_second, web_event_schema_json,
+};
 
 #[cfg(test)]
 #[path = "wire_tests.rs"]

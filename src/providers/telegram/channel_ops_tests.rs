@@ -96,6 +96,7 @@ fn typed_text(id: &str, text: String) -> tinychannels_bus::ChannelOutboundMessag
         }),
         reply_to_id: Some("5".into()),
         thread_id: None,
+        turn_id: None,
         idempotency_key: id.into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Content {
             part: tinychannels_bus::ContentPart::Text {
