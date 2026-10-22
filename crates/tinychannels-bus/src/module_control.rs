@@ -1,6 +1,6 @@
 //! Requests for module-owned channel command and presentation preparation.
 use crate::module_remote::RemoteRoute;
-use crate::{ChannelCapabilities, ChannelMessage};
+use crate::{ChannelCapabilities, ChannelMessage, LegacyChannelCapabilities};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +18,12 @@ pub enum ChannelControlRequest {
     Route {
         workspace_dir: String,
         message: Box<ChannelMessage>,
+        /// Capabilities of the configured channel instance selected by the host.
+        /// Isolated turn runtimes do not own provider instances themselves.
+        /// Missing values retain compatibility with callers that rely on the
+        /// module's own configured provider registry.
+        #[serde(default)]
+        capabilities: Option<Box<ChannelCapabilities>>,
         route: RemoteRoute,
         history_len: usize,
         providers: Vec<ProviderDescriptor>,
@@ -35,6 +41,11 @@ pub enum ChannelControlRequest {
         message: String,
     },
     Capabilities {
+        channel: String,
+    },
+    /// Return the canonical configured-instance descriptor without changing
+    /// the frozen `Capabilities` response payload.
+    CapabilitiesV2 {
         channel: String,
     },
     Acknowledgment {
@@ -60,7 +71,8 @@ pub enum ChannelControlResult {
     },
     Connected(bool),
     Overflow(bool),
-    Capabilities(ChannelCapabilities),
+    Capabilities(LegacyChannelCapabilities),
+    CapabilitiesV2(Box<ChannelCapabilities>),
     Approval(String),
     Acknowledgment(String),
 }

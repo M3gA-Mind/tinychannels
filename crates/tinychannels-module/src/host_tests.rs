@@ -24,6 +24,8 @@ fn consume_failure(counter: &AtomicUsize) -> bool {
 #[derive(Clone)]
 struct Callback {
     events: Arc<Mutex<Vec<String>>>,
+    typed_events: Arc<Mutex<Vec<tinychannels_bus::ChannelEvent>>>,
+    inbound_payloads: Arc<Mutex<Vec<serde_json::Value>>>,
     blocked: Arc<AtomicBool>,
     gate: Arc<tokio::sync::Notify>,
     transcription_blocked: Arc<AtomicBool>,
@@ -41,6 +43,18 @@ struct Callback {
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
 impl Callback {
+    async fn deliver_event(&self, event: tinychannels_bus::ChannelEvent) -> Result<()> {
+        if consume_failure(&self.event_failures) {
+            return Err(tinybus::Error::failed("fixture event failure"));
+        }
+        self.typed_events.lock().await.push(event.clone());
+        self.events
+            .lock()
+            .await
+            .push(format!("typed_event:{}", event.event_id));
+        Ok(())
+    }
+
     async fn transcribe(
         &self,
         request: tinychannels_bus::HostTranscriptionRequest,
@@ -109,6 +123,7 @@ impl Callback {
         while self.blocked.load(Ordering::SeqCst) {
             self.gate.notified().await;
         }
+        self.inbound_payloads.lock().await.push(message.clone());
         self.events.lock().await.push(format!(
             "inbound:{channel}:{}",
             message["text"].as_str().unwrap()
@@ -150,6 +165,8 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
     let storage = Arc::new(crate::storage_fixture::StorageHost::serve(&server, "scope-a").await);
     let callback = Callback {
         events: Arc::new(Mutex::new(Vec::new())),
+        typed_events: Arc::new(Mutex::new(Vec::new())),
+        inbound_payloads: Arc::new(Mutex::new(Vec::new())),
         blocked: Arc::new(AtomicBool::new(false)),
         gate: Arc::new(tokio::sync::Notify::new()),
         transcription_blocked: Arc::new(AtomicBool::new(false)),
@@ -173,6 +190,17 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
         .await
         .unwrap();
     (HostChannels::new(client), callback, server)
+}
+
+fn inbound_envelope(text: &str) -> tinychannels_bus::ChannelInboundEnvelope {
+    tinychannels_bus::ChannelInboundEnvelope {
+        text: text.into(),
+        parts: vec![tinychannels_bus::ContentPart::Text {
+            text: text.into(),
+            markdown_dialect: None,
+        }],
+        ..Default::default()
+    }
 }
 
 #[tokio::test]
@@ -321,7 +349,7 @@ async fn transcription_admission_refuses_when_its_owned_task_limit_is_reached() 
 #[tokio::test]
 async fn callback_consumer_preserves_inbound_then_status_order() {
     let (host, callback, _server) = connected_host().await;
-    host.deliver_inbound("telegram", serde_json::json!({"text":"hello"}))
+    host.deliver_inbound("telegram", inbound_envelope("hello"))
         .await;
     host.report_status("telegram", "connected", None).await;
     host.flush().await.unwrap();
@@ -335,7 +363,8 @@ async fn callback_consumer_preserves_inbound_then_status_order() {
 #[tokio::test]
 async fn module_host_exposes_typed_transcription_and_event_capabilities() {
     let (host, callback, _server) = connected_host().await;
-    let provider_host = Arc::new(crate::provider::Hooks::default()).host(host.clone());
+    let provider_host =
+        Arc::new(crate::provider::Hooks::default()).host(host.clone(), "telegram".into(), None);
     let transcription = provider_host
         .transcriber()
         .unwrap()
@@ -478,6 +507,278 @@ async fn absent_host_event_sink_is_an_optional_capability() {
 }
 
 #[tokio::test]
+async fn typed_channel_event_crosses_memory_bus_with_full_source_and_address() {
+    assert_eq!(
+        tinychannels_bus::names::HOST_METHODS.last(),
+        Some(&tinychannels_bus::names::host_methods::DELIVER_EVENT),
+        "the real callback used below must remain in the declared host method table"
+    );
+    let (host, callback, _server) = connected_host().await;
+    let event = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "telegram:update:44".into(),
+        source_event_id: Some("44".into()),
+        source_timestamp: Some(1_700_000_000_000),
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("bot-7".into()),
+        },
+        conversation: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Group,
+            id: "-10042".into(),
+            parent_id: Some("workspace-2".into()),
+            topic_id: Some("topic-8".into()),
+            thread_id: Some("thread-9".into()),
+            scope_id: Some("scope-1".into()),
+        }),
+        event: tinychannels_bus::ChannelEventKind::ReactionAdded {
+            message_id: "msg-22".into(),
+            provider_message_id: None,
+            actor: tinychannels_bus::SenderRef {
+                id: "actor-3".into(),
+                ..Default::default()
+            },
+            reaction: tinychannels_bus::ChannelReaction {
+                value: "🔥".into(),
+                custom_emoji_id: None,
+            },
+        },
+    };
+    host.deliver_inbound("telegram", inbound_envelope("before"))
+        .await;
+    host.deliver_event(event.clone()).await.unwrap();
+    host.flush().await.unwrap();
+    assert_eq!(
+        callback.events.lock().await.as_slice(),
+        ["inbound:telegram:before", "typed_event:telegram:update:44",]
+    );
+    assert_eq!(callback.typed_events.lock().await.as_slice(), &[event]);
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn typed_event_callback_failure_is_returned_without_poisoning_shutdown() {
+    let (host, callback, _server) = connected_host().await;
+    callback.event_failures.store(1, Ordering::SeqCst);
+    let event = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "event-fails-once".into(),
+        source_event_id: None,
+        source_timestamp: None,
+        channel: Default::default(),
+        conversation: None,
+        event: tinychannels_bus::ChannelEventKind::Lifecycle {
+            state: "connected".into(),
+            reason: None,
+        },
+    };
+
+    assert!(host.deliver_event(event).await.is_err());
+    assert!(callback.typed_events.lock().await.is_empty());
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn typed_event_callback_is_optional_when_host_has_no_event_object() {
+    let bus = MemoryBus::new();
+    Broker::new().spawn(bus.clone());
+    let client = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(client);
+    let event = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "legacy-host-event".into(),
+        source_event_id: None,
+        source_timestamp: None,
+        channel: Default::default(),
+        conversation: None,
+        event: tinychannels_bus::ChannelEventKind::Lifecycle {
+            state: "connected".into(),
+            reason: None,
+        },
+    };
+
+    host.deliver_event(event)
+        .await
+        .expect("older host callback surfaces may omit typed event delivery");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn typed_event_payload_limit_and_closed_owner_are_reported() {
+    let (host, _callback, _server) = connected_host().await;
+    let oversized = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "large-event".into(),
+        source_event_id: None,
+        source_timestamp: None,
+        channel: Default::default(),
+        conversation: None,
+        event: tinychannels_bus::ChannelEventKind::Lifecycle {
+            state: "connected".into(),
+            reason: Some("x".repeat(super::MAX_CALLBACK_BYTES)),
+        },
+    };
+    assert!(host.deliver_event(oversized).await.is_err());
+    assert_eq!(format!("{host:?}"), "HostChannels { .. }");
+
+    host.shutdown().await.unwrap();
+    let closed = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "closed-owner-event".into(),
+        source_event_id: None,
+        source_timestamp: None,
+        channel: Default::default(),
+        conversation: None,
+        event: tinychannels_bus::ChannelEventKind::Lifecycle {
+            state: "connected".into(),
+            reason: None,
+        },
+    };
+    assert!(host.deliver_event(closed).await.is_err());
+}
+
+#[tokio::test]
+async fn module_event_enrichment_separates_accounts_and_overwrites_provider_authority() {
+    use tinychannels::host::EventSink;
+
+    let (host, callback, _server) = connected_host().await;
+    let source = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "telegram:update:44:reaction:added".into(),
+        source_event_id: Some("44".into()),
+        source_timestamp: Some(12),
+        channel: tinychannels_bus::ChannelRef {
+            id: "spoofed-channel".into(),
+            account_id: Some("caller-spoof".into()),
+        },
+        conversation: None,
+        event: tinychannels_bus::ChannelEventKind::Typing {
+            active: true,
+            actor: Default::default(),
+            expires_at: None,
+        },
+    };
+    crate::provider::ModuleEvents(host.clone(), "telegram:account-a".into())
+        .publish_channel_event(source.clone())
+        .await
+        .unwrap();
+    crate::provider::ModuleEvents(host.clone(), "telegram:account-b".into())
+        .publish_channel_event(source)
+        .await
+        .unwrap();
+    host.flush().await.unwrap();
+
+    let events = callback.typed_events.lock().await;
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].source_event_id.as_deref(), Some("44"));
+    assert_eq!(events[1].source_event_id.as_deref(), Some("44"));
+    assert_eq!(events[0].channel.id, "telegram");
+    assert_eq!(
+        events[0].channel.account_id.as_deref(),
+        Some("telegram:account-a")
+    );
+    assert_eq!(
+        events[1].channel.account_id.as_deref(),
+        Some("telegram:account-b")
+    );
+    assert_ne!(events[0].event_id, events[1].event_id);
+    assert_eq!(
+        events[0].event_id,
+        "telegram:account-a:telegram:update:44:reaction:added:typing"
+    );
+    assert_eq!(
+        events[1].event_id,
+        "telegram:account-b:telegram:update:44:reaction:added:typing"
+    );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+#[allow(
+    deprecated,
+    reason = "this test covers the legacy inbound bridge ordering contract"
+)]
+async fn module_unified_ingress_acknowledges_message_before_following_event() {
+    use tinychannels::host::EventSink;
+
+    let (host, callback, _server) = connected_host().await;
+    let events = crate::provider::ModuleEvents(host.clone(), "telegram:bot-a".into());
+    let handled = events
+        .publish_inbound(tinychannels_bus::ChannelMessage {
+            id: "telegram_100_5".into(),
+            sender: "7".into(),
+            reply_target: "100:88".into(),
+            content: "message first".into(),
+            channel: "telegram".into(),
+            timestamp: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(handled);
+    let event = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "update-6-edit".into(),
+        source_event_id: Some("6".into()),
+        source_timestamp: Some(11),
+        channel: Default::default(),
+        conversation: Some(tinychannels_bus::ConversationRef {
+            id: "100".into(),
+            topic_id: Some("88".into()),
+            ..Default::default()
+        }),
+        event: tinychannels_bus::ChannelEventKind::MessageUpdated {
+            message_id: "telegram_100_5".into(),
+            provider_message_id: Some("5".into()),
+            parts: vec![],
+        },
+    };
+    events
+        .publish_ingress(tinychannels_bus::ChannelIngress::Event(event))
+        .await
+        .unwrap();
+    assert_eq!(
+        callback.events.lock().await.as_slice(),
+        [
+            "inbound:telegram:bot-a:message first",
+            "typed_event:telegram:bot-a:update-6-edit:message_updated"
+        ]
+    );
+    let envelope = callback.inbound_payloads.lock().await[0].clone();
+    assert_eq!(envelope["messageId"], "telegram_100_5");
+    assert_eq!(envelope["channel"]["accountId"], "telegram:bot-a");
+    assert_eq!(envelope["conversation"]["id"], "100");
+    assert_eq!(envelope["conversation"]["topicId"], "88");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn typed_event_callback_failure_is_reported_and_shutdown_closes_delivery() {
+    let (host, callback, _server) = connected_host().await;
+    callback.event_failures.store(1, Ordering::SeqCst);
+    let event = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "fixture:event".into(),
+        source_event_id: Some("source".into()),
+        source_timestamp: None,
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: None,
+        },
+        conversation: None,
+        event: tinychannels_bus::ChannelEventKind::Lifecycle {
+            state: "connected".into(),
+            reason: None,
+        },
+    };
+    assert!(host.deliver_event(event.clone()).await.is_err());
+    host.shutdown().await.unwrap();
+    assert!(host.deliver_event(event).await.is_err());
+}
+
+#[tokio::test]
 async fn allowlist_persistence_returns_only_after_host_acknowledges() {
     let (host, callback, _server) = connected_host().await;
     host.persist_allowed_identity("telegram", "12345")
@@ -521,6 +822,8 @@ async fn durable_store_round_trips_records_inside_the_active_host_scope() {
         idempotency_key: "op-scope-test".into(),
         channel_id: "telegram".into(),
         conversation_id: "room-1".into(),
+        channel_ref: None,
+        conversation_ref: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         ..Default::default()
     };
@@ -535,6 +838,7 @@ async fn durable_store_round_trips_records_inside_the_active_host_scope() {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64,
+        receipt: None,
     };
     store.save_result(result.clone()).await.unwrap();
     assert_eq!(store.load_result(&result.id).await.unwrap(), Some(result));
@@ -609,6 +913,7 @@ async fn durable_store_rejects_invalid_and_expired_records() {
         id: "op-validate".into(),
         intent_fingerprint: "a".repeat(64),
         completed_at_unix_ms: 1,
+        receipt: None,
     };
     store.save_result(expired).await.unwrap();
     assert!(store.load_result("op-validate").await.unwrap().is_none());
@@ -619,7 +924,7 @@ async fn durable_store_rejects_invalid_and_expired_records() {
 async fn canceled_flush_waiter_keeps_callback_work_and_can_retry() {
     let (host, callback, _server) = connected_host().await;
     callback.blocked.store(true, Ordering::SeqCst);
-    host.deliver_inbound("telegram", serde_json::json!({"text":"hello"}))
+    host.deliver_inbound("telegram", inbound_envelope("hello"))
         .await;
     let waiter = tokio::spawn({
         let host = host.clone();
@@ -648,7 +953,7 @@ async fn absent_optional_host_ignores_status_but_reports_inbound_failure() {
     let host = HostChannels::new(client);
     host.report_status("telegram", "connecting", None).await;
     host.flush().await.unwrap();
-    host.deliver_inbound("telegram", serde_json::json!({"text":"hello"}))
+    host.deliver_inbound("telegram", inbound_envelope("hello"))
         .await;
     assert!(host.flush().await.is_err());
     host.shutdown().await.unwrap();
@@ -666,7 +971,7 @@ async fn runtime_callbacks_do_not_follow_the_default_user() {
         .unwrap();
     let scoped = HostChannels::new_at(legacy.connection(), path);
     scoped
-        .deliver_inbound("telegram", serde_json::json!({"text":"private"}))
+        .deliver_inbound("telegram", inbound_envelope("private"))
         .await;
     scoped.report_status("telegram", "connected", None).await;
     scoped

@@ -260,6 +260,7 @@ async fn attempt_delivery(
         Err(DeliveryAttemptFailure {
             error,
             sent_before_error: true,
+            receipt,
             ..
         }) => {
             mark_delivery_platform_outcome_unknown(store, &entry.id, now_unix_ms).await?;
@@ -267,6 +268,7 @@ async fn attempt_delivery(
                 return Ok(DrainResult::Failed);
             };
             current.last_error = Some(error);
+            current.partial_receipt = receipt;
             store.save_pending(current).await?;
             Ok(DrainResult::Failed)
         }

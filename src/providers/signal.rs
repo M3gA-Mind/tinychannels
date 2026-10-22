@@ -293,6 +293,8 @@ impl SignalChannel {
             content: text.to_string(),
             channel: "signal".to_string(),
             timestamp: timestamp / 1000, // millis to secs.
+            topic_id: None,
+            reply_to_id: None,
             thread_ts: None,
             sender_name: envelope
                 .source_name
@@ -308,6 +310,13 @@ impl SignalChannel {
 impl Channel for SignalChannel {
     fn name(&self) -> &str {
         "signal"
+    }
+
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+    fn supports_chat_approvals(&self) -> bool {
+        true
     }
 
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {

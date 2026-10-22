@@ -304,8 +304,11 @@ fn relay_send_action_projects_text_outbound_intent() {
         idempotency_key: "send-1".into(),
         channel_id: "discord".into(),
         conversation_id: "channel-123".into(),
+        channel_ref: None,
+        conversation_ref: None,
         reply_to_id: Some("message-1".into()),
         thread_id: Some("thread-2".into()),
+        turn_id: None,
         durability: DeliveryDurability::Required,
         payload: OutboundPayload::Text { text: "hi".into() },
     };
@@ -579,6 +582,188 @@ async fn relay_transport_connect_sends_hello_and_handshake_reads_descriptor() {
     assert_eq!(
         transport.handshake().await.expect("handshake"),
         telegram_descriptor()
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn relay_transport_negotiates_v2_and_returns_the_canonical_descriptor() {
+    let io = Arc::new(MemoryRelayIo::default());
+    let transport = Arc::new(RelayTransport::new(
+        vec![
+            RelayIdentity {
+                platform: "discord".into(),
+                bot_id: "a".into(),
+            },
+            RelayIdentity {
+                platform: "discord".into(),
+                bot_id: "b".into(),
+            },
+        ],
+        io.clone(),
+        short_relay_timeouts(),
+    ));
+    transport.connect_v2().await.expect("connect v2");
+    let negotiation = {
+        let transport = transport.clone();
+        tokio::spawn(async move { transport.negotiate_v2().await })
+    };
+    io.wait_for_sent_len(2).await;
+    assert!(matches!(
+        io.sent().last(),
+        Some(GatewayToConnectorFrame::HelloV2 {
+            contract_version: 2,
+            ..
+        })
+    ));
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+    capabilities.progressive_edits = true;
+    capabilities.text.text_limit = Some(4096);
+    // Unrelated descriptors and the v1 descriptor cannot satisfy the v2 wait.
+    let mut unrelated = tinychannels_bus::ChannelCapabilities::unknown();
+    unrelated.progressive_edits = true;
+    io.push(ConnectorToGatewayFrame::DescriptorV2 {
+        platform: "discord".into(),
+        bot_id: "other".into(),
+        capabilities: Box::new(unrelated),
+    })
+    .await;
+    io.push(ConnectorToGatewayFrame::Descriptor {
+        descriptor: telegram_descriptor(),
+    })
+    .await;
+    let mut second_capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+    second_capabilities.reactions = true;
+    io.push(ConnectorToGatewayFrame::DescriptorV2 {
+        platform: "discord".into(),
+        bot_id: "b".into(),
+        capabilities: Box::new(second_capabilities.clone()),
+    })
+    .await;
+    io.push(ConnectorToGatewayFrame::DescriptorV2 {
+        platform: "discord".into(),
+        bot_id: "a".into(),
+        capabilities: Box::new(capabilities.clone()),
+    })
+    .await;
+    let negotiated = negotiation.await.unwrap().unwrap();
+    assert_eq!(
+        negotiated.get(&RelayIdentity {
+            platform: "discord".into(),
+            bot_id: "a".into()
+        }),
+        Some(&capabilities)
+    );
+    assert_eq!(
+        negotiated.get(&RelayIdentity {
+            platform: "discord".into(),
+            bot_id: "b".into()
+        }),
+        Some(&second_capabilities)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn relay_v2_ignores_unsupported_versions_and_times_out_at_one_deadline() {
+    let io = Arc::new(MemoryRelayIo::default());
+    let transport = Arc::new(RelayTransport::new(
+        vec![RelayIdentity {
+            platform: "discord".into(),
+            bot_id: "a".into(),
+        }],
+        io.clone(),
+        RelayTransportTimeouts {
+            handshake_ms: 60,
+            outbound_ms: 500,
+            idle_ms: 500,
+        },
+    ));
+    transport.connect_v2().await.expect("connect v2");
+    let negotiation = {
+        let transport = transport.clone();
+        tokio::spawn(async move { transport.negotiate_v2().await })
+    };
+    io.wait_for_sent_len(1).await;
+    let mut wrong_version = tinychannels_bus::ChannelCapabilities::unknown();
+    wrong_version.version = 99;
+    let start = tokio::time::Instant::now();
+    loop {
+        io.push(ConnectorToGatewayFrame::DescriptorV2 {
+            platform: "discord".into(),
+            bot_id: "other".into(),
+            capabilities: Box::new(wrong_version.clone()),
+        })
+        .await;
+        io.push(ConnectorToGatewayFrame::Descriptor {
+            descriptor: telegram_descriptor(),
+        })
+        .await;
+        if start.elapsed() > Duration::from_millis(100) {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        negotiation.await.unwrap(),
+        Err(RelayTransportError::Timeout {
+            operation: "handshake_v2"
+        })
+    );
+    assert!(
+        start.elapsed() < Duration::from_millis(200),
+        "unrelated traffic must not restart handshake timeout"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn relay_v2_rejects_an_unsupported_version_for_a_configured_identity() {
+    let io = Arc::new(MemoryRelayIo::default());
+    let transport = Arc::new(discord_transport(io.clone()));
+    transport.connect_v2().await.expect("connect v2");
+    let negotiation = {
+        let transport = transport.clone();
+        tokio::spawn(async move { transport.negotiate_v2().await })
+    };
+    io.wait_for_sent_len(1).await;
+    let mut unsupported = tinychannels_bus::ChannelCapabilities::unknown();
+    unsupported.version = 7;
+    io.push(ConnectorToGatewayFrame::DescriptorV2 {
+        platform: "discord".into(),
+        bot_id: "appShared".into(),
+        capabilities: Box::new(unsupported),
+    })
+    .await;
+    assert_eq!(
+        negotiation.await.unwrap(),
+        Err(RelayTransportError::UnsupportedCapabilitiesVersion {
+            actual: 7,
+            expected: tinychannels_bus::ChannelCapabilities::VERSION,
+        })
+    );
+}
+
+#[tokio::test]
+async fn relay_v2_refuses_cached_capabilities_after_terminal_shutdown() {
+    let io = Arc::new(MemoryRelayIo::default());
+    let transport = Arc::new(discord_transport(io.clone()));
+    transport.connect_v2().await.expect("connect v2");
+    let negotiation = {
+        let transport = transport.clone();
+        tokio::spawn(async move { transport.negotiate_v2().await })
+    };
+    io.wait_for_sent_len(1).await;
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+    capabilities.progressive_edits = true;
+    io.push(ConnectorToGatewayFrame::DescriptorV2 {
+        platform: "discord".into(),
+        bot_id: "appShared".into(),
+        capabilities: Box::new(capabilities),
+    })
+    .await;
+    assert!(negotiation.await.unwrap().is_ok());
+    transport.shutdown().await;
+    assert_eq!(
+        transport.negotiate_v2().await,
+        Err(RelayTransportError::Closed)
     );
 }
 

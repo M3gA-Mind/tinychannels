@@ -13,10 +13,10 @@ pub use descriptor::{
     RelayPlatformEntry,
 };
 pub use frames::{
-    AuthenticatedRelayInboundEvent, ConnectorToGatewayFrame, FRAME_DESCRIPTOR, FRAME_GOING_IDLE,
-    FRAME_GOING_IDLE_ACK, FRAME_HELLO, FRAME_INBOUND, FRAME_INBOUND_ACK, FRAME_INTERRUPT,
-    FRAME_INTERRUPT_INBOUND, FRAME_OUTBOUND, FRAME_OUTBOUND_RESULT, FRAME_PASSTHROUGH_FORWARD,
-    GatewayToConnectorFrame, PassthroughForward,
+    AuthenticatedRelayInboundEvent, ConnectorToGatewayFrame, FRAME_DESCRIPTOR, FRAME_DESCRIPTOR_V2,
+    FRAME_GOING_IDLE, FRAME_GOING_IDLE_ACK, FRAME_HELLO, FRAME_HELLO_V2, FRAME_INBOUND,
+    FRAME_INBOUND_ACK, FRAME_INTERRUPT, FRAME_INTERRUPT_INBOUND, FRAME_OUTBOUND,
+    FRAME_OUTBOUND_RESULT, FRAME_PASSTHROUGH_FORWARD, GatewayToConnectorFrame, PassthroughForward,
 };
 pub use transport::{
     RelayIdentity, RelayReconnectPolicy, RelayTransportError, RelayTransportTimeouts,

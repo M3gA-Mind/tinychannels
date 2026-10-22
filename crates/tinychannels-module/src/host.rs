@@ -37,7 +37,7 @@
 //! It invokes `ProcessInbound` concurrently while the notification consumer
 //! still owns status/persistence/event ordering. Its barriers drain the accepted
 //! turn frontier and shutdown joins the dispatcher. Legacy callers retain the
-//! serial `DeliverInbound` contract described above.
+//! serial v22 `DeliverInbound` envelope contract described above.
 //!
 //! # Failures are logged, not retried
 //!
@@ -49,6 +49,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tinybus::{Connection, Error, Result};
+use tinychannels_bus::ChannelEvent;
 use tinychannels_bus::names::{HOST_BUS_NAME, HOST_OBJECT_PATH, host_methods};
 use tinychannels_bus::{ChannelBackendRequest, ChannelBackendResult};
 use tinychannels_bus::{HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult};
@@ -81,6 +82,10 @@ enum Notification {
     },
     PublishEvent {
         publication: HostEventPublication,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    DeliverEvent {
+        event: Box<ChannelEvent>,
         reply: oneshot::Sender<Result<()>>,
     },
     Barrier {
@@ -239,6 +244,19 @@ impl HostChannels {
                     let _ = reply.send(result);
                     continue;
                 }
+                if let Notification::DeliverEvent { event, reply } = notification {
+                    let result = async {
+                        let proxy = callback_connection.proxy(
+                            HOST_BUS_NAME,
+                            callback_path.as_ref(),
+                            HOST_BUS_NAME,
+                        )?;
+                        proxy.call::<()>(host_methods::DELIVER_EVENT, *event).await
+                    }
+                    .await;
+                    let _ = reply.send(result);
+                    continue;
+                }
                 let inbound = matches!(notification, Notification::DeliverInbound { .. });
                 let result = async {
                     let proxy = callback_connection.proxy(
@@ -263,6 +281,7 @@ impl HostChannels {
                         }
                         Notification::PersistAllowedIdentity { .. } => unreachable!(),
                         Notification::PublishEvent { .. } => unreachable!(),
+                        Notification::DeliverEvent { .. } => unreachable!(),
                         Notification::Barrier { .. } => Ok(()),
                     }
                 }
@@ -430,8 +449,71 @@ impl HostChannels {
             .map_err(|_| Error::failed("event publication was interrupted"))?
     }
 
+    /// Deliver one typed provider event over the scoped host callback.
+    pub async fn deliver_event(&self, event: ChannelEvent) -> Result<()> {
+        if serde_json::to_vec(&event).map_or(true, |bytes| bytes.len() > MAX_CALLBACK_BYTES) {
+            return Err(Error::failed("channel event callback byte limit exceeded"));
+        }
+        let (reply, wait) = oneshot::channel();
+        let _publication = self.owner.publication.lock().await;
+        if self.owner.terminal.load(Ordering::SeqCst) {
+            return Err(Error::failed("callback consumer is closed"));
+        }
+        self.outbox
+            .send(Notification::DeliverEvent {
+                event: Box::new(event),
+                reply,
+            })
+            .await
+            .map_err(|_| Error::failed("callback consumer is closed"))?;
+        drop(_publication);
+        match wait
+            .await
+            .map_err(|_| Error::failed("event delivery was interrupted"))?
+        {
+            Err(error)
+                if error.wire_name() == "ai.tinyhumans.tinybus.Error.NameHasNoOwner"
+                    || error.wire_name() == "ai.tinyhumans.tinybus.Error.MemberNotFound" =>
+            {
+                Ok(())
+            }
+            result => result,
+        }
+    }
+
     /// Enqueue one inbound message; a flush observes delivery failures.
-    pub async fn deliver_inbound(&self, channel: &str, message: serde_json::Value) {
+    pub async fn deliver_inbound(
+        &self,
+        channel: &str,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) {
+        let Ok(message) = serde_json::to_value(envelope) else {
+            record_failure(
+                &self.owner.failure,
+                "inbound envelope could not be encoded".into(),
+            );
+            return;
+        };
+        self.deliver_inbound_value(channel, message).await;
+    }
+
+    /// Enqueue authenticated relay provenance with its normalized envelope.
+    pub async fn deliver_relay_inbound(
+        &self,
+        channel: &str,
+        delivery: tinychannels_bus::module_relay::RelayInboundDelivery,
+    ) {
+        let Ok(message) = serde_json::to_value(delivery) else {
+            record_failure(
+                &self.owner.failure,
+                "relay envelope could not be encoded".into(),
+            );
+            return;
+        };
+        self.deliver_inbound_value(channel, message).await;
+    }
+
+    async fn deliver_inbound_value(&self, channel: &str, message: serde_json::Value) {
         if serde_json::to_vec(&message).map_or(true, |bytes| bytes.len() > MAX_CALLBACK_BYTES) {
             record_failure(
                 &self.owner.failure,

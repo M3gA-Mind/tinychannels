@@ -99,6 +99,7 @@ async fn sessions(callback: &HostChannels, workspace: &std::path::Path) -> Remot
 pub(crate) async fn execute(
     callback: &HostChannels,
     request: RemoteOperation,
+    capabilities: tinychannels_bus::ChannelCapabilities,
 ) -> Result<RemoteOperationResult> {
     if serde_json::to_vec(&request).map_or(true, |bytes| {
         bytes.len() > tinychannels_bus::module_runtime::PREPARATION_MESSAGE_BYTES
@@ -113,7 +114,7 @@ pub(crate) async fn execute(
             busy,
         } => {
             let workspace = workspace(workspace_dir)?;
-            if tinychannels::capabilities_for(&channel).remote_control {
+            if capabilities.remote_control {
                 let store = sessions(callback, &workspace).await;
                 tinychannels::remote::mark_turn(&store, &channel, &reply_target, busy).await;
             }
@@ -126,7 +127,7 @@ pub(crate) async fn execute(
             history_len,
         } => {
             let workspace = workspace(workspace_dir)?;
-            let command = tinychannels::capabilities_for(&message.channel)
+            let command = capabilities
                 .remote_control
                 .then(|| tinychannels::remote::parse_remote_command(&message.content))
                 .flatten();

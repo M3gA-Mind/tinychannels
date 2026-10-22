@@ -14,7 +14,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::capabilities::capabilities_for;
 use crate::context::conversation_history_key_parts;
 use crate::traits::{Channel, ChannelSendExt, SendMessage};
 
@@ -86,7 +85,11 @@ impl ApprovalSurface {
         reply_target: &str,
         thread_ts: Option<&str>,
     ) {
-        if !capabilities_for(channel).chat_approvals {
+        if !self
+            .channels_by_name
+            .get(channel)
+            .is_some_and(|provider| provider.capabilities().chat_approvals)
+        {
             return;
         }
         let key = conversation_history_key_parts(channel, sender, reply_target, thread_ts);
@@ -118,9 +121,6 @@ impl ApprovalSurface {
             channel: channel_name,
             ..
         } = prompt;
-        if !capabilities_for(channel_name).chat_approvals {
-            return SurfaceOutcome::Unsupported;
-        }
         let Some(reply_ctx) = self.reply_context(thread_id) else {
             tracing::warn!(
                 "{LOG_PREFIX} no reply context recorded for channel={channel_name} \
@@ -136,6 +136,9 @@ impl ApprovalSurface {
             );
             return SurfaceOutcome::ChannelNotRegistered;
         };
+        if !channel.capabilities().chat_approvals {
+            return SurfaceOutcome::Unsupported;
+        }
 
         let body = format_approval_prompt(tool_name, &prompt.action_summary);
         let send = SendMessage::new(body, &reply_ctx.reply_target).in_thread(reply_ctx.thread_ts);

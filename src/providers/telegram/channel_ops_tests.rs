@@ -1,6 +1,7 @@
 use super::*;
 use crate::providers::telegram::fixtures::*;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -75,6 +76,492 @@ async fn send_draft_surfaces_api_rejection() {
         .to_string();
     assert!(err.contains("sendMessage (draft) failed"), "{err}");
     assert!(err.contains("chat not found"), "{err}");
+}
+
+fn typed_text(id: &str, text: String) -> tinychannels_bus::ChannelOutboundMessage {
+    tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "-10042".into(),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "forged".into(),
+            account_id: Some("untrusted-account".into()),
+        }),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Group,
+            id: "-10042".into(),
+            scope_id: Some("scope".into()),
+            parent_id: Some("parent".into()),
+            thread_id: Some("77".into()),
+            topic_id: Some("topic".into()),
+        }),
+        reply_to_id: Some("5".into()),
+        thread_id: None,
+        turn_id: None,
+        idempotency_key: id.into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text,
+                markdown_dialect: None,
+            },
+        }],
+    }
+}
+
+#[tokio::test]
+async fn typed_send_receipt_uses_actual_telegram_ids_and_full_address() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 321 })),
+    )
+    .await;
+    let ch = channel_for(&server, &["*"]);
+    let outcome = ch
+        .send_typed_with_receipt(&typed_text("idem", "hello".into()))
+        .await
+        .unwrap();
+    assert_eq!(outcome.error, None);
+    assert_eq!(outcome.receipt.platform_message_ids, ["321"]);
+    assert_eq!(outcome.receipt.parts[0].edit_token.as_deref(), Some("321"));
+    assert_eq!(
+        outcome.receipt.parts[0].delete_token.as_deref(),
+        Some("321")
+    );
+    assert_eq!(
+        outcome
+            .receipt
+            .conversation
+            .as_ref()
+            .unwrap()
+            .topic_id
+            .as_deref(),
+        Some("topic")
+    );
+    assert_eq!(outcome.receipt.parts[0].reply_to_id.as_deref(), Some("5"));
+}
+
+#[tokio::test]
+async fn typed_send_decodes_normalized_telegram_reply_ids() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 322 })),
+    )
+    .await;
+    let ch = channel_for(&server, &["*"]);
+    let mut message = typed_text("normalized-reply", "hello".into());
+    message.reply_to_id = Some("telegram_-10042_5".into());
+
+    let outcome = ch.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.error, None);
+    assert_eq!(
+        json_bodies(&server, "sendMessage").await[0]["reply_to_message_id"],
+        5
+    );
+}
+
+#[tokio::test]
+async fn typed_send_validation_accepts_normalized_reply_ids() {
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["*"]);
+    let mut message = typed_text("preflight", "hello".into());
+    message.reply_to_id = Some("telegram_-10042_5".into());
+
+    ch.validate_typed_send(&message).unwrap();
+}
+
+#[tokio::test]
+async fn typed_send_validation_rejects_unsupported_parts_and_invalid_reply_ids() {
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["*"]);
+    let mut unsupported = typed_text("unsupported", "hello".into());
+    unsupported.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: Default::default(),
+            caption: None,
+            alt_text: None,
+        },
+    }];
+    assert!(ch.validate_typed_send(&unsupported).is_err());
+
+    let mut invalid_reply = typed_text("invalid-reply", "hello".into());
+    invalid_reply.reply_to_id = Some("telegram_bad_id".into());
+    assert!(ch.validate_typed_send(&invalid_reply).is_err());
+
+    let mut empty = typed_text("empty", "hello".into());
+    empty.parts.clear();
+    assert!(ch.validate_typed_send(&empty).is_err());
+}
+
+#[tokio::test]
+async fn typed_send_receipt_rejects_non_text_parts_before_provider_io() {
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["*"]);
+    let mut message = typed_text("unsupported", "hello".into());
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: Default::default(),
+            caption: None,
+            alt_text: None,
+        },
+    }];
+
+    let error = ch.send_typed_with_receipt(&message).await.unwrap_err();
+
+    assert!(error.to_string().contains("text content only"));
+    assert!(json_bodies(&server, "sendMessage").await.is_empty());
+}
+
+#[tokio::test]
+async fn typed_send_receipt_keeps_ordered_multiple_text_parts() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 654 })),
+    )
+    .await;
+    let ch = channel_for(&server, &["*"]);
+    let mut message = typed_text("multi-text", "first".into());
+    message.conversation_ref = None;
+    message.conversation_id = "600".into();
+    message.thread_id = Some("18".into());
+    message
+        .parts
+        .push(tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "second".into(),
+                markdown_dialect: None,
+            },
+        });
+
+    let outcome = ch.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(
+        json_bodies(&server, "sendMessage").await[0]["text"],
+        "first\nsecond"
+    );
+    assert_eq!(outcome.receipt.platform_message_ids, ["654"]);
+    assert_eq!(
+        outcome.receipt.idempotency_key.as_deref(),
+        Some("multi-text")
+    );
+    assert_eq!(outcome.receipt.parts[0].edit_token.as_deref(), Some("654"));
+    let bodies = json_bodies(&server, "sendMessage").await;
+    assert_eq!(bodies[0]["chat_id"], "600");
+    assert_eq!(bodies[0]["message_thread_id"], "18");
+    assert_eq!(outcome.receipt.thread_id.as_deref(), Some("18"));
+}
+
+#[tokio::test]
+async fn typed_send_receipt_applies_tool_call_tag_sanitization() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 655 })),
+    )
+    .await;
+    let ch = channel_for(&server, &["*"]);
+    let message = typed_text(
+        "sanitize",
+        "before<tool_call>hidden</tool_call>[REACTION:👍|321] [IMAGE:https://example.test/image.png]".into(),
+    );
+
+    let outcome = ch.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.error, None);
+    let bodies = json_bodies(&server, "sendMessage").await;
+    assert_eq!(
+        bodies[0]["text"],
+        "before[REACTION:👍|321] [IMAGE:https://example.test/image.png]"
+    );
+    assert_eq!(bodies[0]["message_id"], serde_json::Value::Null);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests.len(),
+        1,
+        "typed markers remain text, not operations"
+    );
+    assert_eq!(outcome.receipt.platform_message_ids, ["655"]);
+}
+
+#[tokio::test]
+async fn typed_send_rejects_non_numeric_reply_reference_before_provider_io() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &["*"]);
+    let mut message = typed_text("bad-reply-id", "hello".into());
+    message.reply_to_id = Some("reply:legacy".into());
+
+    let error = ch.send_typed_with_receipt(&message).await.unwrap_err();
+
+    assert!(error.to_string().contains("numeric message ID"));
+    assert!(json_bodies(&server, "sendMessage").await.is_empty());
+}
+
+#[test]
+#[allow(
+    deprecated,
+    reason = "the normalization fallback is specifically for the v21 provider adapter"
+)]
+fn inbound_envelope_keeps_chat_channel_and_legacy_identity_fallbacks() {
+    let legacy = ChannelMessage {
+        id: "telegram_-100_7".into(),
+        sender: "legacy-sender".into(),
+        sender_name: Some("Legacy display".into()),
+        reply_target: "-100:topic-4".into(),
+        content: "legacy body".into(),
+        channel: "telegram".into(),
+        ..Default::default()
+    };
+    let channel_update = serde_json::json!({
+        "message": {
+            "message_id": 7,
+            "chat": {"type":"channel"},
+            "sender_chat": {"id": 9001},
+            "reply_to_message": {"message_id": 3}
+        }
+    });
+    let channel = TelegramChannel::inbound_envelope_from_update(&channel_update, &legacy);
+    assert_eq!(
+        channel.conversation.kind,
+        tinychannels_bus::ConversationKind::Channel
+    );
+    assert_eq!(channel.conversation.id, "-100");
+    assert_eq!(channel.sender.id, "9001");
+    assert_eq!(channel.reply_to_id.as_deref(), Some("3"));
+    assert_eq!(channel.sender.name.as_deref(), Some("Legacy display"));
+
+    let unknown_update = serde_json::json!({
+        "message": {
+            "chat": {"id": 17, "type":"unknown"},
+            "from": {}
+        }
+    });
+    let unknown = TelegramChannel::inbound_envelope_from_update(&unknown_update, &legacy);
+    assert_eq!(
+        unknown.conversation.kind,
+        tinychannels_bus::ConversationKind::Unknown
+    );
+    assert_eq!(unknown.conversation.id, "17");
+    assert_eq!(unknown.sender.id, "legacy-sender");
+}
+
+#[tokio::test]
+async fn typed_send_keeps_delivered_chunk_ids_when_later_chunk_fails() {
+    let server = mock_api().await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .respond_with(ok_with(serde_json::json!({ "message_id": 321 })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ResponseTemplate::new(400).set_body_string("rejected"),
+    )
+    .await;
+    let ch = channel_for(&server, &["*"]);
+    let mut message = typed_text("idem", "x".repeat(TELEGRAM_MAX_MESSAGE_LENGTH + 50));
+    message
+        .parts
+        .push(tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "tail".into(),
+                markdown_dialect: None,
+            },
+        });
+    let outcome = ch.send_typed_with_receipt(&message).await.unwrap();
+    assert_eq!(outcome.receipt.platform_message_ids, ["321"]);
+    assert_eq!(outcome.receipt.parts.len(), 1);
+    assert!(outcome.error.as_ref().is_some_and(|error| !error.retryable));
+    assert!(outcome.error.as_ref().unwrap().sent_before_error);
+    assert_eq!(
+        outcome.error.as_ref().unwrap().continuation_message_ids,
+        ["321"]
+    );
+    let public_error = serde_json::to_string(&outcome.error).unwrap();
+    assert!(
+        !public_error.contains(TOKEN),
+        "bot token must not enter structured errors"
+    );
+}
+
+#[tokio::test]
+async fn typed_send_without_provider_message_id_is_ambiguous_and_not_retried() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok_with(serde_json::json!({}))).await;
+    let ch = channel_for(&server, &["*"]);
+    let outcome = ch
+        .send_typed_with_receipt(&typed_text("missing-id", "hello".into()))
+        .await
+        .unwrap();
+    let error = outcome.error.expect("missing ID cannot report success");
+    assert!(
+        error.sent_before_error,
+        "Telegram accepted the request, so retry safety is unknown"
+    );
+    assert!(outcome.receipt.platform_message_ids.is_empty());
+    assert!(error.message.contains("usable message ID"));
+    assert!(!error.message.contains(TOKEN));
+    assert_eq!(json_bodies(&server, "sendMessage").await.len(), 1);
+}
+
+#[tokio::test]
+async fn typed_send_connection_refusal_is_definitely_not_sent_and_sanitized() {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
+    ch.api_base = format!("http://{address}");
+    let outcome = ch
+        .send_typed_with_receipt(&typed_text("transport-error", "hello".into()))
+        .await
+        .unwrap();
+    let error = outcome
+        .error
+        .expect("transport failure must not become success");
+    assert!(
+        !error.sent_before_error,
+        "connection refusal precedes dispatch"
+    );
+    assert!(error.message.contains("request failed"));
+    assert!(!error.message.contains(TOKEN));
+    assert!(!serde_json::to_string(&error).unwrap().contains(TOKEN));
+}
+
+#[tokio::test]
+async fn accepted_request_disconnect_remains_ambiguous() {
+    use tokio::io::AsyncReadExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let accepted = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let count = socket.read(&mut buffer).await.unwrap();
+            if count == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+            let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or_default();
+            if bytes.len() >= header_end + 4 + content_length {
+                return bytes;
+            }
+        }
+        bytes
+    });
+    let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
+    ch.api_base = format!("http://{address}");
+
+    let outcome = ch
+        .send_typed_with_receipt(&typed_text("disconnected", "hello".into()))
+        .await
+        .unwrap();
+    let request = accepted.await.unwrap();
+    let header_end = request
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap();
+    let headers = String::from_utf8_lossy(&request[..header_end]);
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap();
+    let body = &request[header_end + 4..];
+    assert_eq!(body.len(), content_length);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(body).unwrap()["text"],
+        "hello"
+    );
+    let error = outcome.error.expect("server accepted then disconnected");
+    assert!(error.sent_before_error);
+    assert!(outcome.receipt.platform_message_ids.is_empty());
+}
+
+#[tokio::test]
+async fn fallback_connection_refusal_after_markdown_rejection_is_not_sent() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let first_request = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let count = socket.read(&mut buffer).await.unwrap();
+            if count == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+            let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or_default();
+            if bytes.len() >= header_end + 4 + content_length {
+                let body = br#"{"description":"Bad Request: can't parse entities"}"#;
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                socket.write_all(body).await.unwrap();
+                return bytes;
+            }
+        }
+        bytes
+    });
+    let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
+    ch.api_base = format!("http://{address}");
+
+    let outcome = ch
+        .send_typed_with_receipt(&typed_text("fallback-refused", "hello".into()))
+        .await
+        .unwrap();
+    let request = first_request.await.unwrap();
+    assert!(request.windows(10).any(|window| window == b"parse_mode"));
+    let error = outcome.error.expect("fallback connection is refused");
+    assert!(!error.sent_before_error);
+    assert!(outcome.receipt.platform_message_ids.is_empty());
 }
 
 #[tokio::test]
@@ -507,6 +994,46 @@ fn updates(result: serde_json::Value) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true, "result": result }))
 }
 
+#[test]
+fn telegram_v2_ingress_preserves_plain_and_forum_addresses_without_legacy_topic_guessing() {
+    let legacy = ChannelMessage {
+        id: "telegram_100_5".into(),
+        sender: "alice".into(),
+        reply_target: "100:88".into(),
+        content: "message".into(),
+        channel: "telegram".into(),
+        timestamp: 12,
+        thread_ts: Some("5".into()),
+        ..Default::default()
+    };
+    let plain = TelegramChannel::inbound_envelope_from_update(
+        &serde_json::json!({"message":{"message_id":5,"date":12,"chat":{"id":100,"type":"private"},"from":{"id":7}}}),
+        &legacy,
+    );
+    assert_eq!(plain.message_id, "telegram_100_5");
+    assert_eq!(
+        plain.conversation.kind,
+        tinychannels_bus::ConversationKind::Dm
+    );
+    assert_eq!(plain.conversation.id, "100");
+    assert_eq!(plain.conversation.topic_id, None);
+    assert_eq!(plain.conversation.thread_id, None);
+    assert_eq!(plain.sender.id, "7");
+    assert_eq!(plain.raw.as_ref().unwrap()["providerMessageId"], "5");
+
+    let forum = TelegramChannel::inbound_envelope_from_update(
+        &serde_json::json!({"message":{"message_id":5,"date":12,"message_thread_id":88,"chat":{"id":100,"type":"supergroup"},"from":{"id":7}}}),
+        &legacy,
+    );
+    assert_eq!(
+        forum.conversation.kind,
+        tinychannels_bus::ConversationKind::Group
+    );
+    assert_eq!(forum.conversation.id, "100");
+    assert_eq!(forum.conversation.topic_id.as_deref(), Some("88"));
+    assert_eq!(forum.conversation.thread_id, None);
+}
+
 #[tokio::test]
 async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
     let server = mock_api().await;
@@ -548,14 +1075,6 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
         5,
         updates(serde_json::json!([
             {
-                "update_id": 10,
-                "message_reaction": {
-                    "chat": { "id": 100 }, "message_id": 4,
-                    "user": { "id": 7, "username": "alice" },
-                    "new_reaction": [{ "type": "emoji", "emoji": "❤" }]
-                }
-            },
-            {
                 "update_id": 11,
                 "message": {
                     "message_id": 5, "chat": { "id": 100, "type": "private" },
@@ -565,10 +1084,36 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
             {
                 "update_id": 12,
                 "message": {
-                    "message_id": 6, "chat": { "id": 100, "type": "private" },
-                    "from": { "id": 7, "username": "alice" }, "text": "hello bot"
+                    "message_id": 5, "message_thread_id": 88,
+                    "chat": { "id": 100, "type": "supergroup" },
+                    "from": { "id": 7, "username": "alice" }, "text": "original hello"
                 }
-            }
+            },
+            {
+                "update_id": 13,
+                "edited_message": {
+                    "message_id": 5, "edit_date": 1234,
+                    "message_thread_id": 88,
+                    "chat": { "id": 100, "type": "supergroup" },
+                    "from": { "id": 7, "username": "alice" }, "text": "edited hello"
+                }
+            },
+            {
+                "update_id": 14,
+                "edited_message": {
+                    "message_id": 5, "edit_date": 1235,
+                    "chat": { "id": 100, "type": "supergroup" },
+                    "from": { "id": 8, "username": "mallory" }, "text": "unauthorized edit"
+                }
+            },
+            {
+                "update_id": 15,
+                "message_reaction": {
+                    "chat": { "id": 100, "type": "supergroup" }, "message_id": 5, "message_thread_id": 88,
+                    "user": { "id": 7, "username": "alice" },
+                    "new_reaction": [{ "type": "emoji", "emoji": "❤" }]
+                }
+            },
         ])),
     )
     .await;
@@ -586,7 +1131,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
                 }
             },
             {
-                "update_id": 13,
+                "update_id": 15,
                 "message": {
                     "message_id": 9, "chat": { "id": 100, "type": "private" },
                     "from": { "id": 7, "username": "alice" }, "text": "second"
@@ -601,7 +1146,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
         .and(path(api_path("getUpdates")))
         .respond_with(updates(serde_json::json!([
             {
-                "update_id": 14,
+                "update_id": 16,
                 "message": {
                     "message_id": 10, "chat": { "id": 100, "type": "private" },
                     "from": { "id": 7, "username": "alice" }, "text": "third"
@@ -627,7 +1172,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
         .await
         .expect("message dispatched")
         .expect("channel open");
-    assert_eq!(first.content, "hello bot");
+    assert_eq!(first.content, "original hello");
     assert_eq!(first.sender, "alice");
     drop(rx);
 
@@ -638,10 +1183,29 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
         .unwrap();
 
     let recorded = events.events.lock().unwrap().clone();
-    assert_eq!(recorded.len(), 1);
-    assert_eq!(recorded[0].1, "reaction_received");
-    assert_eq!(recorded[0].2["target_message_id"], "telegram_100_4");
-    assert_eq!(recorded[0].2["emoji"], "❤");
+    assert_eq!(recorded.len(), 2);
+    assert_eq!(recorded[0].1, "message_updated");
+    assert_eq!(recorded[0].2["type"], "message_updated");
+    assert_eq!(recorded[0].2["sourceEventId"], "13");
+    assert_eq!(recorded[0].2["conversation"]["id"], "100");
+    assert_eq!(recorded[0].2["messageId"], "telegram_100_5");
+    assert_eq!(recorded[0].2["providerMessageId"], "5");
+    assert_eq!(recorded[0].2["conversation"]["kind"], "group");
+    assert_eq!(recorded[0].2["conversation"]["topicId"], "88");
+    assert_eq!(recorded[0].2["parts"][0]["text"], "edited hello");
+    assert_eq!(recorded[1].1, "reaction_added");
+    assert_eq!(recorded[1].2["type"], "reaction_added");
+    assert_eq!(recorded[1].2["sourceEventId"], "15");
+    assert_eq!(
+        recorded[1].2["eventId"],
+        "telegram:update:15:reaction:added:100:5:❤"
+    );
+    assert_eq!(recorded[1].2["messageId"], "telegram_100_5");
+    assert_eq!(recorded[1].2["providerMessageId"], "5");
+    assert_eq!(recorded[1].2["conversation"]["id"], "100");
+    assert_eq!(recorded[1].2["conversation"]["topicId"], "88");
+    assert_eq!(recorded[1].2["actor"]["id"], "7");
+    assert_eq!(recorded[1].2["reaction"]["value"], "❤");
     assert_eq!(json_bodies(&server, "deleteWebhook").await.len(), 1);
     // The unauthorized sender got the approval prompt.
     let prompts = sent_texts(&server).await;
@@ -651,7 +1215,75 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
     let polls = json_bodies(&server, "getUpdates").await;
     assert!(polls.len() >= 6, "{polls:?}");
     assert_eq!(polls[0]["offset"], 0);
-    assert_eq!(polls[5]["offset"], 13);
+    assert!(polls.iter().any(|poll| poll["offset"] == 16));
+}
+
+#[derive(Default)]
+struct RejectingInboundEvents(AtomicUsize);
+
+#[async_trait::async_trait]
+impl crate::host::EventSink for RejectingInboundEvents {
+    async fn publish(
+        &self,
+        _domain: &str,
+        _kind: &str,
+        _payload: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn publish_ingress(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> anyhow::Result<bool> {
+        if matches!(ingress, tinychannels_bus::ChannelIngress::Inbound(_)) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("fixture ingress delivery failed");
+        }
+        Ok(true)
+    }
+}
+
+#[tokio::test]
+async fn listen_does_not_duplicate_inbound_after_ordered_sink_failure() {
+    let server = mock_api().await;
+    mount_get_updates_once(
+        &server,
+        1,
+        updates(serde_json::json!([{
+            "update_id": 21,
+            "message": {
+                "message_id": 7,
+                "chat": {"id": 100, "type": "private"},
+                "from": {"id": 8, "username": "alice"},
+                "text": "one delivery attempt"
+            }
+        }])),
+    )
+    .await;
+    let events = Arc::new(RejectingInboundEvents::default());
+    let channel = Arc::new(fast_backoff(
+        channel_for(&server, &["alice"]).with_events(events.clone()),
+    ));
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let listener = tokio::spawn({
+        let channel = channel.clone();
+        async move { channel.listen(tx).await }
+    });
+
+    let delivered_on_legacy_path = tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("listener must finish after the ingress callback fails");
+    assert!(
+        delivered_on_legacy_path.is_none(),
+        "an ambiguous callback failure must not submit the same update through the legacy queue"
+    );
+    let result = tokio::time::timeout(GUARD, listener)
+        .await
+        .expect("listener must return after callback failure")
+        .unwrap();
+    assert!(result.is_err());
+    assert_eq!(events.0.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

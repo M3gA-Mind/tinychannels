@@ -228,6 +228,8 @@ impl LinqChannel {
             content,
             channel: "linq".to_string(),
             timestamp,
+            topic_id: None,
+            reply_to_id: None,
             thread_ts: None,
             sender_name: None,
         });
@@ -240,6 +242,13 @@ impl LinqChannel {
 impl Channel for LinqChannel {
     fn name(&self) -> &str {
         "linq"
+    }
+
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+    fn supports_chat_approvals(&self) -> bool {
+        true
     }
 
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {

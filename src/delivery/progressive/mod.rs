@@ -116,12 +116,11 @@ pub trait ProgressiveSender: Send + Sync {
     async fn typing(&self, channel: &str) -> Result<(), ProgressiveSendError>;
 }
 
-/// Whether `channel` supports the progressive placeholders (draft, thinking,
-/// filler bubbles). They need both edit and delete; a provider without them
-/// would fill the chat with permanent placeholders. Driven by
-/// [`crate::capabilities::capabilities_for`], so unknown providers fail safe.
-pub fn channel_supports_progressive_ui(channel: &str) -> bool {
-    crate::capabilities::capabilities_for(channel).progressive_edits
+/// Whether one configured channel instance supports progressive placeholders.
+pub fn channel_supports_progressive_ui(
+    capabilities: &tinychannels_bus::ChannelCapabilities,
+) -> bool {
+    capabilities.progressive_edits
 }
 
 #[cfg(test)]

@@ -12,6 +12,8 @@ fn intent(id: &str, text: &str) -> ChannelOutboundIntent {
         idempotency_key: id.into(),
         channel_id: "telegram".into(),
         conversation_id: "room".into(),
+        channel_ref: None,
+        conversation_ref: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         payload: crate::OutboundPayload::Text { text: text.into() },
         ..Default::default()
@@ -27,6 +29,7 @@ fn result(id: &str, completed_at: u64) -> DeliveryTerminalResult {
         id: id.into(),
         intent_fingerprint: "a".repeat(64),
         completed_at_unix_ms: completed_at,
+        receipt: None,
     }
 }
 
@@ -51,6 +54,71 @@ async fn pending_records_round_trip_in_enqueue_order() {
     store.remove_pending("b").await.unwrap();
     store.remove_pending("b").await.unwrap();
     assert_eq!(store.load_pending_all().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn pending_v21_media_file_and_voice_records_still_decode_after_upgrade() {
+    let backing = docs();
+    let store = DocumentDeliveryStore::new(Arc::clone(&backing));
+    store.load_pending_all().await.unwrap();
+
+    for (id, payload) in [
+        (
+            "old-media",
+            serde_json::json!({
+                "kind": "media",
+                "text": "caption",
+                "media_urls": ["https://example.test/image.png"]
+            }),
+        ),
+        (
+            "old-files",
+            serde_json::json!({
+                "kind": "files",
+                "file_urls": ["https://example.test/file.pdf"]
+            }),
+        ),
+        (
+            "old-voice",
+            serde_json::json!({
+                "kind": "voice",
+                "media_url": "https://example.test/voice.ogg"
+            }),
+        ),
+    ] {
+        let mut intent = serde_json::to_value(intent(id, "unused")).unwrap();
+        intent["payload"] = payload;
+        let record = serde_json::json!({
+            "id": id,
+            "intent": intent,
+            "enqueuedAtUnixMs": 1,
+            "retryCount": 0
+        });
+        backing
+            .put(PENDING_COLLECTION, id, record, Precondition::Absent)
+            .await
+            .unwrap();
+    }
+
+    let loaded = store.load_pending_all().await.unwrap();
+    assert_eq!(loaded.len(), 3);
+    for entry in loaded {
+        match entry.id.as_str() {
+            "old-media" => assert!(matches!(
+                entry.intent.payload,
+                crate::OutboundPayload::Media { .. }
+            )),
+            "old-files" => assert!(matches!(
+                entry.intent.payload,
+                crate::OutboundPayload::Files { .. }
+            )),
+            "old-voice" => assert!(matches!(
+                entry.intent.payload,
+                crate::OutboundPayload::Voice { .. }
+            )),
+            unexpected => panic!("unexpected stored delivery {unexpected}"),
+        }
+    }
 }
 
 #[tokio::test]

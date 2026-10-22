@@ -49,8 +49,12 @@ async fn send_message_reaction_success_publishes_reaction_sent_event() {
     let recorded = events.events.lock().unwrap().clone();
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0].0, "channel");
-    assert_eq!(recorded[0].1, "reaction_sent");
-    assert_eq!(recorded[0].2["target_message_id"], "telegram_55_7");
+    assert_eq!(recorded[0].1, "outbound_reaction");
+    assert_eq!(recorded[0].2["type"], "outbound_reaction");
+    assert_eq!(recorded[0].2["messageId"], "telegram_55_7");
+    assert_eq!(recorded[0].2["providerMessageId"], "7");
+    assert_eq!(recorded[0].2["conversation"]["id"], "55");
+    assert_eq!(recorded[0].2["reaction"]["value"], "👍");
     assert_eq!(recorded[0].2["success"], true);
 }
 
@@ -69,6 +73,7 @@ async fn send_message_reaction_rejection_is_not_an_error_and_reports_failure() {
     assert!(!ch.send_message_reaction("55", 7, "🦄").await.unwrap());
     let recorded = events.events.lock().unwrap().clone();
     assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].1, "outbound_reaction");
     assert_eq!(recorded[0].2["success"], false);
 }
 
@@ -111,6 +116,74 @@ async fn send_text_chunks_single_chunk_carries_thread_and_reply_ids() {
 }
 
 #[tokio::test]
+async fn send_text_chunks_does_not_retry_unknown_or_non_format_rejections() {
+    for status in [429, 500] {
+        let server = mock_api().await;
+        mount_post(
+            &server,
+            "sendMessage",
+            ResponseTemplate::new(status).set_body_json(serde_json::json!({
+                "ok": false,
+                "description": "not a markdown formatting rejection"
+            })),
+        )
+        .await;
+        let ch = channel_for(&server, &["*"]);
+        let error = ch
+            .send_text_chunks_with_ids("hello", "1", None, None)
+            .await
+            .unwrap_err();
+        assert!(error.downcast_ref::<PartialTextSendError>().is_some());
+        assert_eq!(
+            json_bodies(&server, "sendMessage").await.len(),
+            1,
+            "status {status}"
+        );
+        let error = error.downcast_ref::<PartialTextSendError>().unwrap();
+        assert_eq!(error.sent_before_error, status >= 500, "status {status}");
+    }
+}
+
+#[tokio::test]
+async fn send_text_chunks_retries_only_explicit_markdown_parse_rejection() {
+    let server = mock_api().await;
+    let markdown_failure = ResponseTemplate::new(400).set_body_json(serde_json::json!({
+        "ok": false,
+        "description": "Bad Request: can't parse entities: can't find end of the entity"
+    }));
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .and(body_partial_json(
+            serde_json::json!({"parse_mode":"Markdown"}),
+        ))
+        .respond_with(markdown_failure)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .and(body_partial_json(
+            serde_json::json!({"chat_id":"1","text":"hello"}),
+        ))
+        .respond_with(ok_with(serde_json::json!({"message_id": 9})))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    let ch = channel_for(&server, &["*"]);
+
+    assert_eq!(
+        ch.send_text_chunks_with_ids("hello", "1", None, None)
+            .await
+            .unwrap(),
+        ["9"]
+    );
+    let bodies = json_bodies(&server, "sendMessage").await;
+    assert_eq!(bodies.len(), 2);
+    assert_eq!(bodies[0]["parse_mode"], "Markdown");
+    assert!(bodies[1].get("parse_mode").is_none());
+}
+
+#[tokio::test]
 async fn send_text_chunks_marks_continuations_and_replies_only_on_first_chunk() {
     let server = mock_api().await;
     mount_post(&server, "sendMessage", ok()).await;
@@ -141,7 +214,10 @@ async fn send_text_chunks_retries_without_markdown_when_markdown_rejected() {
         .and(body_partial_json(
             serde_json::json!({ "parse_mode": "Markdown" }),
         ))
-        .respond_with(ResponseTemplate::new(400).set_body_string("can't parse entities"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "ok": false,
+            "description": "Bad Request: can't parse entities: can't find end of the entity"
+        })))
         .with_priority(1)
         .mount(&server)
         .await;
@@ -173,7 +249,10 @@ async fn channel_send_short_message_retries_plain_preserving_thread_and_reply() 
         .and(body_partial_json(
             serde_json::json!({ "parse_mode": "Markdown" }),
         ))
-        .respond_with(ResponseTemplate::new(400).set_body_string("can't parse entities"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "ok": false,
+            "description": "Bad Request: can't parse entities"
+        })))
         .with_priority(1)
         .mount(&server)
         .await;
@@ -210,12 +289,25 @@ async fn channel_send_short_message_retries_plain_preserving_thread_and_reply() 
 #[tokio::test]
 async fn send_text_chunks_fails_when_markdown_and_plain_both_rejected() {
     let server = mock_api().await;
-    mount_post(
-        &server,
-        "sendMessage",
-        ResponseTemplate::new(403).set_body_string("bot was blocked"),
-    )
-    .await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .and(body_partial_json(
+            serde_json::json!({"parse_mode":"Markdown"}),
+        ))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "ok": false,
+            "description": "Bad Request: can't parse entities: can't find end of the entity"
+        })))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .and(body_partial_json(serde_json::json!({"text":"hi"})))
+        .respond_with(ResponseTemplate::new(403).set_body_string("bot was blocked"))
+        .with_priority(2)
+        .mount(&server)
+        .await;
     let ch = channel_for(&server, &["*"]);
 
     let err = ch
@@ -223,8 +315,14 @@ async fn send_text_chunks_fails_when_markdown_and_plain_both_rejected() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(err.contains("Telegram sendMessage failed"), "{err}");
-    assert!(err.contains("bot was blocked"), "{err}");
+    assert!(
+        err.contains("Telegram sendMessage rejected with HTTP 403"),
+        "{err}"
+    );
+    assert!(
+        !err.contains("bot was blocked"),
+        "provider body must remain private: {err}"
+    );
     assert_eq!(json_bodies(&server, "sendMessage").await.len(), 2);
 }
 

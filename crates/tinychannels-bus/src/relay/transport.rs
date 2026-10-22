@@ -15,7 +15,7 @@ const DEFAULT_RECONNECT_BACKOFF_MS: u64 = 1_000;
 const DEFAULT_RECONNECT_MAX_BACKOFF_MS: u64 = 30_000;
 
 /// One platform/bot identity advertised to the relay connector.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayIdentity {
     pub platform: String,
@@ -70,4 +70,6 @@ pub enum RelayTransportError {
     Io(String),
     #[error("relay transport handler error: {0}")]
     Handler(String),
+    #[error("relay capabilities contract version {actual} is unsupported (expected {expected})")]
+    UnsupportedCapabilitiesVersion { actual: u32, expected: u32 },
 }

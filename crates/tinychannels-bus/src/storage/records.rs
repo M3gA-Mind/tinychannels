@@ -6,7 +6,10 @@
 //! bodies, one `*_ms` field per instant, no field that repeats the document id.
 //! These DTOs are the only place the two meet.
 
-use crate::channel::{ChannelOutboundIntent, DeliveryDurability, OutboundPayload};
+use crate::channel::{
+    ChannelOutboundIntent, ChannelRef, ConversationRef, DeliveryDurability, MessageReceipt,
+    OutboundPayload,
+};
 use crate::module_delivery::{
     DeliveryQueueEntry as QueuedDelivery, DeliveryRecoveryState, DeliveryTerminalResult,
 };
@@ -41,9 +44,16 @@ pub struct StoredIntent {
     pub idempotency_key: String,
     pub channel_id: String,
     pub conversation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_ref: Option<ChannelRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_ref: Option<ConversationRef>,
     pub reply_to_id: Option<String>,
     pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
     pub durability: DeliveryDurability,
+    #[serde(with = "stored_payload")]
     pub payload: OutboundPayload,
 }
 
@@ -53,8 +63,11 @@ impl From<&ChannelOutboundIntent> for StoredIntent {
             idempotency_key: intent.idempotency_key.clone(),
             channel_id: intent.channel_id.clone(),
             conversation_id: intent.conversation_id.clone(),
+            channel_ref: intent.channel_ref.clone(),
+            conversation_ref: intent.conversation_ref.clone(),
             reply_to_id: intent.reply_to_id.clone(),
             thread_id: intent.thread_id.clone(),
+            turn_id: intent.turn_id.clone(),
             durability: intent.durability,
             payload: intent.payload.clone(),
         }
@@ -67,8 +80,11 @@ impl From<StoredIntent> for ChannelOutboundIntent {
             idempotency_key: stored.idempotency_key,
             channel_id: stored.channel_id,
             conversation_id: stored.conversation_id,
+            channel_ref: stored.channel_ref,
+            conversation_ref: stored.conversation_ref,
             reply_to_id: stored.reply_to_id,
             thread_id: stored.thread_id,
+            turn_id: stored.turn_id,
             durability: stored.durability,
             payload: stored.payload,
         }
@@ -91,6 +107,8 @@ pub struct StoredDelivery {
     pub platform_send_started_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_state: Option<DeliveryRecoveryState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partial_receipt: Option<MessageReceipt>,
 }
 
 impl From<&QueuedDelivery> for StoredDelivery {
@@ -103,6 +121,7 @@ impl From<&QueuedDelivery> for StoredDelivery {
             last_error: entry.last_error.clone(),
             platform_send_started_ms: entry.platform_send_started_at_unix_ms.map(to_stored_ms),
             recovery_state: entry.recovery_state,
+            partial_receipt: entry.partial_receipt.clone(),
         }
     }
 }
@@ -119,6 +138,7 @@ impl From<StoredDelivery> for QueuedDelivery {
             last_error: stored.last_error,
             platform_send_started_at_unix_ms: stored.platform_send_started_ms.map(from_stored_ms),
             recovery_state: stored.recovery_state,
+            partial_receipt: stored.partial_receipt,
         }
     }
 }
@@ -131,6 +151,8 @@ pub struct StoredResult {
     pub id: String,
     pub intent_fingerprint: String,
     pub completed_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<MessageReceipt>,
 }
 
 impl From<&DeliveryTerminalResult> for StoredResult {
@@ -139,6 +161,7 @@ impl From<&DeliveryTerminalResult> for StoredResult {
             id: result.id.clone(),
             intent_fingerprint: result.intent_fingerprint.clone(),
             completed_ms: to_stored_ms(result.completed_at_unix_ms),
+            receipt: result.receipt.clone(),
         }
     }
 }
@@ -149,6 +172,46 @@ impl From<StoredResult> for DeliveryTerminalResult {
             id: stored.id,
             intent_fingerprint: stored.intent_fingerprint,
             completed_at_unix_ms: from_stored_ms(stored.completed_ms),
+            receipt: stored.receipt,
         }
     }
 }
+
+/// Keep the document-store payload's list keys snake_case while TinyBus uses
+/// camelCase. Typed v2 payload fields otherwise retain their contract shape.
+mod stored_payload {
+    use super::OutboundPayload;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde_json::Value;
+
+    pub fn serialize<S>(payload: &OutboundPayload, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+        if let Value::Object(fields) = &mut value {
+            let (wire_key, storage_key) = match fields.get("kind").and_then(Value::as_str) {
+                Some("media") => ("mediaUrls", "media_urls"),
+                Some("files") => ("fileUrls", "file_urls"),
+                _ => ("", ""),
+            };
+            if !wire_key.is_empty()
+                && let Some(value) = fields.remove(wire_key)
+            {
+                fields.insert(storage_key.to_owned(), value);
+            }
+        }
+        value.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<OutboundPayload, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OutboundPayload::deserialize(deserializer)
+    }
+}
+
+#[cfg(test)]
+#[path = "records_tests.rs"]
+mod tests;

@@ -128,6 +128,14 @@ impl Channel for DingTalkChannel {
         "dingtalk"
     }
 
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
+
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         let webhooks = self.session_webhooks.read().await;
         let webhook_url = webhooks.get(&message.recipient).ok_or_else(|| {
@@ -291,6 +299,8 @@ impl Channel for DingTalkChannel {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs(),
+                        topic_id: None,
+                        reply_to_id: None,
                         thread_ts: None,
                         sender_name: None,
                     };

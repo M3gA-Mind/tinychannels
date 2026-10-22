@@ -31,6 +31,12 @@ impl Channel for RecordingChannel {
     fn name(&self) -> &str {
         &self.name
     }
+    fn capabilities(&self) -> crate::ChannelCapabilities {
+        crate::ChannelCapabilities {
+            chat_approvals: self.name != "email",
+            ..crate::ChannelCapabilities::default()
+        }
+    }
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         if self.fail {
             anyhow::bail!("send refused");
@@ -107,23 +113,22 @@ async fn channels_without_chat_approvals_are_ignored() {
     assert!(s.reply_context("email_a@b.c_a@b.c").is_none());
     assert!(matches!(
         s.surface(&prompt("email", "email_a@b.c_a@b.c")).await,
-        SurfaceOutcome::Unsupported
+        SurfaceOutcome::NoReplyContext
     ));
     assert!(ch.sent().is_empty());
 }
 
 #[tokio::test]
-async fn missing_context_or_channel_is_reported_not_sent() {
+async fn missing_reply_context_is_reported_not_sent() {
     let ch = RecordingChannel::new("discord");
     let s = surface(&[Arc::clone(&ch)]);
     assert!(matches!(
         s.surface(&prompt("discord", "discord_bob_c")).await,
         SurfaceOutcome::NoReplyContext
     ));
-    s.record_inbound("slack", "bob", "c", None);
     assert!(matches!(
         s.surface(&prompt("slack", "slack_bob_c")).await,
-        SurfaceOutcome::ChannelNotRegistered
+        SurfaceOutcome::NoReplyContext
     ));
     assert!(ch.sent().is_empty());
 }

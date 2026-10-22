@@ -22,8 +22,8 @@ impl Callback {
         let ChannelBackendRequest::ProgressiveTransport(request) = request else {
             return Err(Error::failed("unexpected callback"));
         };
-        self.requests.lock().await.push(request.clone());
-        if let ProgressiveTransportRequest::Send { message, .. } = request {
+        self.requests.lock().await.push((*request).clone());
+        if let ProgressiveTransportRequest::Send { message, .. } = *request {
             self.sends.lock().await.push(message);
             if self.block {
                 self.entered.notify_one();
@@ -59,7 +59,13 @@ async fn fixture(block: bool) -> (Replies, Callback) {
         )
         .await
         .unwrap();
-    (Replies::new(HostChannels::new(connection)), callback)
+    (
+        Replies::new(
+            HostChannels::new(connection),
+            Arc::new(Mutex::new(HashMap::new())),
+        ),
+        callback,
+    )
 }
 
 async fn open(replies: &Replies) -> String {
@@ -171,8 +177,11 @@ async fn handles_cannot_cross_private_runtime_reply_stores() {
 #[tokio::test]
 async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
     let (replies, _) = fixture(false).await;
-    let mut reply =
-        ProgressiveReply::new(Arc::new(Sender(replies.host.clone())), "discord:fixture");
+    let mut reply = ProgressiveReply::new(
+        Arc::new(Sender(replies.host.clone())),
+        "discord:fixture",
+        tinychannels_bus::ChannelCapabilities::unknown(),
+    );
     apply(
         &mut reply,
         vec![ProgressiveEvent::TextDelta("x".repeat(MAX_CONTENT))],
@@ -416,8 +425,11 @@ async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity(
 #[tokio::test]
 async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
     let (replies, _) = fixture(false).await;
-    let mut reply =
-        ProgressiveReply::new(Arc::new(Sender(replies.host.clone())), "discord:fixture");
+    let mut reply = ProgressiveReply::new(
+        Arc::new(Sender(replies.host.clone())),
+        "discord:fixture",
+        tinychannels_bus::ChannelCapabilities::unknown(),
+    );
     apply(
         &mut reply,
         vec![ProgressiveEvent::ThinkingDelta("x".repeat(MAX_CONTENT))],
@@ -448,11 +460,11 @@ async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
     sender.delete("discord:room", "message-id").await.unwrap();
     let requests = callback.requests.lock().await;
     assert!(
-        matches!(&requests[0], ProgressiveTransportRequest::Edit { channel, message_id, text }
+        matches!(&requests[0], ProgressiveTransportRequest::Edit { channel, message_id, text, .. }
         if channel == "discord:room" && message_id == "message-id" && text == "updated")
     );
     assert!(
-        matches!(&requests[1], ProgressiveTransportRequest::Delete { channel, message_id }
+        matches!(&requests[1], ProgressiveTransportRequest::Delete { channel, message_id, .. }
         if channel == "discord:room" && message_id == "message-id")
     );
 }
@@ -488,7 +500,11 @@ async fn transport_failures_preserve_recovery_classification() {
                 };
                 assert_eq!(error.to_string(), "progressive transport failed");
             }
-            ProgressiveTransportResult::Success(_) => unreachable!(),
+            ProgressiveTransportResult::Acknowledged
+            | ProgressiveTransportResult::Accepted
+            | ProgressiveTransportResult::Success(_)
+            | ProgressiveTransportResult::Outcome(_)
+            | ProgressiveTransportResult::UnsupportedContent => unreachable!(),
         }
     }
 }

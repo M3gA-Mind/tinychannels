@@ -247,6 +247,13 @@ impl Channel for DiscordChannel {
         "discord"
     }
 
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
+
     /// Recipient-less proactive sends (cron/heartbeat) deliver to the bot's
     /// configured default `channel_id`. `None` when unconfigured, so proactive
     /// routing skips Discord rather than letting `send` bail on an empty target
@@ -501,6 +508,8 @@ impl Channel for DiscordChannel {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs(),
+                        topic_id: None,
+                        reply_to_id: None,
                         thread_ts: None,
                         sender_name: None,
                     };

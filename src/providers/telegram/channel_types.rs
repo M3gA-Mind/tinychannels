@@ -39,9 +39,16 @@ pub(crate) struct TelegramUpdateWindow {
 #[derive(Debug, Clone)]
 pub(crate) struct TelegramReactionEvent {
     pub(crate) sender: String,
+    pub(crate) sender_id: String,
     pub(crate) reply_target: String,
     pub(crate) target_message_id: String,
     pub(crate) emoji: String,
+    pub(crate) custom_emoji_id: Option<String>,
+    pub(crate) added: bool,
+    pub(crate) update_id: Option<String>,
+    pub(crate) timestamp: Option<u64>,
+    pub(crate) thread_id: Option<String>,
+    pub(crate) conversation_kind: tinychannels_bus::ConversationKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

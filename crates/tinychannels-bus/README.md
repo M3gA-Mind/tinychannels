@@ -43,9 +43,81 @@ Dispatch mode and effective limit cannot change after activation. Flush waits
 for preceding accepted turns; stop freezes admission and retains pending work
 across canceled waiters. The existing module cleanup deadline reports pending
 cleanup after ten seconds while retaining the owner for a later stop retry.
+Contract version 22 carries `ChannelInboundEnvelope` content parts through
+`DeliverInbound` and `ProcessInbound`, and sends `ChannelOutboundMessage` values
+with ordered typed parts through `SendChannelIntent`. The legacy `ChannelMessage`
+and `SendMessage` conversions are deprecated, one-release compatibility
+projections. Their outbound adapter accepts text parts only; rich payloads
+remain available to providers that implement `Channel::send_typed`. Binding is
+exact-version: a v21 host cannot bind a v22 module, so this shim is for source
+migration and same-version legacy provider adapters, not cross-version callback
+compatibility.
+
 This source contract still requires a compatible published native module before
 a downstream host can claim released composition.
+
+Provider notifications use `ChannelEvent`, a versioned DTO with a `type`
+discriminator, stable event/source IDs, source time, `ChannelRef`, and the full
+optional `ConversationRef`. The module sends it through `ChannelsHost.DeliverEvent`
+in the same ordered callback queue as inbound messages. `PublishEvent` remains
+available for older, unrelated domain publications.
+
+Providers that support v22 ordered ingress submit `ChannelIngress` items through
+their `EventSink`: normalized inbound envelopes and typed events share one
+awaited path. Telegram uses this path for messages, edits and reactions, so a
+later edit/reaction cannot overtake its message. The legacy message-channel
+bridge remains for providers still migrating. Event message references retain
+the stable module message ID while `providerMessageId` preserves the source ID;
+Telegram topic IDs remain separate from chat IDs in `ConversationRef`.
+
+Typed send outcomes may carry multiple provider message IDs and per-part edit
+or delete tokens. Tokens are opaque operation inputs and are only populated
+when the provider's actual response returns the corresponding message IDs.
+Required delivery first persists the unknown-send state, then attaches any
+partial receipt in a follow-up save; both writes preserve the pre-I/O crash
+marker. Terminal receipts are included in idempotent replays.
 
 The controller vocabulary includes complete Discord guild, text-channel and
 permission DTOs. Provider APIs re-export these types at their existing paths;
 REST calls and permission calculations remain implementation behavior.
+
+The deployed OpenHuman web chat vocabulary is available from
+`tinychannels_bus::web`. It is a distinct snake-case `event`-tagged protocol,
+separate from provider `ChannelEvent`'s `type` tag and the progressive output
+event's `type` tag. The web DTOs retain optional-field omission and accept the
+historical `chat_error` cancellation shape alongside `chat_cancelled`.
+Tenant/profile stamps stay in the host. Ordered message `parts` use
+`OutboundContentPart`, including typed media and voice notes; `full_response`
+remains a compatibility projection. Socket event aliases are transport names
+and never rewrite the payload discriminator. Alias generation suppresses
+parent and subagent stream deltas, matching the deployed socket server.
+
+Regenerate the checked-in JSON Schema for TypeScript generation with
+`cargo run -p tinychannels-bus --example web_schema > crates/tinychannels-bus/schema/web-channel-event.schema.json`;
+the public `web_event_schema_json()` function exposes the same schema to
+codegen tools.
+The transport-free helpers also carry the web payload cap and timing
+calculations for migration into host adapters. Logging and clock acquisition
+remain host responsibilities. This contract does not claim that OpenHuman's
+current host, TUI, or frontend has migrated to these types; those integrations
+belong to their dependent epic leaves.
+
+`src/fixtures/web/` contains hand-authored historical compatibility fixtures,
+not captured runtime transcripts. Their shapes were derived from the deployed
+host at OpenHuman base `ba83482245`, including constructors in
+`crates/openhuman-core/src/channels/web_chat/presentation.rs`,
+`crates/openhuman-core/src/channels/web_chat/ops.rs`,
+`crates/openhuman-core/src/channels/proactive.rs`,
+`crates/openhuman-core/src/flows/ops/streaming.rs`,
+`crates/openhuman-core/src/cron/scheduler/`,
+`crates/openhuman-core/src/agent/orchestration/background_delivery.rs`,
+`crates/openhuman-core/src/agent/tinyagents/host/progress_sink.rs`,
+`crates/openhuman-core/src/channels/host/adapters.rs`,
+`crates/openhuman-core/src/channels/providers/relay/channel.rs`,
+and the RPC Socket.IO adapter. These fixtures pin serialized field presence,
+omission, nulls, and nested payloads against that source audit. Some valid
+representable states are not emitted by the current constructors (for example,
+an empty citations list); those are compatibility-shape fixtures, not claims
+of observed runtime output. `historical_events.json` includes the per-variant
+field shapes for the remaining deployed event names plus the two legacy names
+still accepted by clients.

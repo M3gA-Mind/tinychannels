@@ -4,26 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Length unit used by a provider's presentation and chunking limits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum LengthUnit {
-    Characters,
-    Utf8Bytes,
-    Utf16Units,
-}
-
-/// Markdown or markup dialect accepted by a provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum MarkdownDialect {
-    Plain,
-    Markdown,
-    Html,
-    SlackMrkdwn,
-    DiscordMarkdown,
-    TelegramMarkdownV2,
-}
+pub use crate::capabilities::{LengthUnit, MarkdownDialect};
 
 /// Static provider feature flags.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -46,7 +27,11 @@ pub struct ChannelStaticCapabilities {
 #[serde(default, rename_all = "camelCase")]
 pub struct ChannelPresentationCapabilities {
     pub text_limit: Option<usize>,
+    #[serde(with = "legacy_length_unit")]
+    #[schemars(with = "legacy_length_unit::LegacyLengthUnit")]
     pub length_unit: LengthUnit,
+    #[serde(with = "legacy_markdown_dialect")]
+    #[schemars(with = "legacy_markdown_dialect::LegacyMarkdownDialect")]
     pub markdown_dialect: MarkdownDialect,
     pub supports_edit: bool,
     pub max_actions: Option<usize>,
@@ -57,6 +42,97 @@ pub struct ChannelPresentationCapabilities {
     pub supports_styles: bool,
     pub supports_disabled: bool,
     pub supports_layout_hints: bool,
+}
+
+mod legacy_length_unit {
+    use super::LengthUnit;
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[serde(rename_all = "kebab-case")]
+    #[schemars(rename_all = "kebab-case")]
+    pub enum LegacyLengthUnit {
+        #[serde(alias = "chars", alias = "characters")]
+        Characters,
+        #[serde(alias = "utf8_bytes")]
+        Utf8Bytes,
+        #[serde(alias = "utf16_units")]
+        Utf16Units,
+    }
+
+    pub fn serialize<S>(value: &LengthUnit, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let legacy = match value {
+            LengthUnit::Characters => LegacyLengthUnit::Characters,
+            LengthUnit::Utf8Bytes => LegacyLengthUnit::Utf8Bytes,
+            LengthUnit::Utf16Units => LegacyLengthUnit::Utf16Units,
+        };
+        legacy.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<LengthUnit, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(match LegacyLengthUnit::deserialize(deserializer)? {
+            LegacyLengthUnit::Characters => LengthUnit::Characters,
+            LegacyLengthUnit::Utf8Bytes => LengthUnit::Utf8Bytes,
+            LegacyLengthUnit::Utf16Units => LengthUnit::Utf16Units,
+        })
+    }
+}
+
+mod legacy_markdown_dialect {
+    use super::MarkdownDialect;
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[serde(rename_all = "kebab-case")]
+    #[schemars(rename_all = "kebab-case")]
+    pub enum LegacyMarkdownDialect {
+        Plain,
+        Markdown,
+        Html,
+        #[serde(alias = "slack_mrkdwn")]
+        SlackMrkdwn,
+        #[serde(alias = "discord_markdown")]
+        DiscordMarkdown,
+        #[serde(alias = "telegram_markdown_v2")]
+        TelegramMarkdownV2,
+    }
+
+    pub fn serialize<S>(value: &MarkdownDialect, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let legacy = match value {
+            MarkdownDialect::Plain => LegacyMarkdownDialect::Plain,
+            MarkdownDialect::Markdown => LegacyMarkdownDialect::Markdown,
+            MarkdownDialect::Html => LegacyMarkdownDialect::Html,
+            MarkdownDialect::SlackMrkdwn => LegacyMarkdownDialect::SlackMrkdwn,
+            MarkdownDialect::DiscordMarkdown => LegacyMarkdownDialect::DiscordMarkdown,
+            MarkdownDialect::TelegramMarkdownV2 => LegacyMarkdownDialect::TelegramMarkdownV2,
+        };
+        legacy.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<MarkdownDialect, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(match LegacyMarkdownDialect::deserialize(deserializer)? {
+            LegacyMarkdownDialect::Plain => MarkdownDialect::Plain,
+            LegacyMarkdownDialect::Markdown => MarkdownDialect::Markdown,
+            LegacyMarkdownDialect::Html => MarkdownDialect::Html,
+            LegacyMarkdownDialect::SlackMrkdwn => MarkdownDialect::SlackMrkdwn,
+            LegacyMarkdownDialect::DiscordMarkdown => MarkdownDialect::DiscordMarkdown,
+            LegacyMarkdownDialect::TelegramMarkdownV2 => MarkdownDialect::TelegramMarkdownV2,
+        })
+    }
 }
 
 impl Default for ChannelPresentationCapabilities {
@@ -74,6 +150,89 @@ impl Default for ChannelPresentationCapabilities {
             supports_styles: false,
             supports_disabled: false,
             supports_layout_hints: false,
+        }
+    }
+}
+
+/// Mechanical v1 projection of canonical v2 capabilities for legacy adapters.
+impl From<&crate::ChannelCapabilities> for ChannelStaticCapabilities {
+    fn from(capabilities: &crate::ChannelCapabilities) -> Self {
+        let has_action = |name: &str| {
+            capabilities
+                .actions
+                .supported
+                .iter()
+                .any(|item| item == name)
+        };
+        Self {
+            chat_types: capabilities.addressing.conversation_types.clone(),
+            polls: capabilities.content.poll.outbound,
+            reactions: capabilities.reactions,
+            edit: has_action("edit"),
+            unsend: has_action("delete") || has_action("unsend"),
+            reply: has_action("reply"),
+            threads: capabilities.addressing.thread_id,
+            media: capabilities.content.image.outbound
+                || capabilities.content.video.outbound
+                || capabilities.content.audio.outbound
+                || capabilities.content.file.outbound,
+            native_commands: has_action("native-command"),
+            block_streaming: capabilities.progressive_edits,
+        }
+    }
+}
+
+/// Mechanical v1 projection of canonical v2 presentation facts.
+impl From<&crate::ChannelCapabilities> for ChannelPresentationCapabilities {
+    fn from(capabilities: &crate::ChannelCapabilities) -> Self {
+        Self {
+            text_limit: capabilities
+                .text
+                .text_limit
+                .and_then(|limit| usize::try_from(limit).ok()),
+            length_unit: capabilities.text.length_unit,
+            markdown_dialect: capabilities
+                .text
+                .markdown_dialects
+                .first()
+                .copied()
+                .unwrap_or_default(),
+            supports_edit: capabilities
+                .actions
+                .supported
+                .iter()
+                .any(|action| action == "edit"),
+            max_actions: capabilities
+                .content
+                .buttons
+                .max_count
+                .and_then(|count| usize::try_from(count).ok()),
+            max_actions_per_row: capabilities
+                .content
+                .button_presentation
+                .max_actions_per_row
+                .and_then(|n| usize::try_from(n).ok()),
+            max_rows: capabilities
+                .content
+                .button_presentation
+                .max_rows
+                .and_then(|n| usize::try_from(n).ok()),
+            max_label_length: capabilities
+                .content
+                .button_presentation
+                .max_label_length
+                .and_then(|n| usize::try_from(n).ok()),
+            max_value_bytes: capabilities
+                .content
+                .button_presentation
+                .max_value_bytes
+                .and_then(|n| usize::try_from(n).ok()),
+            supports_styles: capabilities.content.button_presentation.supports_styles,
+            supports_disabled: capabilities.content.button_presentation.supports_disabled,
+            supports_layout_hints: capabilities
+                .content
+                .button_presentation
+                .supports_layout_hints,
         }
     }
 }
@@ -178,7 +337,6 @@ pub const CHANNEL_MESSAGE_ACTION_NAMES: &[&str] = &[
     "ban",
     "set-profile",
     "set-presence",
-    "set-profile",
     "download-file",
     "upload-file",
 ];

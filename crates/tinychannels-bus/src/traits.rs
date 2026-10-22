@@ -1,10 +1,14 @@
+use crate::channel::ChannelInboundEnvelope;
 use serde::{Deserialize, Serialize};
 
-/// A message received from or sent to a channel
+/// Legacy v21 message projection retained for one release during v22 migration.
+/// New `DeliverInbound` callbacks carry [`crate::ChannelInboundEnvelope`].
 ///
-/// Serde-derived because this type crosses the bus: the module forwards it to
-/// the host's `DeliverInbound` callback. Field names are the wire contract —
-/// renaming one is a decode failure at the far end, not a compile error.
+/// Serde field names remain the v21 wire contract for compatibility shims.
+#[deprecated(
+    since = "0.1.34",
+    note = "v21 compatibility shim; use ChannelInboundEnvelope for canonical v22 inbound content"
+)]
 ///
 /// `Default` is derived so a caller that fills only some fields can spread
 /// `..Default::default()` and keep compiling when an optional field is added.
@@ -19,6 +23,12 @@ pub struct ChannelMessage {
     /// Platform thread identifier (e.g. Slack `ts`, Discord thread ID).
     /// When set, replies should be posted as threaded responses.
     pub thread_ts: Option<String>,
+    /// Provider message identifier this inbound message replies to.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "replyToId")]
+    pub reply_to_id: Option<String>,
+    /// Independent provider topic identifier where supported.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "topicId")]
+    pub topic_id: Option<String>,
     /// The sender's display name as the platform gives it (WhatsApp push
     /// name, Telegram first and last name, Signal profile name, ...). Never
     /// a saved contact name: no channel exposes one. `None` when the
@@ -28,10 +38,22 @@ pub struct ChannelMessage {
     pub sender_name: Option<String>,
 }
 
-/// Message to send through a channel
-///
-/// Serde-derived for the same reason as [`ChannelMessage`]: it is the payload
-/// of the module's `SendMessage` member.
+/// One ordered provider ingress item. Providers submit messages and lifecycle
+/// events through the same sink when the module host supplies it.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", content = "item", rename_all = "snake_case")]
+pub enum ChannelIngress {
+    Inbound(ChannelInboundEnvelope),
+    Event(crate::ChannelEvent),
+}
+
+/// Legacy v21 text-only send projection retained for one release.
+/// Canonical sends use [`crate::ChannelOutboundMessage`] through
+/// `SendChannelIntent`.
+#[deprecated(
+    since = "0.1.34",
+    note = "v21 compatibility shim; use ChannelOutboundMessage for canonical v22 sends"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SendMessage {
     pub content: String,
@@ -39,6 +61,12 @@ pub struct SendMessage {
     pub subject: Option<String>,
     /// Platform thread identifier for threaded replies (e.g. Slack `thread_ts`).
     pub thread_ts: Option<String>,
+    /// Independent provider topic identifier where supported.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "topicId")]
+    pub topic_id: Option<String>,
+    /// Source message identifier for a provider reply.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "replyToId")]
+    pub reply_to_id: Option<String>,
     /// Caller-provided or generated idempotency key for retry-safe delivery.
     pub idempotency_key: Option<String>,
 }
@@ -51,6 +79,8 @@ impl SendMessage {
             recipient: recipient.into(),
             subject: None,
             thread_ts: None,
+            topic_id: None,
+            reply_to_id: None,
             idempotency_key: None,
         }
     }
@@ -66,6 +96,8 @@ impl SendMessage {
             recipient: recipient.into(),
             subject: Some(subject.into()),
             thread_ts: None,
+            topic_id: None,
+            reply_to_id: None,
             idempotency_key: None,
         }
     }
@@ -106,9 +138,47 @@ pub trait Channel: Send + Sync {
     }
 
     /// Deliver one message through the configured provider.
+    #[deprecated(
+        since = "0.1.34",
+        note = "v21 text-only provider adapter; implement send_typed for canonical v22 content"
+    )]
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()>;
 
+    /// Deliver canonical typed content. Migrated providers override this; the
+    /// default is the explicit text-only one-release compatibility projection.
+    async fn send_typed(
+        &self,
+        message: &crate::channel::ChannelOutboundMessage,
+    ) -> anyhow::Result<()> {
+        self.send(&message.to_legacy_message()?).await
+    }
+
+    /// Validate a typed send before it enters the provider actor. The default
+    /// validates the one-release text-only projection; native typed providers
+    /// should override this with their own content and addressing checks.
+    fn validate_typed_send(
+        &self,
+        message: &crate::channel::ChannelOutboundMessage,
+    ) -> anyhow::Result<()> {
+        message.to_legacy_message().map(|_| ())
+    }
+
+    /// Send canonical content and return the provider receipt when the actual
+    /// provider response supplies message IDs. Legacy adapters remain usable;
+    /// they return an empty receipt rather than guessing an ID.
+    async fn send_typed_with_receipt(
+        &self,
+        message: &crate::channel::ChannelOutboundMessage,
+    ) -> anyhow::Result<crate::channel::ChannelSendOutcome> {
+        self.send_typed(message).await?;
+        Ok(crate::channel::ChannelSendOutcome::default())
+    }
+
     /// Legacy listener seam used by isolated test doubles.
+    #[deprecated(
+        since = "0.1.34",
+        note = "v21 listener adapter; use typed DeliverInbound callbacks in v22 modules"
+    )]
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()>;
 
     /// Whether the configured provider is currently healthy.
@@ -146,7 +216,57 @@ pub trait Channel: Send + Sync {
 
     /// Instance-specific product interaction capabilities.
     fn capabilities(&self) -> crate::capabilities::ChannelCapabilities {
-        crate::capabilities::capabilities_for(self.name())
+        let mut capabilities = crate::capabilities::ChannelCapabilities::unknown();
+        capabilities.remote_control = self.supports_remote_control();
+        capabilities.chat_approvals = self.supports_chat_approvals();
+        capabilities.history_key_ignores_thread = self.history_key_ignores_thread();
+        capabilities.progressive_edits = self.supports_progressive_edits();
+        capabilities.streaming_reply_pipeline = self.supports_draft_updates();
+        capabilities.reactions = self.supports_reactions();
+        capabilities.addressing.reply_to_id = self.supports_reply_to_id();
+        capabilities.addressing.thread_id = self.supports_thread_id();
+        capabilities.addressing.topic_id = self.supports_topic_id();
+        capabilities.content.parts = vec!["text".into()];
+        capabilities.content.text = crate::capabilities::ContentCapability {
+            inbound: true,
+            outbound: true,
+            ..Default::default()
+        };
+        capabilities.actions.supported = vec!["send".into()];
+        if capabilities.progressive_edits {
+            capabilities.actions.supported.push("draft-update".into());
+        }
+        if self.supports_edit() {
+            capabilities.actions.supported.push("edit".into());
+        }
+        if capabilities.addressing.reply_to_id || capabilities.addressing.thread_id {
+            capabilities.actions.supported.push("reply".into());
+        }
+        if capabilities.addressing.thread_id {
+            capabilities.actions.supported.push("thread-reply".into());
+        }
+        if capabilities.reactions {
+            capabilities
+                .actions
+                .supported
+                .extend(["react".into(), "reactions".into()]);
+        }
+        capabilities
+    }
+
+    /// Whether remote-control commands are supported by this configured instance.
+    fn supports_remote_control(&self) -> bool {
+        false
+    }
+
+    /// Whether approval prompts can be returned to this configured instance.
+    fn supports_chat_approvals(&self) -> bool {
+        false
+    }
+
+    /// Whether this provider treats a thread marker as a reply target only.
+    fn history_key_ignores_thread(&self) -> bool {
+        false
     }
 
     /// Whether native emoji reactions are supported.
@@ -154,8 +274,36 @@ pub trait Channel: Send + Sync {
         false
     }
 
-    /// Whether progressive draft updates are supported.
+    /// Whether progressive draft operations are needed for the provider's
+    /// streaming reply pipeline. This does not necessarily mean that the
+    /// provider displays those drafts to the user.
     fn supports_draft_updates(&self) -> bool {
+        false
+    }
+
+    /// Whether the provider can visibly update a progressive reply while a
+    /// turn is running. Defaults to the legacy draft-update declaration.
+    fn supports_progressive_edits(&self) -> bool {
+        self.supports_draft_updates()
+    }
+
+    /// Whether an existing sent message can be edited independently of draft streaming.
+    fn supports_edit(&self) -> bool {
+        false
+    }
+
+    /// Whether outbound messages may address a source message directly.
+    fn supports_reply_to_id(&self) -> bool {
+        false
+    }
+
+    /// Whether outbound messages may address a conversation thread.
+    fn supports_thread_id(&self) -> bool {
+        false
+    }
+
+    /// Whether provider conversations can be addressed by an independent topic identifier.
+    fn supports_topic_id(&self) -> bool {
         false
     }
 

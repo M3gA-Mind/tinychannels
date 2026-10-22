@@ -36,6 +36,9 @@ pub struct DeliveryQueueEntry {
     pub platform_send_started_at_unix_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery_state: Option<DeliveryRecoveryState>,
+    /// Receipt from a provider that emitted part of this operation before failing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partial_receipt: Option<crate::channel::MessageReceipt>,
 }
 
 impl DeliveryQueueEntry {
@@ -62,6 +65,9 @@ pub struct DeliveryTerminalResult {
     /// SHA-256 of the serialized intent, used to reject idempotency-key reuse.
     pub intent_fingerprint: String,
     pub completed_at_unix_ms: u64,
+    /// Provider receipt retained for idempotent replay of the completed operation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<crate::channel::MessageReceipt>,
 }
 
 #[cfg(test)]

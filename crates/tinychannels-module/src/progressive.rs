@@ -1,5 +1,6 @@
 //! Bounded module-owned progressive reply workers and retained terminal cleanup.
 use crate::host::HostChannels;
+use crate::provider::Running;
 use async_trait::async_trait;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -36,7 +37,9 @@ impl Sender {
     ) -> std::result::Result<Value, ProgressiveSendError> {
         let result = self
             .0
-            .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(request))
+            .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(
+                request,
+            )))
             .await
             .map_err(|_| ProgressiveSendError::Unavailable)?;
         match result {
@@ -73,6 +76,11 @@ impl ProgressiveSender for Sender {
         let message = tinychannels::legacy_message_value_from_outbound_intent(&intent);
         self.invoke(ProgressiveTransportRequest::Send {
             channel: channel.into(),
+            turn_id: None,
+            channel_ref: None,
+            conversation: None,
+            sequence: None,
+            idempotency_key: None,
             message,
         })
         .await
@@ -85,7 +93,11 @@ impl ProgressiveSender for Sender {
     ) -> std::result::Result<(), ProgressiveSendError> {
         self.invoke(ProgressiveTransportRequest::Edit {
             channel: channel.into(),
+            turn_id: None,
+            channel_ref: None,
+            conversation: None,
             message_id: message_id.into(),
+            receipt: None,
             text: text.into(),
         })
         .await
@@ -98,7 +110,11 @@ impl ProgressiveSender for Sender {
     ) -> std::result::Result<(), ProgressiveSendError> {
         self.invoke(ProgressiveTransportRequest::Delete {
             channel: channel.into(),
+            turn_id: None,
+            channel_ref: None,
+            conversation: None,
             message_id: message_id.into(),
+            receipt: None,
         })
         .await
         .map(drop)
@@ -106,6 +122,9 @@ impl ProgressiveSender for Sender {
     async fn typing(&self, channel: &str) -> std::result::Result<(), ProgressiveSendError> {
         self.invoke(ProgressiveTransportRequest::Typing {
             channel: channel.into(),
+            turn_id: None,
+            channel_ref: None,
+            conversation: None,
         })
         .await
         .map(drop)
@@ -135,13 +154,18 @@ struct State {
 /// One private runtime's reply handles; all callbacks retain that runtime's host.
 pub(crate) struct Replies {
     host: HostChannels,
+    running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
     state: Mutex<State>,
 }
 
 impl Replies {
-    pub(crate) fn new(host: HostChannels) -> Self {
+    pub(crate) fn new(
+        host: HostChannels,
+        running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    ) -> Self {
         Self {
             host,
+            running,
             state: Mutex::new(State {
                 terminal: false,
                 entries: HashMap::new(),
@@ -209,6 +233,14 @@ impl Replies {
         if channel.is_empty() || channel.len() > 4096 {
             return Err(Error::failed("invalid progressive target"));
         }
+        let provider_id = tinychannels_bus::provider_id(&channel);
+        let capabilities = self
+            .running
+            .lock()
+            .await
+            .get(provider_id)
+            .map(|provider| provider.channel.capabilities())
+            .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown);
         let mut state = self.state.lock().await;
         if state.terminal {
             return Err(Error::failed("progressive replies are shutting down"));
@@ -248,7 +280,7 @@ impl Replies {
         let handle = uuid::Uuid::new_v4().simple().to_string();
         let (commands, inbox) = mpsc::channel(16);
         let host = self.host.clone();
-        let worker = tokio::spawn(run(host, channel, inbox));
+        let worker = tokio::spawn(run(host, channel, capabilities, inbox));
         state.entries.insert(
             handle.clone(),
             Arc::new(Entry {
@@ -343,8 +375,13 @@ async fn close_entry(entry: Arc<Entry>, text: String, retain_existing: bool) -> 
         .map_err(|_| Error::failed("progressive cleanup failed"))
 }
 
-async fn run(host: HostChannels, channel: String, mut inbox: mpsc::Receiver<Command>) {
-    let mut reply = ProgressiveReply::new(Arc::new(Sender(host)), channel);
+async fn run(
+    host: HostChannels,
+    channel: String,
+    capabilities: tinychannels_bus::ChannelCapabilities,
+    mut inbox: mpsc::Receiver<Command>,
+) {
+    let mut reply = ProgressiveReply::new(Arc::new(Sender(host)), channel, capabilities);
     let mut edits = tokio::time::interval(EDIT_FLUSH_INTERVAL);
     let mut typing = tokio::time::interval(TYPING_REFRESH_INTERVAL);
     let mut fillers = tokio::time::interval(FILLER_INTERVAL);

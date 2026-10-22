@@ -54,10 +54,14 @@ pub mod methods {
     pub const RESERVE_RELAY: &str = "ReserveRelay";
     /// Start a reserved relay using confidential hydrated configuration.
     pub const START_RELAY: &str = "StartRelay";
+    /// Start a relay using the canonical v2 identity-scoped capability handshake.
+    pub const START_RELAY_V2: &str = "StartRelayV2";
     /// Stop and join one reserved relay, including pending startup.
     pub const STOP_RELAY: &str = "StopRelay";
     /// Return safe lifecycle facts for one relay reservation.
     pub const RELAY_STATUS: &str = "RelayStatus";
+    /// Query negotiated canonical v2 relay capabilities by reservation.
+    pub const RELAY_CAPABILITIES_V2: &str = "RelayCapabilitiesV2";
     /// Submit an ordered relay outbound intent.
     pub const SEND_RELAY_INTENT: &str = "SendRelayIntent";
     /// Freeze publication and drain every owned provider, relay and callback.
@@ -90,14 +94,30 @@ pub mod methods {
     pub const CHANNEL_CONTROLLER: &str = "ChannelController";
     /// Run typing, draft and capability operations on one running provider.
     pub const CHANNEL_INTERACTION: &str = "ChannelInteraction";
+    /// Begin a bounded host-owned media upload.
+    pub const BEGIN_MEDIA_UPLOAD: &str = "BeginMediaUpload";
+    /// Append a confidential, ordered chunk to a media upload.
+    pub const APPEND_MEDIA_UPLOAD_CHUNK: &str = "AppendMediaUploadChunk";
+    /// Finalize a media upload and return an opaque scoped reference.
+    pub const FINISH_MEDIA_UPLOAD: &str = "FinishMediaUpload";
+    /// Abort a buffered media upload; retries are idempotent.
+    pub const ABORT_MEDIA_UPLOAD: &str = "AbortMediaUpload";
+    /// Resolve a scoped opaque reference into a bounded read handle.
+    pub const BEGIN_MEDIA_READ: &str = "BeginMediaRead";
+    /// Read the next bounded chunk from a media handle.
+    pub const READ_MEDIA_CHUNK: &str = "ReadMediaChunk";
+    /// Abort a media read and release its temporary bytes.
+    pub const ABORT_MEDIA_READ: &str = "AbortMediaRead";
 }
 
 /// One constant per method name on [`HOST_BUS_NAME`].
 pub mod host_methods {
-    /// `DeliverInbound` — hand the host one authenticated inbound envelope.
+    /// `DeliverEvent` — deliver one typed provider event to the host.
+    pub const DELIVER_EVENT: &str = "DeliverEvent";
+    /// `DeliverInbound` — hand the host one authenticated v22 inbound envelope.
     pub const DELIVER_INBOUND: &str = "DeliverInbound";
-    /// Complete one admitted turn. Opt-in runtimes invoke bounded concurrent
-    /// callbacks and retain each call until flush/stop has drained it.
+    /// Complete one admitted v22 inbound envelope turn. Opt-in runtimes invoke
+    /// bounded concurrent callbacks and retain each call until flush/stop has drained it.
     pub const PROCESS_INBOUND: &str = "ProcessInbound";
     /// `ReportStatus` — report a provider connection state transition.
     pub const REPORT_STATUS: &str = "ReportStatus";
@@ -113,7 +133,7 @@ pub mod host_methods {
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 35] = [
+pub const METHODS: [&str; 44] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -121,8 +141,10 @@ pub const METHODS: [&str; 35] = [
     methods::CHANNEL_STATUS,
     methods::RESERVE_RELAY,
     methods::START_RELAY,
+    methods::START_RELAY_V2,
     methods::STOP_RELAY,
     methods::RELAY_STATUS,
+    methods::RELAY_CAPABILITIES_V2,
     methods::SEND_RELAY_INTENT,
     methods::SHUTDOWN,
     methods::SEND_CHANNEL_INTENT,
@@ -149,10 +171,17 @@ pub const METHODS: [&str; 35] = [
     methods::PREPARE_CHANNEL_CONTROL,
     methods::START_RUNTIME_WITH_DISPATCH,
     methods::PREPARE_RUNTIME_COMMAND,
+    methods::BEGIN_MEDIA_UPLOAD,
+    methods::APPEND_MEDIA_UPLOAD_CHUNK,
+    methods::FINISH_MEDIA_UPLOAD,
+    methods::ABORT_MEDIA_UPLOAD,
+    methods::BEGIN_MEDIA_READ,
+    methods::READ_MEDIA_CHUNK,
+    methods::ABORT_MEDIA_READ,
 ];
 
 /// All host-callback method names in declaration order.
-pub const HOST_METHODS: [&str; 7] = [
+pub const HOST_METHODS: [&str; 8] = [
     host_methods::DELIVER_INBOUND,
     host_methods::REPORT_STATUS,
     host_methods::PERSIST_ALLOWED_IDENTITY,
@@ -160,6 +189,7 @@ pub const HOST_METHODS: [&str; 7] = [
     host_methods::PUBLISH_EVENT,
     host_methods::DISPATCH_CONTROLLER_BACKEND,
     host_methods::PROCESS_INBOUND,
+    host_methods::DELIVER_EVENT,
 ];
 
 #[cfg(test)]

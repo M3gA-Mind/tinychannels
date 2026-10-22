@@ -21,5 +21,13 @@ if [[ ! -f "$artifact" ]]; then
   exit 1
 fi
 
+if command -v sha256sum >/dev/null 2>&1; then
+  artifact_sha256="$(sha256sum "$artifact" | awk '{print $1}')"
+else
+  artifact_sha256="$(shasum -a 256 "$artifact" | awk '{print $1}')"
+fi
+printf '"%s" = "%s"\n' "$(basename "$artifact")" "$artifact_sha256" \
+  > "$(dirname "$artifact")/modules.toml"
+
 TINYCHANNELS_MODULE_ARTIFACT="$artifact" \
   cargo test -p tinychannels-module --test module_artifact --test runtime_artifact --test routing_artifact -- --ignored --nocapture

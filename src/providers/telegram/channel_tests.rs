@@ -98,8 +98,47 @@ fn supports_draft_updates_respects_stream_mode() {
     let partial = TelegramChannel::new("fake-token".into(), vec!["*".into()], false)
         .with_streaming(StreamMode::Partial, 750, true);
     assert!(partial.supports_draft_updates());
+    assert!(
+        partial
+            .capabilities()
+            .actions
+            .supported
+            .iter()
+            .any(|name| name == "draft-update")
+    );
+    assert!(
+        !partial
+            .capabilities()
+            .actions
+            .supported
+            .iter()
+            .any(|name| name == "edit")
+    );
     assert_eq!(partial.draft_update_interval_ms, 750);
     assert!(partial.silent_streaming);
+}
+
+#[test]
+fn capabilities_advertise_supported_reply_and_topic_addressing() {
+    let capabilities = TelegramChannel::new("token".into(), vec!["*".into()], false).capabilities();
+
+    assert!(capabilities.addressing.reply_to_id);
+    assert!(capabilities.addressing.thread_id);
+    assert!(capabilities.addressing.topic_id);
+    assert!(
+        capabilities
+            .actions
+            .supported
+            .iter()
+            .any(|name| name == "reply")
+    );
+    assert!(
+        capabilities
+            .actions
+            .supported
+            .iter()
+            .any(|name| name == "thread-reply")
+    );
 }
 
 #[tokio::test]
@@ -1659,8 +1698,7 @@ fn parse_update_reaction_returns_none_for_unlisted_actor() {
 }
 
 #[test]
-fn parse_update_reaction_returns_none_when_new_reaction_is_empty() {
-    // Removing a reaction (new_reaction is empty) should yield None.
+fn parse_update_reaction_identifies_removed_reactions() {
     let ch = TelegramChannel::new("token".into(), vec!["*".into()], false);
     let update = serde_json::json!({
         "update_id": 51,
@@ -1672,10 +1710,11 @@ fn parse_update_reaction_returns_none_when_new_reaction_is_empty() {
             "new_reaction": []
         }
     });
-    assert!(
-        ch.parse_update_reaction(&update).is_none(),
-        "reaction removal (empty new_reaction) must be ignored"
-    );
+    let parsed = ch
+        .parse_update_reaction(&update)
+        .expect("removal event is preserved");
+    assert!(!parsed.added);
+    assert_eq!(parsed.emoji, "👍");
 }
 
 #[test]

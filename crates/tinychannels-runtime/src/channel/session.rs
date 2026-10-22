@@ -76,7 +76,7 @@ pub fn conversation_history_key_candidates(msg: &ChannelMessage) -> LegacySessio
     // data written before current identity keys began escaping separators.
     let base_key = format!("{}_{}_{}", msg.channel, msg.sender, msg.reply_target);
     let conversation_history_key =
-        if crate::capabilities::capabilities_for(&msg.channel).history_key_ignores_thread {
+        if crate::context::legacy_v21_history_key_ignores_thread(&msg.channel) {
             base_key
         } else if let Some(thread_ts) = msg
             .thread_ts

@@ -30,6 +30,8 @@ fn delivery_records_round_trip_without_losing_retry_or_intent_fields() {
             idempotency_key: "op-1".into(),
             channel_id: "telegram".into(),
             conversation_id: "room-2".into(),
+            channel_ref: None,
+            conversation_ref: None,
             thread_id: Some("thread-3".into()),
             durability: DeliveryDurability::Required,
             ..Default::default()
@@ -40,6 +42,7 @@ fn delivery_records_round_trip_without_losing_retry_or_intent_fields() {
         last_error: Some("retryable".into()),
         platform_send_started_at_unix_ms: Some(39),
         recovery_state: Some(DeliveryRecoveryState::UnknownAfterSend),
+        partial_receipt: None,
     };
     let wire = serde_json::to_vec(&record).unwrap();
     assert!(wire.len() <= DELIVERY_RECORD_BYTES);
@@ -55,6 +58,7 @@ fn terminal_result_replays_only_the_operation_success_facts() {
         id: "op-1".into(),
         intent_fingerprint: "a".repeat(64),
         completed_at_unix_ms: 900,
+        receipt: None,
     };
     let value = serde_json::to_value(&record).unwrap();
     assert_eq!(value["id"], "op-1");
