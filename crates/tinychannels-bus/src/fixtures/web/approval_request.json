@@ -1,0 +1,1 @@
+{"event":"approval_request","client_id":"client-7","thread_id":"thread-9","request_id":"request-2","tool_name":"write_file","message":"Approve write?","args":{"path":"notes.txt"},"tool_call_id":"call-3","expires_at":"2026-10-17T12:00:00Z","detached":false}

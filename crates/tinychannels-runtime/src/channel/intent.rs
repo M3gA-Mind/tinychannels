@@ -30,6 +30,7 @@ pub fn outbound_intent_from_legacy_message(
         ],
     );
     let thread_id = first_string_field(&message, &["threadId", "thread_id", "thread_ts"]);
+    let turn_id = first_string_field(&message, &["turnId", "turn_id", "originatingTurnId"]);
     let topic_id = first_string_field(&message, &["topicId", "topic_id"]);
     let conversation_ref = tinychannels_bus::ConversationRef {
         id: conversation_id.clone(),
@@ -46,6 +47,7 @@ pub fn outbound_intent_from_legacy_message(
         conversation_ref: Some(conversation_ref),
         reply_to_id,
         thread_id,
+        turn_id,
         durability: DeliveryDurability::BestEffort,
         payload: OutboundPayload::NativeChannelData { data: message },
     }
@@ -94,7 +96,11 @@ pub fn legacy_message_value_from_outbound_intent(intent: &ChannelOutboundIntent)
         OutboundPayload::NativeChannelData { data } => data.clone(),
         OutboundPayload::Parts { parts } => serde_json::json!({ "parts": parts }),
     };
-    with_idempotency_key(payload, &intent.idempotency_key)
+    let mut message = with_idempotency_key(payload, &intent.idempotency_key);
+    if let Some(turn_id) = intent.turn_id.as_deref() {
+        message["turnId"] = Value::String(turn_id.to_owned());
+    }
+    message
 }
 
 fn explicit_idempotency_key(message: &Value) -> Option<String> {

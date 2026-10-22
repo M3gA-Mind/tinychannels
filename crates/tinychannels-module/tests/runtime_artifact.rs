@@ -53,7 +53,7 @@ impl Callback {
         let tinychannels_bus::ChannelBackendRequest::ProgressiveTransport(request) = request else {
             return Err(tinybus::Error::failed("unexpected backend callback"));
         };
-        if matches!(request, ProgressiveTransportRequest::Send { .. }) {
+        if matches!(*request, ProgressiveTransportRequest::Send { .. }) {
             self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         Ok(
