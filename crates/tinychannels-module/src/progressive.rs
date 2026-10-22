@@ -56,6 +56,7 @@ struct FeedOutput {
 struct AppliedOutput {
     deliveries: Vec<ProgressiveTransportResult>,
     output_event_failures: Vec<u64>,
+    final_message_delivered: bool,
 }
 
 #[derive(Clone)]
@@ -658,8 +659,14 @@ async fn run(
                         &output_replay,
                     ).await;
                     let terminal = is_final && result.is_ok();
+                    let final_message_delivered = result
+                        .as_ref()
+                        .is_ok_and(|applied| applied.final_message_delivered);
                     let _ = response.send(result);
                     if terminal {
+                        reply
+                            .cleanup_after_external_final(final_message_delivered)
+                            .await;
                         break;
                     }
                 }
@@ -735,6 +742,7 @@ async fn apply_output(
     let replay_events = events.clone();
     let mut deliveries = Vec::new();
     let mut output_event_failures = Vec::new();
+    let mut final_message_delivered = false;
     for (offset, event) in events.into_iter().enumerate() {
         let sequence = sequence
             .checked_add(
@@ -752,6 +760,17 @@ async fn apply_output(
                     .send_typed(scope, sequence, parts.clone(), text.clone())
                     .await
                     .unwrap_or(ProgressiveTransportResult::Failed);
+                final_message_delivered = matches!(
+                    &delivery,
+                    ProgressiveTransportResult::Accepted | ProgressiveTransportResult::Success(_)
+                ) || matches!(
+                    &delivery,
+                    ProgressiveTransportResult::Outcome(outcome)
+                        if outcome.error.is_none()
+                            || outcome.receipt.primary_platform_message_id.is_some()
+                            || !outcome.receipt.platform_message_ids.is_empty()
+                            || !outcome.receipt.parts.is_empty()
+                );
                 let receipt = match &delivery {
                     ProgressiveTransportResult::Outcome(outcome) => Some(outcome.receipt.clone()),
                     _ => original_receipt,
@@ -785,6 +804,7 @@ async fn apply_output(
     let applied = AppliedOutput {
         deliveries,
         output_event_failures,
+        final_message_delivered,
     };
     if !replay_events.is_empty() {
         *output_replay.lock().await = Some(OutputBatchReplay {
