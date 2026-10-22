@@ -85,7 +85,50 @@ pub trait ChannelAdapter: Send + Sync {
             })
     }
 
+    /// Send a canonical typed message. Older adapters retain a safe text-only
+    /// projection by default; provider implementations override this method
+    /// when they support rich content or voice.
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, ChannelSendError> {
+        let text = message
+            .parts
+            .iter()
+            .map(|part| match part {
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text { text, .. },
+                } => Ok(text.as_str()),
+                _ => Err(unsupported_content_error()),
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .join("\n");
+        let intent = ChannelOutboundIntent {
+            idempotency_key: message.idempotency_key.clone(),
+            channel_id: message.channel_id.clone(),
+            conversation_id: message.conversation_id.clone(),
+            channel_ref: message.channel_ref.clone(),
+            conversation_ref: message.conversation_ref.clone(),
+            reply_to_id: message.reply_to_id.clone(),
+            thread_id: message.thread_id.clone(),
+            turn_id: message.turn_id.clone(),
+            payload: tinychannels_bus::OutboundPayload::Text { text },
+            ..Default::default()
+        };
+        self.send_outcome(intent).await
+    }
+
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError>;
+}
+
+fn unsupported_content_error() -> ChannelSendError {
+    ChannelSendError {
+        kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
+        message: "adapter does not support this typed content".into(),
+        unsupported: true,
+        retryable: false,
+        ..Default::default()
+    }
 }
 
 /// Optional setup/config extension.
