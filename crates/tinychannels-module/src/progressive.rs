@@ -646,11 +646,10 @@ async fn run(
                         channel_ref: batch.channel_ref,
                         conversation: batch.conversation,
                     };
-                    sender.set_scope(Some(scope.clone())).await;
                     let is_final = batch.events.iter().any(|event| {
                         matches!(event, ChannelOutputEvent::FinalMessage { .. })
                     });
-                    let result = apply_output(
+                    let result = apply_scoped_output(
                         &mut reply,
                         &sender,
                         &scope,
@@ -683,6 +682,18 @@ async fn run(
             _ = &mut expiry => { reply.finalize("Sorry, the request timed out.").await; break; }
         }
     }
+}
+
+async fn apply_scoped_output(
+    reply: &mut ProgressiveReply,
+    sender: &Sender,
+    scope: &OutputScope,
+    sequence: u64,
+    events: Vec<ChannelOutputEvent>,
+    output_replay: &Mutex<Option<OutputBatchReplay>>,
+) -> Result<AppliedOutput> {
+    sender.set_scope(Some(scope.clone())).await;
+    apply_output(reply, sender, scope, sequence, events, output_replay).await
 }
 
 async fn apply_output(

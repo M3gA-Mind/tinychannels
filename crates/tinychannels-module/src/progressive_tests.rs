@@ -197,6 +197,76 @@ async fn typed_final_removes_a_flushed_progressive_draft() {
     provider.stop().await.unwrap();
 }
 
+#[tokio::test(start_paused = true)]
+async fn accepted_typed_final_keeps_a_flushed_progressive_draft() {
+    let (replies, callback) = fixture(true).await;
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Accepted);
+    let provider = Running::start_outbound(
+        Arc::new(ProgressiveChannel),
+        Arc::new(Hooks::default()),
+        replies.host.clone(),
+    );
+    replies
+        .running
+        .lock()
+        .await
+        .insert("discord".into(), provider.clone());
+    let handle = open(&replies).await;
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            turn_id: Some("turn-1".into()),
+            channel_ref: None,
+            conversation: None,
+            sequence: 1,
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "draft answer".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap();
+
+    let draft_send_started = callback.entered.notified();
+    tokio::time::advance(tinychannels::delivery::progressive::EDIT_FLUSH_INTERVAL).await;
+    draft_send_started.await;
+    callback.released.notify_one();
+
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            turn_id: Some("turn-1".into()),
+            channel_ref: None,
+            conversation: None,
+            sequence: 2,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "final answer".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+
+    let requests = callback.requests.lock().await;
+    assert!(requests
+        .iter()
+        .any(|request| matches!(request, ProgressiveTransportRequest::Send { .. })));
+    assert!(requests
+        .iter()
+        .any(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. })));
+    assert!(
+        !requests
+            .iter()
+            .any(|request| matches!(request, ProgressiveTransportRequest::Delete { .. })),
+        "accepted means the provider receipt is pending, so keep the visible draft"
+    );
+    drop(requests);
+
+    replies.shutdown().await.unwrap();
+    provider.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn terminal_retry_reuses_one_module_send_and_rejects_changed_content() {
     let (replies, callback) = fixture(false).await;
@@ -819,6 +889,89 @@ async fn feed_output_rejects_accumulated_text_and_thinking_over_the_content_limi
         .await
         .unwrap();
     replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn feed_output_rejects_final_message_text_over_the_content_limit() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            turn_id: Some("turn-1".into()),
+            channel_ref: None,
+            conversation: None,
+            sequence: 1,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "x".repeat(MAX_CONTENT + 1),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await;
+    assert!(result.is_err());
+    assert!(callback.requests.lock().await.is_empty());
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn rejected_output_keeps_the_previous_progressive_sender_scope() {
+    let (replies, callback) = fixture(false).await;
+    let sender = Sender::new(replies.host.clone());
+    let old_scope = OutputScope {
+        handle: "old-handle".into(),
+        channel: "discord:fixture".into(),
+        turn_id: Some("old-turn".into()),
+        channel_ref: None,
+        conversation: None,
+    };
+    sender.set_scope(Some(old_scope)).await;
+    let new_scope = OutputScope {
+        handle: "new-handle".into(),
+        channel: "discord:fixture".into(),
+        turn_id: Some("new-turn".into()),
+        channel_ref: None,
+        conversation: None,
+    };
+    let mut reply = ProgressiveReply::new(
+        Arc::new(sender.clone()),
+        "discord:fixture".into(),
+        Default::default(),
+    );
+    let output_replay = Mutex::new(None);
+    let result = apply_scoped_output(
+        &mut reply,
+        &sender,
+        &new_scope,
+        1,
+        vec![
+            ChannelOutputEvent::FinalMessage {
+                text: "misplaced final".into(),
+                parts: vec![],
+                receipt: None,
+            },
+            ChannelOutputEvent::TextDelta {
+                text: "late delta".into(),
+                iteration: Some(1),
+            },
+        ],
+        &output_replay,
+    )
+    .await;
+    assert!(result.is_err());
+
+    ProgressiveSender::typing(&sender, "discord:fixture")
+        .await
+        .unwrap();
+    let requests = callback.requests.lock().await;
+    let ProgressiveTransportRequest::Typing { turn_id, .. } = requests.last().unwrap() else {
+        panic!("expected a typing request")
+    };
+    assert_eq!(turn_id.as_deref(), Some("old-turn"));
 }
 
 #[tokio::test]
