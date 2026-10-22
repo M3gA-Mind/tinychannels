@@ -228,8 +228,8 @@ pub enum ProgressiveCommand {
     FeedOutput {
         handle: String,
         turn_id: Option<String>,
-        channel_ref: Option<crate::channel::ChannelRef>,
-        conversation: Option<crate::channel::ConversationRef>,
+        channel_ref: Option<Box<crate::channel::ChannelRef>>,
+        conversation: Option<Box<crate::channel::ConversationRef>>,
         sequence: u64,
         events: Vec<ChannelOutputEvent>,
     },
