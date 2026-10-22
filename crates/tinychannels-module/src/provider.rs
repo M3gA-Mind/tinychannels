@@ -383,18 +383,21 @@ impl tinychannels::host::EventSink for ModuleEvents {
     async fn publish_ingress(
         &self,
         ingress: tinychannels_bus::ChannelIngress,
-    ) -> std::result::Result<bool, tinychannels::channel::ChannelSendError> {
+    ) -> anyhow::Result<bool> {
         match ingress {
             tinychannels_bus::ChannelIngress::Inbound(mut envelope) => {
                 envelope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
                 envelope.channel.account_id = Some(self.1.clone());
-                self.0.try_deliver_inbound(&self.1, envelope).await?;
+                self.0
+                    .try_deliver_inbound(&self.1, envelope)
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error.message))?;
                 Ok(true)
             }
             tinychannels_bus::ChannelIngress::Event(event) => {
                 self.publish_channel_event(event)
                     .await
-                    .map_err(|_| host_ingress_error())?;
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
                 Ok(true)
             }
         }
@@ -403,7 +406,7 @@ impl tinychannels::host::EventSink for ModuleEvents {
     async fn publish_inbound(
         &self,
         message: tinychannels_bus::ChannelMessage,
-    ) -> std::result::Result<bool, tinychannels::channel::ChannelSendError> {
+    ) -> anyhow::Result<bool> {
         let mut envelope = tinychannels::inbound_envelope_from_legacy_message(&message);
         if tinychannels_bus::provider_id(&self.1) == "telegram" {
             if let Some((chat, topic)) = message.reply_target.split_once(':') {
@@ -430,11 +433,13 @@ impl tinychannels::host::EventSink for ModuleEvents {
 impl tinychannels::channel::ChannelInboundSink for ModuleEvents {
     async fn push(
         &self,
-        envelope: tinychannels_bus::ChannelInboundEnvelope,
+        mut envelope: tinychannels_bus::ChannelInboundEnvelope,
     ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
-        self.publish_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+        envelope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        envelope.channel.account_id = Some(self.1.clone());
+        self.0
+            .try_deliver_inbound(&self.1, envelope)
             .await
-            .map(|_| ())
             .map_err(|error| {
                 tracing::warn!(message = %error.message, "channel host ingress callback failed");
                 error
@@ -445,12 +450,12 @@ impl tinychannels::channel::ChannelInboundSink for ModuleEvents {
         &self,
         event: tinychannels_bus::ChannelEvent,
     ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
-        self.publish_ingress(tinychannels_bus::ChannelIngress::Event(event))
+        self.publish_channel_event(event)
             .await
             .map(|_| ())
             .map_err(|error| {
-                tracing::warn!(message = %error.message, "channel host ingress callback failed");
-                error
+                tracing::warn!(%error, "channel host ingress callback failed");
+                host_ingress_error()
             })
     }
 }

@@ -493,7 +493,7 @@ impl HostChannels {
         envelope: tinychannels_bus::ChannelInboundEnvelope,
     ) {
         if let Err(error) = self.try_deliver_inbound(channel, envelope).await {
-            record_failure(&self.owner.failure, error.to_string());
+            record_failure(&self.owner.failure, error.message);
         }
     }
 
