@@ -460,9 +460,8 @@ impl tinychannels::channel::ChannelInboundSink for ModuleEvents {
         self.0
             .try_deliver_event(scope_channel_event(&self.1, event))
             .await
-            .map_err(|error| {
+            .inspect_err(|error| {
                 tracing::warn!(message = %error.message, "channel host ingress callback failed");
-                error
             })
     }
 }
