@@ -37,6 +37,7 @@ struct Callback {
     sends: Arc<Mutex<Vec<Value>>>,
     requests: Arc<Mutex<Vec<ProgressiveTransportRequest>>>,
     result: Arc<Mutex<Option<ProgressiveTransportResult>>>,
+    typed_result: Arc<Mutex<Option<ProgressiveTransportResult>>>,
     failed_output_sequences: Arc<Mutex<Vec<u64>>>,
     block: bool,
     entered: Arc<Notify>,
@@ -78,8 +79,13 @@ impl Callback {
             }
             _ => ProgressiveTransportResult::Success(serde_json::json!({"id": "fixture-message"})),
         };
+        let override_result = if matches!(&*request, ProgressiveTransportRequest::SendTyped { .. }) {
+            self.typed_result.lock().await.clone()
+        } else {
+            self.result.lock().await.clone()
+        };
         Ok(ChannelBackendResult::ProgressiveTransport(
-            self.result.lock().await.clone().unwrap_or(default),
+            override_result.unwrap_or(default),
         ))
     }
 }
@@ -200,7 +206,7 @@ async fn typed_final_removes_a_flushed_progressive_draft() {
 #[tokio::test(start_paused = true)]
 async fn accepted_typed_final_keeps_a_flushed_progressive_draft() {
     let (replies, callback) = fixture(true).await;
-    *callback.result.lock().await = Some(ProgressiveTransportResult::Accepted);
+    *callback.typed_result.lock().await = Some(ProgressiveTransportResult::Accepted);
     let provider = Running::start_outbound(
         Arc::new(ProgressiveChannel),
         Arc::new(Hooks::default()),
