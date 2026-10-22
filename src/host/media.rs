@@ -1,15 +1,15 @@
 //! Durable scoped media references backed by the host's existing blob store.
 
 use std::{
-    io::Cursor,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tinystoragedrivers_core::{BlobReader, BlobStore, DocumentStore, Filter, Precondition, Query};
-use tokio::io::AsyncReadExt;
+use tinystoragedrivers_api::{BlobReader, BlobStore, DocumentStore};
+use tinystoragedrivers_types::{Filter, Precondition, Query, Version};
 
 use tinychannels_bus::storage::{
     MEDIA_BLOB_PREFIX, MEDIA_METADATA as MEDIA_COLLECTION, media_metadata_spec,
@@ -185,7 +185,7 @@ impl ScopedMediaStore {
             .blobs
             .put_stream(
                 &storage_key,
-                Box::pin(Cursor::new(bytes)),
+                Box::pin(futures_util::stream::once(async move { Ok(bytes.into()) })),
                 record.media.size_bytes.unwrap_or_default(),
                 Some(&content_type),
             )
@@ -256,16 +256,12 @@ impl ScopedMediaStore {
         if !is_allowed_content_type(kind, &normalized) {
             anyhow::bail!("media content type or body is not allowed");
         }
-        let bounded = max_bytes.saturating_add(1);
-        let capacity = usize::try_from(bounded.min(64 * 1024)).unwrap_or(64 * 1024);
-        let mut bytes = Vec::with_capacity(capacity);
-        tokio::time::timeout(
+        let bytes = tokio::time::timeout(
             std::time::Duration::from_secs(60),
-            reader.take(bounded).read_to_end(&mut bytes),
+            collect_limited(reader, max_bytes),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("media download timed out"))?
-        .map_err(|_| anyhow::anyhow!("media download could not be read"))?;
+        .map_err(|_| anyhow::anyhow!("media download timed out"))??;
         if bytes.is_empty() || bytes.len() as u64 > max_bytes {
             anyhow::bail!("media exceeds the configured size limit");
         }
@@ -302,7 +298,7 @@ impl ScopedMediaStore {
             anyhow::bail!("media reference is outside the configured channel scope");
         }
         let key = record.storage_key.clone();
-        let mut stream = self
+        let stream = self
             .blobs
             .get_stream(&key)
             .await
@@ -311,10 +307,7 @@ impl ScopedMediaStore {
         if stream.meta.len == 0 || stream.meta.len > max_bytes {
             anyhow::bail!("media exceeds the configured read limit");
         }
-        let mut bytes = Vec::with_capacity(stream.meta.len as usize);
-        (&mut stream.reader)
-            .take(max_bytes.saturating_add(1))
-            .read_to_end(&mut bytes)
+        let bytes = collect_limited(stream.reader, max_bytes)
             .await
             .map_err(|_| anyhow::anyhow!("media blob could not be read"))?;
         if bytes.len() as u64 != stream.meta.len
@@ -452,10 +445,7 @@ impl ScopedMediaStore {
         Ok(cleaned)
     }
 
-    async fn record(
-        &self,
-        opaque_id: &str,
-    ) -> anyhow::Result<Option<(MediaRecord, tinystoragedrivers_core::Version)>> {
+    async fn record(&self, opaque_id: &str) -> anyhow::Result<Option<(MediaRecord, Version)>> {
         blob_key(opaque_id)?;
         let Some(document) = self
             .documents
@@ -515,6 +505,18 @@ fn validate_scope(scope: &MediaScope) -> anyhow::Result<()> {
         anyhow::bail!("media storage requires configured account, conversation, and turn scope");
     }
     Ok(())
+}
+
+async fn collect_limited(mut reader: BlobReader, max_bytes: u64) -> anyhow::Result<Vec<u8>> {
+    let capacity = usize::try_from(max_bytes.min(64 * 1024)).unwrap_or(64 * 1024);
+    let mut bytes = Vec::with_capacity(capacity);
+    while let Some(chunk) = reader.try_next().await? {
+        if (bytes.len() as u64).saturating_add(chunk.len() as u64) > max_bytes {
+            anyhow::bail!("media exceeds the configured size limit");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 fn scoped_id(scope: &MediaScope, dedupe_key: &str) -> anyhow::Result<String> {

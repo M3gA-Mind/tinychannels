@@ -28,9 +28,10 @@ use tinychannels_bus::module_delivery::{
     DELIVERY_PENDING_CAPACITY, DELIVERY_RECORD_BYTES, DELIVERY_RESULT_CAPACITY,
     DELIVERY_RESULT_TTL_SECONDS,
 };
-use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, DocumentStoreExt, EXPIRES_FIELD, ErrorKind, Filter, Key,
-    Precondition, Query, Sort, StorageError, Versioned, WriteOptions,
+use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt};
+use tinystoragedrivers_types::{
+    EXPIRES_FIELD, ErrorKind, Filter, Precondition, Query, Sort, StorageError, Versioned,
+    WriteOptions,
 };
 
 use super::records::{StoredDelivery, StoredResult, to_stored_ms};
@@ -75,15 +76,15 @@ impl DocumentDeliveryStore {
         }
     }
 
-    async fn docs(&self) -> &Arc<dyn DocumentStore> {
+    async fn docs(&self) -> Result<&Arc<dyn DocumentStore>, DeliveryQueueError> {
         self.ready
-            .get_or_init(|| async {
-                for name in [PENDING_COLLECTION, FAILED_COLLECTION, RESULTS_COLLECTION] {
-                    super::ensure_collection(&self.docs, CollectionSpec::new(name)).await;
-                }
+            .get_or_try_init(|| async {
+                crate::storage::prepare(&self.docs)
+                    .await
+                    .map_err(store_error)
             })
-            .await;
-        &self.docs
+            .await?;
+        Ok(&self.docs)
     }
 }
 
@@ -123,10 +124,10 @@ fn validate_entry(entry: &QueuedDelivery) -> Result<(), DeliveryQueueError> {
     Ok(())
 }
 
-/// The document id of a delivery: [`Key::of`] over its idempotency key.
+/// The document id of a delivery: the v1-compatible key encoding.
 fn doc_id(id: &str) -> Result<String, DeliveryQueueError> {
     validate_id(id)?;
-    Key::of([id])
+    crate::storage::key::of([id])
         .map(|key| key.as_str().to_owned())
         .map_err(|_| invalid("delivery id is invalid"))
 }
@@ -161,7 +162,7 @@ fn encode_entry(entry: &QueuedDelivery) -> Result<Value, DeliveryQueueError> {
 impl DeliveryQueueStore for DocumentDeliveryStore {
     async fn save_pending(&self, entry: QueuedDelivery) -> Result<(), DeliveryQueueError> {
         validate_entry(&entry)?;
-        let docs = self.docs().await;
+        let docs = self.docs().await?;
         let doc = encode_entry(&entry)?;
         let id = doc_id(&entry.id)?;
         let _reservation = PENDING_INSERT.lock().await;
@@ -214,7 +215,7 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
     async fn load_pending(&self, id: &str) -> Result<Option<QueuedDelivery>, DeliveryQueueError> {
         let id = doc_id(id)?;
         self.docs()
-            .await
+            .await?
             .get(PENDING_COLLECTION, &id)
             .await
             .map_err(store_error)?
@@ -226,7 +227,7 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
         let query = Query::all().sort(Sort::asc("enqueued_ms"));
         let found = self
             .docs()
-            .await
+            .await?
             .query_all(PENDING_COLLECTION, &query)
             .await
             .map_err(store_error)?;
@@ -239,7 +240,7 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
     async fn remove_pending(&self, id: &str) -> Result<(), DeliveryQueueError> {
         let id = doc_id(id)?;
         self.docs()
-            .await
+            .await?
             .delete(PENDING_COLLECTION, &id, Precondition::None)
             .await
             .map(|_| ())
@@ -251,7 +252,7 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
         let doc = encode_entry(&entry)?;
         let id = doc_id(&entry.id)?;
         self.docs()
-            .await
+            .await?
             .put_with(
                 FAILED_COLLECTION,
                 &id,
@@ -270,7 +271,7 @@ impl DeliveryResultStore for DocumentDeliveryStore {
     async fn load_failed(&self, id: &str) -> Result<Option<QueuedDelivery>, DeliveryQueueError> {
         let id = doc_id(id)?;
         self.docs()
-            .await
+            .await?
             .get(FAILED_COLLECTION, &id)
             .await
             .map_err(store_error)?
@@ -286,7 +287,7 @@ impl DeliveryResultStore for DocumentDeliveryStore {
         // A result past its `expires_ms` reads as absent.
         let Some(found) = self
             .docs()
-            .await
+            .await?
             .get(RESULTS_COLLECTION, &id)
             .await
             .map_err(store_error)?
@@ -307,7 +308,7 @@ impl DeliveryResultStore for DocumentDeliveryStore {
         if serde_json::to_vec(&result).map_or(true, |bytes| bytes.len() > DELIVERY_RECORD_BYTES) {
             return Err(invalid("delivery result exceeds the record limit"));
         }
-        let docs = self.docs().await;
+        let docs = self.docs().await?;
         let expires_ms = to_stored_ms(
             result
                 .completed_at_unix_ms
@@ -333,7 +334,7 @@ impl DocumentDeliveryStore {
     /// Drop expired results, then the oldest beyond the capacity. The record
     /// just written is never the one evicted.
     async fn trim_results(&self, keep: &str) -> Result<(), DeliveryQueueError> {
-        let docs = self.docs().await;
+        let docs = self.docs().await?;
         docs.delete_where(
             RESULTS_COLLECTION,
             &Filter::lte(EXPIRES_FIELD, to_stored_ms(now_unix_ms())),

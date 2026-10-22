@@ -52,6 +52,8 @@ impl HttpsServer {
             "api.dingtalk.com",
             "bots.qq.com",
             "api.sgroup.qq.com",
+            "open.feishu.cn",
+            "open.larksuite.com",
         ] {
             builder = builder.resolve(host, address);
         }
@@ -114,8 +116,8 @@ impl HttpsServer {
         });
         Self {
             client,
-            requests,
             address,
+            requests,
             task,
         }
     }

@@ -2,6 +2,13 @@
 all-features = true
 
 [advisories]
+ignore = [
+    # The only resolved 0.26 package is the crates.io compatibility shim,
+    # whose source re-exports its `parent` dependency. The CI graph guard
+    # requires that exact shim source and a crates.io parent >= 1.0.10; it
+    # rejects the vulnerable bundled roots and any changed resolution.
+    { id = "RUSTSEC-2026-0381", reason = "The resolved 0.26.11 crate is a re-export shim; scripts/check-webpki-roots.py proves its parent is the patched 1.x bundle." },
+]
 
 [licenses]
 # Licenses accepted for this crate and its dependencies. Keep GPL-3.0-only for
@@ -41,5 +48,5 @@ deny = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# tinystoragedrivers is consumed by release tag (like tinybus by git rev).
+# TinyStorageDrivers and TinyBus are pinned to exact canonical revisions.
 allow-git = ["https://github.com/tinyhumansai/tinystoragedrivers"]
