@@ -392,10 +392,9 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
         ChannelOutputEvent::FinalMessage {
             text: "complete".into(),
             parts: vec![tinychannels_bus::channel::OutboundContentPart::Content {
-                content: tinychannels_bus::channel::ContentPart::Text {
+                part: tinychannels_bus::channel::ContentPart::Text {
                     text: "complete".into(),
                 },
-                caption: None,
             }],
             receipt: None,
         },
