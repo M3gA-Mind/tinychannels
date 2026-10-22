@@ -80,6 +80,59 @@ fn host_capability_payloads_keep_typed_snake_case_wire() {
 }
 
 #[test]
+fn scoped_voice_host_callbacks_round_trip() {
+    let scope = HostVoiceScope {
+        configured_instance: "telegram-prod".into(),
+        channel: ChannelRef {
+            id: provider_id("telegram-prod").into(),
+            account_id: Some("telegram-prod".into()),
+        },
+        conversation: ConversationRef {
+            id: "chat-7".into(),
+            ..Default::default()
+        },
+        turn_id: "message-42".into(),
+    };
+    let request = HostVoiceTranscriptionRequest {
+        scope: scope.clone(),
+        audio_base64: "AQID".into(),
+        mime_type: Some("audio/ogg".into()),
+        file_name: Some("note.oga".into()),
+        language: Some("en".into()),
+    };
+    let decoded: HostVoiceTranscriptionRequest =
+        serde_json::from_value(serde_json::to_value(request).unwrap()).unwrap();
+    assert_eq!(decoded.scope, scope);
+    assert_eq!(decoded.audio_base64, "AQID");
+
+    let synthesis = HostSpeechSynthesisRequest {
+        scope: scope.clone(),
+        text: "hello there".into(),
+        voice: Some("voice-a".into()),
+        format: Some("ogg".into()),
+    };
+    let decoded: HostSpeechSynthesisRequest =
+        serde_json::from_value(serde_json::to_value(synthesis).unwrap()).unwrap();
+    assert_eq!(decoded.scope, scope);
+    assert_eq!(decoded.text, "hello there");
+
+    let policy_request = HostVoiceReplyPolicyRequest { scope: scope.clone() };
+    let decoded: HostVoiceReplyPolicyRequest =
+        serde_json::from_value(serde_json::to_value(policy_request).unwrap()).unwrap();
+    assert_eq!(decoded.scope, scope);
+
+    let policy = HostVoiceReplyPolicy {
+        mode: HostVoiceReplyMode::Mirror,
+        inbound_has_voice: true,
+        explicitly_requested: false,
+    };
+    let decoded: HostVoiceReplyPolicy =
+        serde_json::from_value(serde_json::to_value(policy).unwrap()).unwrap();
+    assert_eq!(decoded.mode, HostVoiceReplyMode::Mirror);
+    assert!(decoded.inbound_has_voice);
+}
+
+#[test]
 fn channel_events_round_trip_with_discriminator_source_and_full_address() {
     let event = ChannelEvent {
         version: 2,
