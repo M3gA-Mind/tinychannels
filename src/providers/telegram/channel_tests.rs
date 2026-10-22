@@ -124,6 +124,7 @@ fn capabilities_advertise_supported_reply_and_topic_addressing() {
 
     assert!(capabilities.addressing.reply_to_id);
     assert!(capabilities.addressing.thread_id);
+    assert!(capabilities.addressing.topic_id);
     assert!(
         capabilities
             .actions

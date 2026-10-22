@@ -658,6 +658,7 @@ async fn typed_legacy_projection_failure_is_not_reported_as_dispatched() {
         conversation_ref: None,
         reply_to_id: None,
         thread_id: None,
+        turn_id: None,
         idempotency_key: "typed-non-text".into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Content {
             part: tinychannels_bus::ContentPart::Image {

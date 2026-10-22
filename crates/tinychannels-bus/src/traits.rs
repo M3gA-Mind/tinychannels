@@ -225,6 +225,7 @@ pub trait Channel: Send + Sync {
         capabilities.reactions = self.supports_reactions();
         capabilities.addressing.reply_to_id = self.supports_reply_to_id();
         capabilities.addressing.thread_id = self.supports_thread_id();
+        capabilities.addressing.topic_id = self.supports_topic_id();
         capabilities.content.parts = vec!["text".into()];
         capabilities.content.text = crate::capabilities::ContentCapability {
             inbound: true,
@@ -298,6 +299,11 @@ pub trait Channel: Send + Sync {
 
     /// Whether outbound messages may address a conversation thread.
     fn supports_thread_id(&self) -> bool {
+        false
+    }
+
+    /// Whether provider conversations can be addressed by an independent topic identifier.
+    fn supports_topic_id(&self) -> bool {
         false
     }
 

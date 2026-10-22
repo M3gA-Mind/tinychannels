@@ -182,6 +182,10 @@ impl Channel for TelegramChannel {
         true
     }
 
+    fn supports_topic_id(&self) -> bool {
+        true
+    }
+
     fn history_key_ignores_thread(&self) -> bool {
         true
     }

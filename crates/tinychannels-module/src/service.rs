@@ -988,6 +988,21 @@ impl Channels {
                     message: format!("channel {name} is not running"),
                 })?
         };
+        if let Some(message) = legacy_text_message(&intent) {
+            entry
+                .send(message)
+                .await
+                .map_err(|error| BusError::MethodFailed {
+                    name: SEND_FAILED_ERROR.to_owned(),
+                    message: error.to_string(),
+                })?;
+            return Ok(ChannelSendMessageResult {
+                message_id: None,
+                receipt: None,
+                error: None,
+                raw: None,
+            });
+        }
         let outcome = entry
             .send_typed(tinychannels_bus::ChannelOutboundMessage::from_intent(
                 &intent,

@@ -262,6 +262,61 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
 }
 
 #[tokio::test]
+async fn prepared_legacy_payload_uses_the_legacy_provider_send_path() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(connection);
+    let (sent, mut received) = tokio::sync::mpsc::channel(1);
+    let channel = Arc::new(CaptureChannel(sent));
+    let running = HashMap::from([(
+        "fixture".to_owned(),
+        Running::start(channel, Arc::new(Hooks::default()), host.clone()),
+    )]);
+    let channels = Channels {
+        progressive: Arc::new(crate::progressive::Replies::new(
+            host.clone(),
+            Arc::new(Mutex::new(running.clone())),
+        )),
+        host: host.clone(),
+        email: crate::email::EmailSender::new(),
+        media_uploads: Arc::new(crate::media::MediaUploads::default()),
+        media_reads: Arc::new(crate::media::MediaReads::default()),
+        running: Arc::new(Mutex::new(running)),
+        provider_activations: Mutex::new(HashMap::new()),
+        relays: Arc::new(Relays::new(host.clone())),
+        terminal: AtomicBool::new(false),
+        runtimes: None,
+        shutdown_task: Mutex::new(None),
+        delivery_admission: Arc::new(Mutex::new(())),
+    };
+    let intent = tinychannels::outbound_intent_from_legacy_message(
+        "fixture",
+        serde_json::json!({
+            "content": "hello",
+            "recipient": "room-7",
+            "thread_ts": "thread-9",
+            "idempotencyKey": "legacy-key"
+        }),
+    );
+
+    channels
+        .send_channel_intent("fixture".to_owned(), intent)
+        .await
+        .unwrap();
+
+    let sent = received.recv().await.unwrap();
+    assert_eq!(sent.content, "hello");
+    assert_eq!(sent.recipient, "room-7");
+    assert_eq!(sent.thread_ts.as_deref(), Some("thread-9"));
+    assert_eq!(sent.idempotency_key.as_deref(), Some("legacy-key"));
+    channels.shutdown().await.unwrap();
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
     let bus = tinybus::transport::memory::MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
