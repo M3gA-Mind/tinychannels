@@ -293,6 +293,9 @@ async fn send_typed_preserves_parts_through_the_current_adapter_contract() {
             id: "thread-9".into(),
             ..Default::default()
         }),
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: None,
         idempotency_key: "typed-1".into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Content {
             part: ContentPart::Image {
@@ -304,7 +307,6 @@ async fn send_typed_preserves_parts_through_the_current_adapter_contract() {
                 alt_text: None,
             },
         }],
-        ..Default::default()
     };
 
     let outcome = adapter.send_typed(&message).await.unwrap();
