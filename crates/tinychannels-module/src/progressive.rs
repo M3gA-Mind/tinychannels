@@ -63,6 +63,40 @@ impl Sender {
         }
     }
 
+    async fn send_typed(
+        &self,
+        channel: &str,
+        turn_id: Option<String>,
+        channel_ref: Option<tinychannels_bus::ChannelRef>,
+        conversation: Option<tinychannels_bus::ConversationRef>,
+        sequence: u64,
+        handle: &str,
+        parts: Vec<tinychannels_bus::OutboundContentPart>,
+        text: String,
+    ) -> Result<ProgressiveTransportResult> {
+        let result = self
+            .0
+            .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(
+                ProgressiveTransportRequest::SendTyped {
+                    channel: channel.into(),
+                    turn_id,
+                    channel_ref,
+                    conversation,
+                    sequence: Some(sequence),
+                    segment_index: None,
+                    idempotency_key: Some(format!("progressive:{handle}:{sequence}")),
+                    parts,
+                    text,
+                },
+            )))
+            .await
+            .map_err(|_| Error::failed("progressive typed delivery failed"))?;
+        match result {
+            ChannelBackendResult::ProgressiveTransport(result) => Ok(result),
+            _ => Err(Error::failed("progressive typed delivery failed")),
+        }
+    }
+
     async fn invoke(
         &self,
         request: ProgressiveTransportRequest,
@@ -171,7 +205,7 @@ enum Command {
         conversation: Option<tinychannels_bus::ConversationRef>,
         sequence: u64,
         events: Vec<ChannelOutputEvent>,
-        response: oneshot::Sender<Result<()>>,
+        response: oneshot::Sender<Result<Vec<ProgressiveTransportResult>>>,
     },
     Finish(String, oneshot::Sender<()>),
 }
@@ -235,9 +269,14 @@ impl Replies {
                     .await
                     .map_err(|_| Error::failed("progressive reply is closed"))?;
                 drop(closing);
-                wait.await
+                let deliveries = wait
+                    .await
                     .map_err(|_| Error::failed("progressive worker stopped"))??;
-                Ok(ProgressiveResult::Updated)
+                if deliveries.is_empty() {
+                    Ok(ProgressiveResult::Updated)
+                } else {
+                    Ok(ProgressiveResult::OutputUpdated { deliveries })
+                }
             }
             ProgressiveCommand::FeedOutput {
                 handle,
