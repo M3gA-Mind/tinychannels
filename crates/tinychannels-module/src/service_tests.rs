@@ -306,6 +306,12 @@ async fn prepared_legacy_payloads_use_the_legacy_provider_send_path() {
         .send_channel_intent("fixture".to_owned(), intent)
         .await
         .unwrap();
+    let sent = received.recv().await.unwrap();
+    assert_eq!(sent.content, "hello");
+    assert_eq!(sent.recipient, "room-7");
+    assert_eq!(sent.thread_ts.as_deref(), Some("thread-9"));
+    assert_eq!(sent.idempotency_key.as_deref(), Some("legacy-key"));
+
     let typed_intent = tinychannels::outbound_intent_from_send_message(
         "fixture",
         &SendMessage::new("typed hello", "room-8")
@@ -317,11 +323,6 @@ async fn prepared_legacy_payloads_use_the_legacy_provider_send_path() {
         .await
         .unwrap();
 
-    let sent = received.recv().await.unwrap();
-    assert_eq!(sent.content, "hello");
-    assert_eq!(sent.recipient, "room-7");
-    assert_eq!(sent.thread_ts.as_deref(), Some("thread-9"));
-    assert_eq!(sent.idempotency_key.as_deref(), Some("legacy-key"));
     let sent = received.recv().await.unwrap();
     assert_eq!(sent.content, "typed hello");
     assert_eq!(sent.recipient, "room-8");
