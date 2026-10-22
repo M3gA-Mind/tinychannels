@@ -455,6 +455,7 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
         if result.intent_fingerprint != fingerprint {
             // A definite verdict, not a store failure: quarantine this entry
             // in the failed collection instead of failing every drain.
+            tracing::warn!("terminal delivery result conflicts with pending intent; quarantining");
             return Ok(Some(UnknownSendReconciliation::Unresolved {
                 retryable: false,
                 error: Some("terminal delivery result conflicts with pending intent".into()),

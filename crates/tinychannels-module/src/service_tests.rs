@@ -1672,7 +1672,7 @@ async fn startup_recovery_acks_a_matching_terminal_result_without_resending() {
 }
 
 #[tokio::test]
-async fn startup_recovery_rejects_a_conflicting_terminal_result() {
+async fn startup_recovery_quarantines_a_conflicting_terminal_result() {
     use tinychannels::delivery::{DeliveryQueueStore as _, DeliveryRecoveryState, QueuedDelivery};
 
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
@@ -1693,19 +1693,22 @@ async fn startup_recovery_rejects_a_conflicting_terminal_result() {
         .await
         .unwrap();
 
-    assert!(
-        recover_delivery_channel(&channels.host, &channels.running, "fixture")
-            .await
-            .is_err(),
-        "a terminal result for a different intent is a key conflict"
-    );
+    // Another intent's result is never adopted as ours: the entry is neither
+    // acked as delivered nor re-sent, but kept in the failed collection.
+    recover_delivery_channel(&channels.host, &channels.running, "fixture")
+        .await
+        .unwrap();
     let scopes = callbacks.storage.snapshot().await;
     let scope = scopes.get("scope-a").unwrap();
-    assert_eq!(scope.pending.len(), 1, "conflicts stay retryable");
-    assert!(scope.failed.is_empty());
+    assert!(scope.pending.is_empty());
+    assert_eq!(
+        scope.failed.len(),
+        1,
+        "conflicts are quarantined, not dropped"
+    );
     drop(scopes);
     assert!(received.try_recv().is_err());
-    channels.shutdown().await.unwrap_err();
+    channels.shutdown().await.unwrap();
 }
 
 #[tokio::test]
