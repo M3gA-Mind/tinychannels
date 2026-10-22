@@ -13,8 +13,8 @@ use tinychannels::delivery::progressive::{
     ProgressiveSender, TYPING_REFRESH_INTERVAL,
 };
 use tinychannels_bus::module_progressive::{
-    ProgressiveCommand, ProgressiveEvent, ProgressiveResult, ProgressiveTransportRequest,
-    ProgressiveTransportResult,
+    ChannelOutputEvent, ProgressiveCommand, ProgressiveEvent, ProgressiveResult,
+    ProgressiveTransportRequest, ProgressiveTransportResult,
 };
 use tinychannels_bus::{ChannelBackendRequest, ChannelBackendResult};
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -31,6 +31,38 @@ const TURN_LIFETIME: Duration = Duration::from_secs(180);
 struct Sender(HostChannels);
 
 impl Sender {
+    async fn output_event(
+        &self,
+        channel: &str,
+        turn_id: Option<String>,
+        channel_ref: Option<tinychannels_bus::ChannelRef>,
+        conversation: Option<tinychannels_bus::ConversationRef>,
+        sequence: u64,
+        event: ChannelOutputEvent,
+    ) -> Result<()> {
+        let result = self
+            .0
+            .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(
+                ProgressiveTransportRequest::OutputEvent {
+                    channel: channel.into(),
+                    turn_id,
+                    channel_ref,
+                    conversation,
+                    sequence,
+                    event: Box::new(event),
+                },
+            )))
+            .await
+            .map_err(|_| Error::failed("progressive output callback failed"))?;
+        match result {
+            ChannelBackendResult::ProgressiveTransport(
+                ProgressiveTransportResult::Acknowledged
+                | ProgressiveTransportResult::Accepted,
+            ) => Ok(()),
+            _ => Err(Error::failed("progressive output callback failed")),
+        }
+    }
+
     async fn invoke(
         &self,
         request: ProgressiveTransportRequest,
@@ -133,6 +165,14 @@ impl ProgressiveSender for Sender {
 
 enum Command {
     Feed(Vec<ProgressiveEvent>, oneshot::Sender<Result<()>>),
+    FeedOutput {
+        turn_id: Option<String>,
+        channel_ref: Option<tinychannels_bus::ChannelRef>,
+        conversation: Option<tinychannels_bus::ConversationRef>,
+        sequence: u64,
+        events: Vec<ChannelOutputEvent>,
+        response: oneshot::Sender<Result<()>>,
+    },
     Finish(String, oneshot::Sender<()>),
 }
 
@@ -192,6 +232,40 @@ impl Replies {
                 entry
                     .commands
                     .send(Command::Feed(events, reply))
+                    .await
+                    .map_err(|_| Error::failed("progressive reply is closed"))?;
+                drop(closing);
+                wait.await
+                    .map_err(|_| Error::failed("progressive worker stopped"))??;
+                Ok(ProgressiveResult::Updated)
+            }
+            ProgressiveCommand::FeedOutput {
+                handle,
+                turn_id,
+                channel_ref,
+                conversation,
+                sequence,
+                events,
+            } => {
+                if events.len() > 32 {
+                    return Err(Error::failed("too many progressive events"));
+                }
+                let entry = self.entry(&handle).await?;
+                let closing = entry.closing.lock().await;
+                if closing.is_some() {
+                    return Err(Error::failed("progressive reply is closed"));
+                }
+                let (response, wait) = oneshot::channel();
+                entry
+                    .commands
+                    .send(Command::FeedOutput {
+                        turn_id,
+                        channel_ref,
+                        conversation,
+                        sequence,
+                        events,
+                        response,
+                    })
                     .await
                     .map_err(|_| Error::failed("progressive reply is closed"))?;
                 drop(closing);
@@ -381,7 +455,8 @@ async fn run(
     capabilities: tinychannels_bus::ChannelCapabilities,
     mut inbox: mpsc::Receiver<Command>,
 ) {
-    let mut reply = ProgressiveReply::new(Arc::new(Sender(host)), channel, capabilities);
+    let mut reply = ProgressiveReply::new(Arc::new(Sender(host.clone())), channel.clone(), capabilities);
+    let sender = Sender(host);
     let mut edits = tokio::time::interval(EDIT_FLUSH_INTERVAL);
     let mut typing = tokio::time::interval(TYPING_REFRESH_INTERVAL);
     let mut fillers = tokio::time::interval(FILLER_INTERVAL);
@@ -399,6 +474,19 @@ async fn run(
                     let result = apply(&mut reply, events);
                     let _ = response.send(result);
                 }
+                Some(Command::FeedOutput { turn_id, channel_ref, conversation, sequence, events, response }) => {
+                    let result = apply_output(
+                        &mut reply,
+                        &sender,
+                        &channel,
+                        turn_id,
+                        channel_ref,
+                        conversation,
+                        sequence,
+                        events,
+                    ).await;
+                    let _ = response.send(result);
+                }
                 Some(Command::Finish(text, response)) => {
                     reply.finalize(&text).await;
                     let _ = response.send(());
@@ -412,6 +500,45 @@ async fn run(
             _ = &mut expiry => { reply.finalize("Sorry, the request timed out.").await; break; }
         }
     }
+}
+
+async fn apply_output(
+    reply: &mut ProgressiveReply,
+    sender: &Sender,
+    channel: &str,
+    turn_id: Option<String>,
+    channel_ref: Option<tinychannels_bus::ChannelRef>,
+    conversation: Option<tinychannels_bus::ConversationRef>,
+    sequence: u64,
+    events: Vec<ChannelOutputEvent>,
+) -> Result<()> {
+    for (offset, event) in events.into_iter().enumerate() {
+        let sequence = sequence
+            .checked_add(offset as u64)
+            .ok_or_else(|| Error::failed("progressive sequence overflow"))?;
+        sender
+            .output_event(
+                channel,
+                turn_id.clone(),
+                channel_ref.clone(),
+                conversation.clone(),
+                sequence,
+                event.clone(),
+            )
+            .await?;
+        match event {
+            ChannelOutputEvent::TextDelta { text, .. } => reply.on_text_delta(&text),
+            ChannelOutputEvent::ThinkingDelta { text, .. } => reply.on_thinking_delta(&text),
+            ChannelOutputEvent::ToolCallStarted { tool_name, .. } => {
+                reply.on_tool_call(&tool_name)
+            }
+            ChannelOutputEvent::ToolCallCompleted {
+                tool_name, success, ..
+            } => reply.on_tool_result(&tool_name, success),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn apply(reply: &mut ProgressiveReply, events: Vec<ProgressiveEvent>) -> Result<()> {

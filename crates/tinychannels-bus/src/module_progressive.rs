@@ -222,6 +222,17 @@ pub enum ProgressiveCommand {
         handle: String,
         events: Vec<ProgressiveEvent>,
     },
+    /// Feed canonical output events through the module's ordered transport.
+    /// `sequence` is the first event's stable position within `turn_id`; hosts
+    /// can retry the same batch without changing its delivery identity.
+    FeedOutput {
+        handle: String,
+        turn_id: Option<String>,
+        channel_ref: Option<crate::channel::ChannelRef>,
+        conversation: Option<crate::channel::ConversationRef>,
+        sequence: u64,
+        events: Vec<ChannelOutputEvent>,
+    },
     Finish {
         handle: String,
         text: String,

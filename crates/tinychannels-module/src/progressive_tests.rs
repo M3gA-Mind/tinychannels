@@ -23,17 +23,20 @@ impl Callback {
             return Err(Error::failed("unexpected callback"));
         };
         self.requests.lock().await.push((*request).clone());
-        if let ProgressiveTransportRequest::Send { message, .. } = *request {
-            self.sends.lock().await.push(message);
+        if let ProgressiveTransportRequest::Send { message, .. } = &*request {
+            self.sends.lock().await.push(message.clone());
             if self.block {
                 self.entered.notify_one();
                 self.released.notified().await;
             }
         }
+        let default = if matches!(&*request, ProgressiveTransportRequest::OutputEvent { .. }) {
+            ProgressiveTransportResult::Acknowledged
+        } else {
+            ProgressiveTransportResult::Success(serde_json::json!({"id": "fixture-message"}))
+        };
         Ok(ChannelBackendResult::ProgressiveTransport(
-            self.result.lock().await.clone().unwrap_or_else(|| {
-                ProgressiveTransportResult::Success(serde_json::json!({"id": "fixture-message"}))
-            }),
+            self.result.lock().await.clone().unwrap_or(default),
         ))
     }
 }
