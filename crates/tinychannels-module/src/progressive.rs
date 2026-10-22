@@ -295,8 +295,8 @@ impl Replies {
                     .send(Command::FeedOutput {
                         handle: handle.clone(),
                         turn_id,
-                        channel_ref,
-                        conversation,
+                        channel_ref: channel_ref.map(|value| *value),
+                        conversation: conversation.map(|value| *value),
                         sequence,
                         events,
                         response,
