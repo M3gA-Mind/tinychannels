@@ -1,7 +1,36 @@
 use super::*;
+use crate::provider::Hooks;
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tokio::sync::Notify;
+
+struct ProgressiveChannel;
+
+#[allow(deprecated)]
+#[async_trait::async_trait]
+impl tinychannels::Channel for ProgressiveChannel {
+    fn name(&self) -> &str {
+        "discord"
+    }
+
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        tinychannels_bus::ChannelCapabilities {
+            progressive_edits: true,
+            ..Default::default()
+        }
+    }
+
+    async fn send(&self, _message: &tinychannels::SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
 
 #[derive(Clone, Default)]
 struct Callback {
@@ -96,6 +125,76 @@ async fn open(replies: &Replies) -> String {
         ProgressiveResult::Opened { handle } => handle,
         _ => panic!("expected opened handle"),
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn typed_final_removes_a_flushed_progressive_draft() {
+    let (replies, callback) = fixture(true).await;
+    let provider = Running::start_outbound(
+        Arc::new(ProgressiveChannel),
+        Arc::new(Hooks::default()),
+        replies.host.clone(),
+    );
+    replies
+        .running
+        .lock()
+        .await
+        .insert("discord".into(), provider.clone());
+    let handle = open(&replies).await;
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            turn_id: Some("turn-1".into()),
+            channel_ref: None,
+            conversation: None,
+            sequence: 1,
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "draft answer".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap();
+
+    let draft_send_started = callback.entered.notified();
+    tokio::time::advance(tinychannels::delivery::progressive::EDIT_FLUSH_INTERVAL).await;
+    draft_send_started.await;
+    callback.released.notify_one();
+
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            turn_id: Some("turn-1".into()),
+            channel_ref: None,
+            conversation: None,
+            sequence: 2,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "final answer".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+
+    let requests = callback.requests.lock().await;
+    let draft = requests
+        .iter()
+        .position(|request| matches!(request, ProgressiveTransportRequest::Send { .. }))
+        .expect("the timer flushed a draft before the final message");
+    let final_message = requests
+        .iter()
+        .position(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
+        .expect("the canonical final message was sent");
+    let delete = requests
+        .iter()
+        .position(|request| matches!(request, ProgressiveTransportRequest::Delete { .. }))
+        .expect("the stale draft is deleted after the typed final");
+    assert!(draft < final_message && final_message < delete);
+    drop(requests);
+
+    replies.shutdown().await.unwrap();
+    provider.stop().await.unwrap();
 }
 
 #[tokio::test]
