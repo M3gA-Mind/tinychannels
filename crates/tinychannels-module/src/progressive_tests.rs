@@ -378,6 +378,68 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
 }
 
 #[tokio::test]
+async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    let events = vec![
+        ChannelOutputEvent::TextDelta {
+            text: "partial".into(),
+            iteration: Some(1),
+        },
+        ChannelOutputEvent::FinalMessage {
+            text: "complete".into(),
+            parts: vec![tinychannels_bus::channel::OutboundContentPart::Content {
+                content: tinychannels_bus::channel::ContentPart::Text {
+                    text: "complete".into(),
+                },
+                caption: None,
+            }],
+            receipt: None,
+        },
+    ];
+    assert_eq!(
+        replies
+            .execute(ProgressiveCommand::FeedOutput {
+                handle: handle.clone(),
+                turn_id: Some("turn-1".into()),
+                channel_ref: None,
+                conversation: None,
+                sequence: 40,
+                events: events.clone(),
+            })
+            .await
+            .unwrap(),
+        ProgressiveResult::Updated
+    );
+    let requests = callback.requests.lock().await;
+    assert_eq!(requests.len(), events.len());
+    assert!(matches!(
+        &requests[0],
+        ProgressiveTransportRequest::OutputEvent {
+            turn_id: Some(turn_id),
+            sequence: 40,
+            event,
+            ..
+        } if turn_id == "turn-1" && **event == events[0]
+    ));
+    assert!(matches!(
+        &requests[1],
+        ProgressiveTransportRequest::OutputEvent {
+            turn_id: Some(turn_id),
+            sequence: 41,
+            event,
+            ..
+        } if turn_id == "turn-1" && **event == events[1]
+    ));
+    drop(requests);
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity() {
     let (replies, _) = fixture(false).await;
     for channel in [String::new(), "x".repeat(4097)] {
