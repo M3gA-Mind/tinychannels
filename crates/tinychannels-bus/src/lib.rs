@@ -64,9 +64,8 @@ pub use health::{ChannelHealthReport, ChannelHealthState};
 pub use host::{
     HostEventPublication, HostSpeechSynthesisRequest, HostSpeechSynthesisResult,
     HostStoreVoiceMediaRequest, HostStoreVoiceMediaResult, HostTranscriptionRequest,
-    HostTranscriptionResult, HostVoiceMediaDirection, HostVoiceReplyMode,
-    HostVoiceReplyPolicy, HostVoiceReplyPolicyRequest, HostVoiceScope,
-    HostVoiceTranscriptionRequest,
+    HostTranscriptionResult, HostVoiceMediaDirection, HostVoiceReplyMode, HostVoiceReplyPolicy,
+    HostVoiceReplyPolicyRequest, HostVoiceScope, HostVoiceTranscriptionRequest,
 };
 pub use http::HttpProxyPolicy;
 pub use module_controller::{

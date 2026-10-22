@@ -116,7 +116,9 @@ fn scoped_voice_host_callbacks_round_trip() {
     assert_eq!(decoded.scope, scope);
     assert_eq!(decoded.text, "hello there");
 
-    let policy_request = HostVoiceReplyPolicyRequest { scope: scope.clone() };
+    let policy_request = HostVoiceReplyPolicyRequest {
+        scope: scope.clone(),
+    };
     let decoded: HostVoiceReplyPolicyRequest =
         serde_json::from_value(serde_json::to_value(policy_request).unwrap()).unwrap();
     assert_eq!(decoded.scope, scope);
