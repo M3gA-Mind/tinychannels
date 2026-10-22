@@ -430,10 +430,7 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
     let requests = callback.requests.lock().await;
     let send_request = requests
         .iter()
-        .find_map(|request| match request {
-            ProgressiveTransportRequest::SendTyped { .. } => Some(request),
-            _ => None,
-        })
+        .find(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
         .expect("final output is sent through typed provider transport");
     assert!(matches!(
         send_request,

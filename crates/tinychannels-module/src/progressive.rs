@@ -30,13 +30,27 @@ const TURN_LIFETIME: Duration = Duration::from_secs(180);
 
 struct Sender(HostChannels);
 
+struct OutputScope {
+    handle: String,
+    channel: String,
+    turn_id: Option<String>,
+    channel_ref: Option<tinychannels_bus::ChannelRef>,
+    conversation: Option<tinychannels_bus::ConversationRef>,
+}
+
+struct FeedOutput {
+    handle: String,
+    turn_id: Option<String>,
+    channel_ref: Option<tinychannels_bus::ChannelRef>,
+    conversation: Option<tinychannels_bus::ConversationRef>,
+    sequence: u64,
+    events: Vec<ChannelOutputEvent>,
+}
+
 impl Sender {
     async fn output_event(
         &self,
-        channel: &str,
-        turn_id: Option<String>,
-        channel_ref: Option<tinychannels_bus::ChannelRef>,
-        conversation: Option<tinychannels_bus::ConversationRef>,
+        scope: &OutputScope,
         sequence: u64,
         event: ChannelOutputEvent,
     ) -> Result<()> {
@@ -44,10 +58,10 @@ impl Sender {
             .0
             .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(
                 ProgressiveTransportRequest::OutputEvent {
-                    channel: channel.into(),
-                    turn_id,
-                    channel_ref,
-                    conversation,
+                    channel: scope.channel.clone(),
+                    turn_id: scope.turn_id.clone(),
+                    channel_ref: scope.channel_ref.clone(),
+                    conversation: scope.conversation.clone(),
                     sequence,
                     event: Box::new(event),
                 },
@@ -64,12 +78,8 @@ impl Sender {
 
     async fn send_typed(
         &self,
-        channel: &str,
-        turn_id: Option<String>,
-        channel_ref: Option<tinychannels_bus::ChannelRef>,
-        conversation: Option<tinychannels_bus::ConversationRef>,
+        scope: &OutputScope,
         sequence: u64,
-        handle: &str,
         parts: Vec<tinychannels_bus::OutboundContentPart>,
         text: String,
     ) -> Result<ProgressiveTransportResult> {
@@ -77,13 +87,13 @@ impl Sender {
             .0
             .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(
                 ProgressiveTransportRequest::SendTyped {
-                    channel: channel.into(),
-                    turn_id,
-                    channel_ref,
-                    conversation,
+                    channel: scope.channel.clone(),
+                    turn_id: scope.turn_id.clone(),
+                    channel_ref: scope.channel_ref.clone(),
+                    conversation: scope.conversation.clone(),
                     sequence: Some(sequence),
                     segment_index: None,
-                    idempotency_key: Some(format!("progressive:{handle}:{sequence}")),
+                    idempotency_key: Some(format!("progressive:{}:{sequence}", scope.handle)),
                     parts,
                     text,
                 },
@@ -198,15 +208,10 @@ impl ProgressiveSender for Sender {
 
 enum Command {
     Feed(Vec<ProgressiveEvent>, oneshot::Sender<Result<()>>),
-    FeedOutput {
-        handle: String,
-        turn_id: Option<String>,
-        channel_ref: Option<tinychannels_bus::ChannelRef>,
-        conversation: Option<tinychannels_bus::ConversationRef>,
-        sequence: u64,
-        events: Vec<ChannelOutputEvent>,
-        response: oneshot::Sender<Result<Vec<ProgressiveTransportResult>>>,
-    },
+    FeedOutput(
+        Box<FeedOutput>,
+        oneshot::Sender<Result<Vec<ProgressiveTransportResult>>>,
+    ),
     Finish(String, oneshot::Sender<()>),
 }
 
@@ -292,15 +297,17 @@ impl Replies {
                 let (response, wait) = oneshot::channel();
                 entry
                     .commands
-                    .send(Command::FeedOutput {
-                        handle: handle.clone(),
-                        turn_id,
-                        channel_ref: channel_ref.map(|value| *value),
-                        conversation: conversation.map(|value| *value),
-                        sequence,
-                        events,
+                    .send(Command::FeedOutput(
+                        Box::new(FeedOutput {
+                            handle: handle.clone(),
+                            turn_id,
+                            channel_ref: channel_ref.map(|value| *value),
+                            conversation: conversation.map(|value| *value),
+                            sequence,
+                            events,
+                        }),
                         response,
-                    })
+                    ))
                     .await
                     .map_err(|_| Error::failed("progressive reply is closed"))?;
                 drop(closing);
@@ -518,17 +525,20 @@ async fn run(
                     let result = apply(&mut reply, events);
                     let _ = response.send(result);
                 }
-                Some(Command::FeedOutput { handle, turn_id, channel_ref, conversation, sequence, events, response }) => {
+                Some(Command::FeedOutput(batch, response)) => {
+                    let scope = OutputScope {
+                        handle: batch.handle,
+                        channel: channel.clone(),
+                        turn_id: batch.turn_id,
+                        channel_ref: batch.channel_ref,
+                        conversation: batch.conversation,
+                    };
                     let result = apply_output(
                         &mut reply,
                         &sender,
-                        &channel,
-                        turn_id,
-                        channel_ref,
-                        conversation,
-                        sequence,
-                        events,
-                        &handle,
+                        &scope,
+                        batch.sequence,
+                        batch.events,
                     ).await;
                     let _ = response.send(result);
                 }
@@ -550,13 +560,9 @@ async fn run(
 async fn apply_output(
     reply: &mut ProgressiveReply,
     sender: &Sender,
-    channel: &str,
-    turn_id: Option<String>,
-    channel_ref: Option<tinychannels_bus::ChannelRef>,
-    conversation: Option<tinychannels_bus::ConversationRef>,
+    scope: &OutputScope,
     sequence: u64,
     events: Vec<ChannelOutputEvent>,
-    handle: &str,
 ) -> Result<Vec<ProgressiveTransportResult>> {
     let mut deliveries = Vec::new();
     for (offset, event) in events.into_iter().enumerate() {
@@ -570,16 +576,7 @@ async fn apply_output(
                 receipt: original_receipt,
             } => {
                 let delivery = sender
-                    .send_typed(
-                        channel,
-                        turn_id.clone(),
-                        channel_ref.clone(),
-                        conversation.clone(),
-                        sequence,
-                        handle,
-                        parts.clone(),
-                        text.clone(),
-                    )
+                    .send_typed(scope, sequence, parts.clone(), text.clone())
                     .await?;
                 let receipt = match &delivery {
                     ProgressiveTransportResult::Outcome(outcome) => Some(outcome.receipt.clone()),
@@ -594,16 +591,7 @@ async fn apply_output(
             }
             event => event,
         };
-        sender
-            .output_event(
-                channel,
-                turn_id.clone(),
-                channel_ref.clone(),
-                conversation.clone(),
-                sequence,
-                event.clone(),
-            )
-            .await?;
+        sender.output_event(scope, sequence, event.clone()).await?;
         match event {
             ChannelOutputEvent::TextDelta { text, .. } => reply.on_text_delta(&text),
             ChannelOutputEvent::ThinkingDelta { text, .. } => reply.on_thinking_delta(&text),
