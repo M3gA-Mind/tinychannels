@@ -43,7 +43,20 @@ async fn receipt_only_adapters_get_safe_capability_and_outcome_defaults() {
     let adapter = ReceiptOnlyAdapter;
     assert_eq!(
         adapter.declared_capabilities(),
-        tinychannels_bus::ChannelCapabilities::unknown()
+        tinychannels_bus::ChannelCapabilities {
+            content: tinychannels_bus::capabilities::ContentCapabilities {
+                text: tinychannels_bus::capabilities::ContentCapability {
+                    outbound: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            actions: tinychannels_bus::ActionCapabilities {
+                supported: vec!["send".into()],
+                ..Default::default()
+            },
+            ..tinychannels_bus::ChannelCapabilities::unknown()
+        }
     );
 
     let outcome = adapter
@@ -96,7 +109,7 @@ async fn receipt_only_adapters_project_text_but_reject_rich_typed_content() {
         .send_typed(&image)
         .await
         .expect_err("legacy adapter must refuse rich content explicitly");
-    assert!(error.unsupported);
+    assert!(error.is_unsupported());
 
     let formatted = tinychannels_bus::ChannelOutboundMessage {
         parts: vec![tinychannels_bus::OutboundContentPart::Content {
@@ -111,7 +124,7 @@ async fn receipt_only_adapters_project_text_but_reject_rich_typed_content() {
         .send_typed(&formatted)
         .await
         .expect_err("legacy adapter must not discard the text dialect");
-    assert!(error.unsupported);
+    assert!(error.is_unsupported());
 }
 
 #[derive(Default)]
@@ -171,7 +184,7 @@ async fn ingress_keeps_envelope_only_sinks_compatible() {
         ))
         .await
         .expect_err("event-only extension must fail explicitly by default");
-    assert!(error.unsupported);
+    assert!(error.is_unsupported());
 }
 
 #[tokio::test]

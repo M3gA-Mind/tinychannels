@@ -22,13 +22,9 @@ pub trait ChannelInboundSink: Send + Sync {
         &self,
         _event: tinychannels_bus::ChannelEvent,
     ) -> Result<(), ChannelSendError> {
-        Err(ChannelSendError {
-            kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
-            message: "inbound events are not supported by this sink".into(),
-            unsupported: true,
-            retryable: false,
-            ..Default::default()
-        })
+        Err(ChannelSendError::unsupported(
+            "inbound events are not supported by this sink",
+        ))
     }
 
     /// Unified message/event ingress for providers. The default preserves all
@@ -53,7 +49,10 @@ pub trait ChannelAdapter: Send + Sync {
     /// default is conservative, so older adapters do not accidentally claim
     /// operations they have not implemented.
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        tinychannels_bus::ChannelCapabilities::unknown()
+        let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+        capabilities.content.text.outbound = true;
+        capabilities.actions.supported.push("send".into());
+        capabilities
     }
 
     fn receive_ack_policy(&self) -> ChannelReceiveAckPolicy {
@@ -133,13 +132,7 @@ pub trait ChannelAdapter: Send + Sync {
 }
 
 fn unsupported_content_error() -> ChannelSendError {
-    ChannelSendError {
-        kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
-        message: "adapter does not support this typed content".into(),
-        unsupported: true,
-        retryable: false,
-        ..Default::default()
-    }
+    ChannelSendError::unsupported("adapter does not support this typed content")
 }
 
 /// Optional setup/config extension.

@@ -24,10 +24,6 @@ pub enum SendErrorKind {
 pub struct ChannelSendError {
     pub kind: SendErrorKind,
     pub message: String,
-    /// True when this adapter intentionally does not implement the operation.
-    /// Kept optional on the wire so older hosts continue to decode errors.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub unsupported: bool,
     pub retryable: bool,
     /// Provider I/O may have reached the remote service despite the error.
     pub sent_before_error: bool,
@@ -42,7 +38,6 @@ impl Default for ChannelSendError {
         Self {
             kind: SendErrorKind::Unknown,
             message: String::new(),
-            unsupported: false,
             retryable: false,
             sent_before_error: false,
             retry_after: None,
@@ -53,8 +48,23 @@ impl Default for ChannelSendError {
     }
 }
 
-fn is_false(value: &bool) -> bool {
-    !value
+impl ChannelSendError {
+    const UNSUPPORTED_PREFIX: &'static str = "unsupported operation: ";
+
+    /// Build an explicit unsupported-operation error without changing the
+    /// public struct layout used by existing Rust callers.
+    pub fn unsupported(message: impl Into<String>) -> Self {
+        Self {
+            kind: SendErrorKind::BadFormat,
+            message: format!("{}{}", Self::UNSUPPORTED_PREFIX, message.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Whether this error was produced by [`Self::unsupported`].
+    pub fn is_unsupported(&self) -> bool {
+        self.kind == SendErrorKind::BadFormat && self.message.starts_with(Self::UNSUPPORTED_PREFIX)
+    }
 }
 
 #[cfg(test)]
