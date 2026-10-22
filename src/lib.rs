@@ -79,8 +79,9 @@ pub use tinychannels_bus::{
     ChannelCapabilities, ChannelControllerRequest, ChannelControllerResult, ChannelDefinition,
     ChannelInboundEnvelope, ChannelMessage, ChannelOutboundIntent, ChannelsConfig,
     DeliveryDurability, HOST_BUS_NAME, HOST_OBJECT_PATH, HostEventPublication,
-    HostTranscriptionRequest, HostTranscriptionResult, HttpProxyPolicy, METHODS, OBJECT_PATH,
-    OutboundPayload, Result, SendMessage, TinyChannelsError, is_compatible, methods,
+    HostTranscriptionRequest, HostTranscriptionResult, HttpProxyPolicy, METHODS, MODULE_ID,
+    OBJECT_PATH, OutboundPayload, ReplyContext, Result, SendMessage, TinyChannelsError,
+    is_compatible, methods,
 };
 pub use tinychannels_runtime::channel::{
     build_session_key_for_inbound_envelope, inbound_envelope_from_legacy_message,

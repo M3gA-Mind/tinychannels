@@ -80,6 +80,10 @@ marker. Terminal receipts are included in idempotent replays.
 The controller vocabulary includes complete Discord guild, text-channel and
 permission DTOs. Provider APIs re-export these types at their existing paths;
 REST calls and permission calculations remain implementation behavior.
+`controllers::requests` defines the typed camel-case parameters accepted by
+the public channel controller methods. `ReplyContext` carries the reply target
+and optional thread address across approval surfaces, and `MODULE_ID` is the
+stable "tinychannels" module-registry identity.
 
 The deployed OpenHuman web chat vocabulary is available from
 `tinychannels_bus::web`. It is a distinct snake-case `event`-tagged protocol,
