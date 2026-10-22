@@ -642,9 +642,9 @@ async fn module_adapter_ingress_returns_retryable_error_when_inbound_is_oversize
         .await
         .expect_err("oversized inbound callback must be rejected to the adapter");
 
-    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Transient);
-    assert!(error.retryable);
-    assert_eq!(error.message, "channel host ingress callback failed");
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::BadFormat);
+    assert!(!error.retryable);
+    assert_eq!(error.message, "channel host rejected inbound payload");
     host.shutdown().await.unwrap();
 }
 
@@ -661,9 +661,9 @@ async fn module_adapter_ingress_returns_retryable_error_when_host_is_closed() {
         .await
         .expect_err("closed host callback consumer must be reported to the adapter");
 
-    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Transient);
-    assert!(error.retryable);
-    assert_eq!(error.message, "channel host ingress callback failed");
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Unknown);
+    assert!(!error.retryable);
+    assert_eq!(error.message, "channel host ingress consumer is closed");
 }
 
 #[tokio::test]

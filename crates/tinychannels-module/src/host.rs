@@ -527,7 +527,7 @@ impl HostChannels {
 
     async fn deliver_inbound_value(&self, channel: &str, message: serde_json::Value) {
         if let Err(error) = self.try_deliver_inbound_value(channel, message).await {
-            record_failure(&self.owner.failure, error.to_string());
+            record_failure(&self.owner.failure, error.message);
         }
     }
 

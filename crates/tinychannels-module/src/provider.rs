@@ -374,10 +374,10 @@ impl tinychannels::host::EventSink for ModuleEvents {
             tinychannels_bus::ChannelEventKind::Lifecycle { .. } => "lifecycle",
         };
         event.event_id = format!("{}:{}:{kind}", self.1, event.event_id);
-        self.0
-            .deliver_event(event)
-            .await
-            .map_err(|error| anyhow::anyhow!(error.to_string()))
+        self.0.deliver_event(event).await.map_err(|error| {
+            tracing::warn!(%error, "channel host ingress callback failed");
+            anyhow::anyhow!(error.to_string())
+        })
     }
 
     async fn publish_ingress(
@@ -388,9 +388,7 @@ impl tinychannels::host::EventSink for ModuleEvents {
             tinychannels_bus::ChannelIngress::Inbound(mut envelope) => {
                 envelope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
                 envelope.channel.account_id = Some(self.1.clone());
-                self.0
-                    .try_deliver_inbound(&self.1, envelope)
-                    .await?;
+                self.0.try_deliver_inbound(&self.1, envelope).await?;
                 Ok(true)
             }
             tinychannels_bus::ChannelIngress::Event(event) => {
