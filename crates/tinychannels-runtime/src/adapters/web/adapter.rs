@@ -20,8 +20,8 @@ use tinychannels_bus::channel::{
 use tinychannels_bus::module_progressive::ChannelOutputEvent;
 use tinychannels_bus::web::{WebChannelEvent, WebEventContext};
 use tinychannels_bus::{
-    ActionCapabilities, ChannelCapabilities, ContentCapabilities,
-    ContentCapability, EventCapabilities, VoiceCapabilities, VoiceTranscriptSource,
+    ActionCapabilities, ChannelCapabilities, ContentCapabilities, ContentCapability,
+    EventCapabilities, VoiceCapabilities, VoiceTranscriptSource,
 };
 
 /// `client_id` stamped on events that no browser client originated.
@@ -300,7 +300,9 @@ impl ChannelAdapter for WebChannelAdapter {
         &self,
         intent: ChannelOutboundIntent,
     ) -> Result<MessageReceipt, ChannelSendError> {
-        self.send_outcome(intent).await.map(|outcome| outcome.receipt)
+        self.send_outcome(intent)
+            .await
+            .map(|outcome| outcome.receipt)
     }
 
     async fn send_outcome(
