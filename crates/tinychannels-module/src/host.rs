@@ -504,9 +504,8 @@ impl HostChannels {
         &self,
         channel: &str,
         envelope: tinychannels_bus::ChannelInboundEnvelope,
-    ) -> Result<()> {
-        let message = serde_json::to_value(envelope)
-            .map_err(|_| Error::failed("inbound envelope could not be encoded"))?;
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        let message = serde_json::to_value(envelope).map_err(|_| inbound_rejected_error())?;
         self.try_deliver_inbound_value(channel, message).await
     }
 
@@ -536,15 +535,16 @@ impl HostChannels {
         &self,
         channel: &str,
         message: serde_json::Value,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         if serde_json::to_vec(&message).map_or(true, |bytes| bytes.len() > MAX_CALLBACK_BYTES) {
-            return Err(Error::failed("inbound callback byte limit exceeded"));
+            return Err(inbound_rejected_error());
         }
         self.enqueue_result(Notification::DeliverInbound {
             channel: channel.to_owned(),
             message,
         })
-        .await?;
+        .await
+        .map_err(|_| inbound_host_closed_error())?;
         Ok(())
     }
 
@@ -669,6 +669,23 @@ impl HostChannels {
         }
     }
 }
+
+fn inbound_rejected_error() -> tinychannels::channel::ChannelSendError {
+    tinychannels::channel::ChannelSendError {
+        kind: tinychannels::channel::SendErrorKind::BadFormat,
+        message: "channel host rejected inbound payload".into(),
+        ..Default::default()
+    }
+}
+
+fn inbound_host_closed_error() -> tinychannels::channel::ChannelSendError {
+    tinychannels::channel::ChannelSendError {
+        kind: tinychannels::channel::SendErrorKind::Unknown,
+        message: "channel host ingress consumer is closed".into(),
+        ..Default::default()
+    }
+}
+
 fn record_failure(failure: &StdMutex<Option<String>>, error: String) {
     let mut failure = failure.lock().unwrap_or_else(|error| error.into_inner());
     if failure.is_none() {
