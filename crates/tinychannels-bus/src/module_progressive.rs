@@ -256,6 +256,7 @@ pub enum ProgressiveResult {
     /// discarding provider delivery results.
     OutputUpdated {
         deliveries: Vec<ProgressiveTransportResult>,
+        #[serde(default)]
         output_event_failures: Vec<u64>,
     },
     Closed,

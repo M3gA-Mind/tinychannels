@@ -195,7 +195,7 @@ async fn handles_cannot_cross_private_runtime_reply_stores() {
 async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
     let (replies, _) = fixture(false).await;
     let mut reply = ProgressiveReply::new(
-        Arc::new(Sender(replies.host.clone())),
+        Arc::new(Sender::new(replies.host.clone())),
         "discord:fixture",
         tinychannels_bus::ChannelCapabilities::unknown(),
     );
@@ -512,12 +512,11 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
 async fn feed_output_returns_prior_and_current_receipts_when_output_event_callbacks_fail() {
     let (replies, callback) = fixture(false).await;
     let handle = open(&replies).await;
-    *callback.failed_output_sequences.lock().await = vec![40];
+    *callback.failed_output_sequences.lock().await = vec![41];
     let events = vec![
-        ChannelOutputEvent::FinalMessage {
-            text: "first".into(),
-            parts: vec![],
-            receipt: None,
+        ChannelOutputEvent::TextDelta {
+            text: "draft".into(),
+            iteration: Some(1),
         },
         ChannelOutputEvent::FinalMessage {
             text: "second".into(),
@@ -545,7 +544,7 @@ async fn feed_output_returns_prior_and_current_receipts_when_output_event_callba
     else {
         panic!("expected typed partial output result");
     };
-    assert_eq!(deliveries.len(), 2);
+    assert_eq!(deliveries.len(), 1);
     for delivery in deliveries {
         let ProgressiveTransportResult::Outcome(outcome) = delivery else {
             panic!("expected provider receipt for each successful send");
@@ -555,7 +554,7 @@ async fn feed_output_returns_prior_and_current_receipts_when_output_event_callba
             Some("fixture-message")
         );
     }
-    assert_eq!(output_event_failures, vec![40]);
+    assert_eq!(output_event_failures, vec![41]);
     assert_eq!(
         callback
             .requests
@@ -571,6 +570,237 @@ async fn feed_output_returns_prior_and_current_receipts_when_output_event_callba
         .execute(ProgressiveCommand::Close { handle })
         .await
         .unwrap();
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn feed_output_retries_reuse_the_previous_result_without_reapplying_deltas() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    let event = ChannelOutputEvent::TextDelta {
+        text: "once".into(),
+        iteration: Some(1),
+    };
+    let request = || ProgressiveCommand::FeedOutput {
+        handle: handle.clone(),
+        turn_id: Some("turn-1".into()),
+        channel_ref: None,
+        conversation: None,
+        sequence: 70,
+        events: vec![event.clone()],
+    };
+
+    assert_eq!(
+        replies.execute(request()).await.unwrap(),
+        ProgressiveResult::Updated
+    );
+    assert_eq!(
+        replies.execute(request()).await.unwrap(),
+        ProgressiveResult::Updated
+    );
+    assert_eq!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .filter(|request| matches!(request, ProgressiveTransportRequest::OutputEvent { .. }))
+            .count(),
+        1,
+        "an identical retry must not re-append or re-project its delta"
+    );
+    let mut changed = event;
+    if let ChannelOutputEvent::TextDelta { text, .. } = &mut changed {
+        text.push_str(" changed");
+    }
+    assert!(
+        replies
+            .execute(ProgressiveCommand::FeedOutput {
+                handle: handle.clone(),
+                turn_id: Some("turn-1".into()),
+                channel_ref: None,
+                conversation: None,
+                sequence: 70,
+                events: vec![changed],
+            })
+            .await
+            .is_err(),
+        "reusing a sequence for different content must be rejected"
+    );
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn final_output_terminates_without_a_second_legacy_send_and_replays_receipt() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    let request = || ProgressiveCommand::FeedOutput {
+        handle: handle.clone(),
+        turn_id: Some("turn-1".into()),
+        channel_ref: None,
+        conversation: None,
+        sequence: 80,
+        events: vec![ChannelOutputEvent::FinalMessage {
+            text: "final".into(),
+            parts: vec![],
+            receipt: None,
+        }],
+    };
+    let first = replies.execute(request()).await.unwrap();
+    assert!(matches!(first, ProgressiveResult::OutputUpdated { .. }));
+    assert_eq!(replies.execute(request()).await.unwrap(), first);
+    tokio::task::yield_now().await;
+    replies
+        .execute(ProgressiveCommand::Close {
+            handle: handle.clone(),
+        })
+        .await
+        .unwrap();
+    let requests = callback.requests.lock().await;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| matches!(request, ProgressiveTransportRequest::Send { .. }))
+            .count(),
+        0,
+        "closing a completed turn must not emit a cancellation or second final send"
+    );
+    drop(requests);
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn feed_output_rejects_accumulated_text_and_thinking_over_the_content_limit() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            turn_id: Some("turn-1".into()),
+            channel_ref: None,
+            conversation: None,
+            sequence: 90,
+            events: vec![
+                ChannelOutputEvent::TextDelta {
+                    text: "would be applied".into(),
+                    iteration: Some(1),
+                },
+                ChannelOutputEvent::ThinkingDelta {
+                    text: "x".repeat(MAX_CONTENT + 1),
+                    iteration: Some(1),
+                },
+            ],
+        })
+        .await;
+    assert!(result.is_err());
+    assert_eq!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .filter(|request| matches!(request, ProgressiveTransportRequest::OutputEvent { .. }))
+            .count(),
+        0,
+        "the batch must be rejected before projecting or applying any event"
+    );
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn progressive_draft_transport_preserves_the_output_batch_scope() {
+    let (replies, callback) = fixture(false).await;
+    let sender = Sender::new(replies.host.clone());
+    sender
+        .set_scope(Some(OutputScope {
+            handle: "handle-1".into(),
+            channel: "discord:fixture".into(),
+            turn_id: Some("turn-1".into()),
+            channel_ref: Some(tinychannels_bus::ChannelRef {
+                id: "channel-ref".into(),
+                account_id: Some("account-1".into()),
+            }),
+            conversation: Some(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Thread,
+                id: "conversation-1".into(),
+                scope_id: Some("scope-1".into()),
+                parent_id: Some("parent-1".into()),
+                thread_id: Some("thread-1".into()),
+                topic_id: None,
+            }),
+        }))
+        .await;
+    ProgressiveSender::send(&sender, "discord:fixture", "draft")
+        .await
+        .unwrap();
+    ProgressiveSender::edit(&sender, "discord:fixture", "message-1", "edited")
+        .await
+        .unwrap();
+    ProgressiveSender::delete(&sender, "discord:fixture", "message-1")
+        .await
+        .unwrap();
+    ProgressiveSender::typing(&sender, "discord:fixture")
+        .await
+        .unwrap();
+
+    let requests = callback.requests.lock().await;
+    assert_eq!(requests.len(), 4);
+    for request in requests.iter() {
+        let (turn_id, channel_ref, conversation) = match request {
+            ProgressiveTransportRequest::Send {
+                turn_id,
+                channel_ref,
+                conversation,
+                ..
+            }
+            | ProgressiveTransportRequest::Edit {
+                turn_id,
+                channel_ref,
+                conversation,
+                ..
+            }
+            | ProgressiveTransportRequest::Delete {
+                turn_id,
+                channel_ref,
+                conversation,
+                ..
+            }
+            | ProgressiveTransportRequest::Typing {
+                turn_id,
+                channel_ref,
+                conversation,
+                ..
+            } => (turn_id, channel_ref, conversation),
+            _ => panic!("expected a scoped progressive draft operation"),
+        };
+        assert_eq!(turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(
+            channel_ref.as_ref().map(|value| value.id.as_str()),
+            Some("channel-ref")
+        );
+        assert_eq!(
+            conversation
+                .as_ref()
+                .map(|value| value.thread_id.as_deref()),
+            Some(Some("thread-1"))
+        );
+    }
+    drop(requests);
     replies.shutdown().await.unwrap();
 }
 
@@ -623,7 +853,7 @@ async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity(
 async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
     let (replies, _) = fixture(false).await;
     let mut reply = ProgressiveReply::new(
-        Arc::new(Sender(replies.host.clone())),
+        Arc::new(Sender::new(replies.host.clone())),
         "discord:fixture",
         tinychannels_bus::ChannelCapabilities::unknown(),
     );
@@ -649,7 +879,7 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
 #[tokio::test]
 async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
     let (replies, callback) = fixture(false).await;
-    let sender = Sender(replies.host.clone());
+    let sender = Sender::new(replies.host.clone());
     sender
         .edit("discord:room", "message-id", "updated")
         .await
@@ -669,7 +899,7 @@ async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
 #[tokio::test]
 async fn transport_failures_preserve_recovery_classification() {
     let (replies, callback) = fixture(false).await;
-    let sender = Sender(replies.host.clone());
+    let sender = Sender::new(replies.host.clone());
     for result in [
         ProgressiveTransportResult::Unavailable,
         ProgressiveTransportResult::EditUnsupported,
