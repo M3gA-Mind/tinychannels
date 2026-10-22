@@ -24,6 +24,10 @@ pub enum SendErrorKind {
 pub struct ChannelSendError {
     pub kind: SendErrorKind,
     pub message: String,
+    /// True when this adapter intentionally does not implement the operation.
+    /// Kept optional on the wire so older hosts continue to decode errors.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unsupported: bool,
     pub retryable: bool,
     /// Provider I/O may have reached the remote service despite the error.
     pub sent_before_error: bool,
@@ -38,6 +42,7 @@ impl Default for ChannelSendError {
         Self {
             kind: SendErrorKind::Unknown,
             message: String::new(),
+            unsupported: false,
             retryable: false,
             sent_before_error: false,
             retry_after: None,
@@ -46,4 +51,8 @@ impl Default for ChannelSendError {
             partial_overflow: None,
         }
     }
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
