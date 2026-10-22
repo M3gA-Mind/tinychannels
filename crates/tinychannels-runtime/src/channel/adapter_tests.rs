@@ -45,6 +45,7 @@ async fn receipt_only_adapters_get_safe_capability_and_outcome_defaults() {
         adapter.declared_capabilities(),
         tinychannels_bus::ChannelCapabilities {
             content: tinychannels_bus::capabilities::ContentCapabilities {
+                parts: vec!["text".into()],
                 text: tinychannels_bus::capabilities::ContentCapability {
                     outbound: true,
                     ..Default::default()
