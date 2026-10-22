@@ -3518,3 +3518,42 @@ async fn shutdown_refuses_preparation_and_execution_before_host_work() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn a_conflicting_pending_entry_is_quarantined_and_does_not_block_a_later_required_send() {
+    use tinychannels::delivery::{
+        DeliveryQueueStore as _, DeliveryRecoveryState, DeliveryResultStore as _, QueuedDelivery,
+    };
+
+    let (sent, mut received) = tokio::sync::mpsc::channel(1);
+    let (channels, _callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
+    let store = crate::delivery::HostDeliveryStore::from_host(&channels.host);
+    let mut stuck = QueuedDelivery::new(
+        "stuck",
+        required_intent("stuck", "older intent"),
+        now_unix_ms(),
+    );
+    stuck.recovery_state = Some(DeliveryRecoveryState::SendAttemptStarted);
+    stuck.platform_send_started_at_unix_ms = Some(now_unix_ms());
+    store.save_pending(stuck).await.unwrap();
+    store
+        .save_result(tinychannels_bus::DeliveryTerminalResult {
+            id: "stuck".into(),
+            intent_fingerprint: "f".repeat(64),
+            completed_at_unix_ms: now_unix_ms(),
+            receipt: None,
+        })
+        .await
+        .unwrap();
+
+    let result = channels
+        .send_channel_intent("fixture".into(), required_intent("later", "hello"))
+        .await;
+    assert!(
+        result.is_ok(),
+        "an unrelated stuck entry blocked a new required send: {result:?}"
+    );
+    assert_eq!(received.recv().await.unwrap().content, "hello");
+    assert!(store.load_pending("stuck").await.unwrap().is_none());
+    assert!(store.load_failed("stuck").await.unwrap().is_some());
+}

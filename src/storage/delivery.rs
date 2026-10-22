@@ -225,16 +225,28 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
 
     async fn load_pending_all(&self) -> Result<Vec<QueuedDelivery>, DeliveryQueueError> {
         let query = Query::all().sort(Sort::asc("enqueued_ms"));
-        let found = self
+        let mut found = self
             .docs()
             .await?
             .query_all(PENDING_COLLECTION, &query)
             .await
             .map_err(store_error)?;
-        if found.len() > DELIVERY_PENDING_CAPACITY {
-            return Err(invalid("stored pending queue is oversized"));
-        }
-        found.into_iter().map(decode_entry).collect()
+        // A queue over capacity (a legacy migration copies rows uncapped) or
+        // an unreadable row must not stop every other entry from draining:
+        // take the oldest batch and leave unreadable rows in place.
+        // ponytail: unreadable rows still count toward `save_pending`'s
+        // capacity; move them to the failed collection if that ever bites.
+        found.truncate(DELIVERY_PENDING_CAPACITY);
+        Ok(found
+            .into_iter()
+            .filter_map(|doc| {
+                decode_entry(doc)
+                    .inspect_err(|_| {
+                        tracing::warn!("{LOG_PREFIX} skipping unreadable pending delivery");
+                    })
+                    .ok()
+            })
+            .collect())
     }
 
     async fn remove_pending(&self, id: &str) -> Result<(), DeliveryQueueError> {

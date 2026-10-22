@@ -453,9 +453,12 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
             DeliveryQueueError::Store("delivery intent could not be encoded".into())
         })?;
         if result.intent_fingerprint != fingerprint {
-            return Err(DeliveryQueueError::Store(
-                "terminal delivery result conflicts with pending intent".into(),
-            ));
+            // A definite verdict, not a store failure: quarantine this entry
+            // in the failed collection instead of failing every drain.
+            return Ok(Some(UnknownSendReconciliation::Unresolved {
+                retryable: false,
+                error: Some("terminal delivery result conflicts with pending intent".into()),
+            }));
         }
         Ok(Some(UnknownSendReconciliation::Sent {
             receipt: Box::new(result.receipt.unwrap_or_default()),
