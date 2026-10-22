@@ -50,6 +50,7 @@ pub trait ChannelAdapter: Send + Sync {
     /// operations they have not implemented.
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+        capabilities.content.parts.push("text".into());
         capabilities.content.text.outbound = true;
         capabilities.actions.supported.push("send".into());
         capabilities
