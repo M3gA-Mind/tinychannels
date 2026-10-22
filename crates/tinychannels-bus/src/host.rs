@@ -89,19 +89,14 @@ pub struct HostVoiceReplyPolicyRequest {
 }
 
 /// Configured behavior for producing spoken channel replies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HostVoiceReplyMode {
     Mirror,
     Always,
+    #[default]
     Never,
     SpeakReply,
-}
-
-impl Default for HostVoiceReplyMode {
-    fn default() -> Self {
-        Self::Never
-    }
 }
 
 /// Host-authoritative facts and mode for one spoken-reply decision.
