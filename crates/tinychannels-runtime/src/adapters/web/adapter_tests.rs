@@ -313,7 +313,7 @@ async fn send_typed_preserves_parts_through_the_current_adapter_contract() {
     assert!(outcome.error.is_none());
     assert_eq!(outcome.receipt.idempotency_key.as_deref(), Some("typed-1"));
     let wire = serde_json::to_value(&sink.events.lock()[0].1).unwrap();
-    assert_eq!(wire["parts"][0]["part"]["type"], "image");
+    assert_eq!(wire["parts"][0]["part"]["kind"], "image");
     assert_eq!(wire["parts"][0]["part"]["media"]["opaqueId"], "image-1");
 }
 
