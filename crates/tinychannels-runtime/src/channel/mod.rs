@@ -36,18 +36,17 @@ pub use intent::{
 };
 pub use receipt::{
     ChannelSendOutcome, MessageReceipt, MessageReceiptPart, MessageReceiptPartKind,
-    MessageReceiptSourceResult,
-    create_message_receipt_from_outbound_results, list_message_receipt_platform_ids,
-    resolve_message_receipt_primary_id,
+    MessageReceiptSourceResult, create_message_receipt_from_outbound_results,
+    list_message_receipt_platform_ids, resolve_message_receipt_primary_id,
 };
 pub use session::{
     LegacySessionKeys, SessionKeyPolicy, build_session_key, build_session_key_for_inbound_envelope,
     conversation_history_key_candidates, derive_inbound_client_id, derive_inbound_thread_id,
 };
+pub use tinychannels_bus::{ChannelCapabilities, ChannelIngress};
 pub use types::{
     ChannelDescriptor, ChannelRef, ConversationKind, ConversationRef, SecretRef, SenderRef,
 };
-pub use tinychannels_bus::{ChannelCapabilities, ChannelIngress};
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]

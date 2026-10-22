@@ -77,12 +77,12 @@ pub trait ChannelAdapter: Send + Sync {
         &self,
         intent: ChannelOutboundIntent,
     ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, ChannelSendError> {
-        self.send(intent).await.map(|receipt| {
-            tinychannels_bus::channel::ChannelSendOutcome {
+        self.send(intent)
+            .await
+            .map(|receipt| tinychannels_bus::channel::ChannelSendOutcome {
                 receipt,
                 error: None,
-            }
-        })
+            })
     }
 
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError>;

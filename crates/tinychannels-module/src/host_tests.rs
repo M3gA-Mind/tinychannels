@@ -557,6 +557,51 @@ async fn typed_channel_event_crosses_memory_bus_with_full_source_and_address() {
 }
 
 #[tokio::test]
+async fn module_adapter_ingress_preserves_message_and_event_order() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, callback, _server) = connected_host().await;
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    let event = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "connected".into(),
+        source_event_id: None,
+        source_timestamp: None,
+        channel: Default::default(),
+        conversation: None,
+        event: tinychannels_bus::ChannelEventKind::Lifecycle {
+            state: "connected".into(),
+            reason: None,
+        },
+    };
+
+    sink.push_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_envelope(
+        "hello",
+    )))
+    .await
+    .unwrap();
+    sink.push_ingress(tinychannels_bus::ChannelIngress::Event(event))
+        .await
+        .unwrap();
+    host.flush().await.unwrap();
+
+    assert_eq!(
+        callback.events.lock().await.as_slice(),
+        [
+            "inbound:telegram:bot-7:hello",
+            "typed_event:telegram:bot-7:connected:lifecycle"
+        ]
+    );
+    let delivered = callback.typed_events.lock().await;
+    assert_eq!(delivered[0].channel.id, "telegram");
+    assert_eq!(
+        delivered[0].channel.account_id.as_deref(),
+        Some("telegram:bot-7")
+    );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn typed_event_callback_failure_is_returned_without_poisoning_shutdown() {
     let (host, callback, _server) = connected_host().await;
     callback.event_failures.store(1, Ordering::SeqCst);
