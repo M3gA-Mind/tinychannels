@@ -25,13 +25,16 @@ impl WebEventSink for RecordingSink {
 
 #[derive(Default)]
 struct RecordingInbound {
-    pushed: Mutex<Vec<ChannelIngress>>,
+    pushed: Mutex<Vec<tinychannels_bus::ChannelInboundEnvelope>>,
 }
 
 #[async_trait]
 impl ChannelInboundSink for RecordingInbound {
-    async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
-        self.pushed.lock().push(ingress);
+    async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), ChannelSendError> {
+        self.pushed.lock().push(envelope);
         Ok(())
     }
 }
@@ -94,9 +97,7 @@ async fn submit_requires_a_running_adapter_then_pushes_the_envelope() {
     adapter.start(&inbound).await.unwrap();
     adapter.submit(&start, &inbound).await.unwrap();
     let pushed = inbound.pushed.lock();
-    let ChannelIngress::Inbound(envelope) = &pushed[0] else {
-        panic!("expected an inbound envelope");
-    };
+    let envelope = &pushed[0];
     assert_eq!(envelope.channel.account_id.as_deref(), Some("acct"));
     assert_eq!(envelope.text, "hi");
 }
@@ -211,7 +212,7 @@ async fn text_send_publishes_a_proactive_message_and_returns_a_receipt() {
     });
     request.thread_id = Some("proactive:system".into());
     request.reply_to_id = Some("m0".into());
-    let outcome = adapter.send(request).await.unwrap();
+    let outcome = adapter.send_outcome(request).await.unwrap();
     assert!(outcome.error.is_none());
     assert_eq!(
         outcome.receipt.primary_platform_message_id.as_deref(),
@@ -302,7 +303,7 @@ async fn send_rejects_foreign_addresses_and_undeclared_payloads() {
         }))
         .await
         .unwrap_err();
-    assert!(poll.unsupported);
+    assert!(poll.is_unsupported());
     assert!(sink.events.lock().is_empty());
 }
 

@@ -20,7 +20,7 @@ use tinychannels_bus::channel::{
 use tinychannels_bus::module_progressive::ChannelOutputEvent;
 use tinychannels_bus::web::{WebChannelEvent, WebEventContext};
 use tinychannels_bus::{
-    ActionCapabilities, ChannelCapabilities, ChannelIngress, ContentCapabilities,
+    ActionCapabilities, ChannelCapabilities, ContentCapabilities,
     ContentCapability, EventCapabilities, VoiceCapabilities, VoiceTranscriptSource,
 };
 
@@ -158,7 +158,7 @@ impl WebChannelAdapter {
             parts = envelope.parts.len(),
             "web adapter: inbound submission"
         );
-        inbound.push(ChannelIngress::Inbound(envelope)).await
+        inbound.push(envelope).await
     }
 
     /// Project one canonical output event and publish the result.
@@ -233,13 +233,9 @@ impl WebChannelAdapter {
                 parts.clone()
             }
             _ => {
-                return Err(ChannelSendError {
-                    kind: SendErrorKind::BadFormat,
-                    message: "web adapter does not declare this outbound payload".into(),
-                    unsupported: true,
-                    retryable: false,
-                    ..Default::default()
-                });
+                return Err(ChannelSendError::unsupported(
+                    "web adapter does not declare this outbound payload",
+                ));
             }
         };
         let thread_id = intent
@@ -303,6 +299,13 @@ impl ChannelAdapter for WebChannelAdapter {
     async fn send(
         &self,
         intent: ChannelOutboundIntent,
+    ) -> Result<MessageReceipt, ChannelSendError> {
+        self.send_outcome(intent).await.map(|outcome| outcome.receipt)
+    }
+
+    async fn send_outcome(
+        &self,
+        intent: ChannelOutboundIntent,
     ) -> Result<ChannelSendOutcome, ChannelSendError> {
         if tinychannels_bus::provider_id(&intent.channel_id) != WEB_CHANNEL_ID
             || intent.conversation_id.trim().is_empty()
@@ -338,6 +341,27 @@ impl ChannelAdapter for WebChannelAdapter {
             },
             error: None,
         })
+    }
+
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<ChannelSendOutcome, ChannelSendError> {
+        self.send_outcome(ChannelOutboundIntent {
+            idempotency_key: message.idempotency_key.clone(),
+            channel_id: message.channel_id.clone(),
+            conversation_id: message.conversation_id.clone(),
+            channel_ref: message.channel_ref.clone(),
+            conversation_ref: message.conversation_ref.clone(),
+            reply_to_id: message.reply_to_id.clone(),
+            thread_id: message.thread_id.clone(),
+            turn_id: message.turn_id.clone(),
+            payload: OutboundPayload::Parts {
+                parts: message.parts.clone(),
+            },
+            ..Default::default()
+        })
+        .await
     }
 
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError> {

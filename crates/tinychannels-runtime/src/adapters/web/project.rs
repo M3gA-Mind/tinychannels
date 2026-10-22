@@ -117,7 +117,9 @@ pub fn context_mut(event: &mut WebChannelEvent) -> &mut WebEventContext {
         | E::VoiceSpeak { context, .. }
         | E::UserError { context, .. }
         | E::ChatMessage { context, .. }
-        | E::ChatSegment { context, .. } => context,
+        | E::ChatSegment { context, .. }
+        | E::ChannelOutbound { context, .. }
+        | E::ChannelEvent { context, .. } => context,
     }
 }
 
