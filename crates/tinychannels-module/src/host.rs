@@ -492,14 +492,22 @@ impl HostChannels {
         channel: &str,
         envelope: tinychannels_bus::ChannelInboundEnvelope,
     ) {
-        let Ok(message) = serde_json::to_value(envelope) else {
-            record_failure(
-                &self.owner.failure,
-                "inbound envelope could not be encoded".into(),
-            );
-            return;
-        };
-        self.deliver_inbound_value(channel, message).await;
+        if let Err(error) = self.try_deliver_inbound(channel, envelope).await {
+            record_failure(&self.owner.failure, error.to_string());
+        }
+    }
+
+    /// Enqueue one inbound message and report rejection to an adapter that can
+    /// retry it. The legacy [`Self::deliver_inbound`] method retains its
+    /// fire-and-forget behavior for existing callers.
+    pub async fn try_deliver_inbound(
+        &self,
+        channel: &str,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<()> {
+        let message = serde_json::to_value(envelope)
+            .map_err(|_| Error::failed("inbound envelope could not be encoded"))?;
+        self.try_deliver_inbound_value(channel, message).await
     }
 
     /// Enqueue authenticated relay provenance with its normalized envelope.
@@ -519,18 +527,25 @@ impl HostChannels {
     }
 
     async fn deliver_inbound_value(&self, channel: &str, message: serde_json::Value) {
-        if serde_json::to_vec(&message).map_or(true, |bytes| bytes.len() > MAX_CALLBACK_BYTES) {
-            record_failure(
-                &self.owner.failure,
-                "inbound callback byte limit exceeded".into(),
-            );
-            return;
+        if let Err(error) = self.try_deliver_inbound_value(channel, message).await {
+            record_failure(&self.owner.failure, error.to_string());
         }
-        self.enqueue(Notification::DeliverInbound {
+    }
+
+    async fn try_deliver_inbound_value(
+        &self,
+        channel: &str,
+        message: serde_json::Value,
+    ) -> Result<()> {
+        if serde_json::to_vec(&message).map_or(true, |bytes| bytes.len() > MAX_CALLBACK_BYTES) {
+            return Err(Error::failed("inbound callback byte limit exceeded"));
+        }
+        self.enqueue_result(Notification::DeliverInbound {
             channel: channel.to_owned(),
             message,
         })
         .await;
+        Ok(())
     }
 
     /// Enqueue a status fact after preceding inbound messages.
@@ -574,12 +589,20 @@ impl HostChannels {
     }
 
     async fn enqueue(&self, notification: Notification) {
-        let _publication = self.owner.publication.lock().await;
-        if self.owner.terminal.load(Ordering::SeqCst)
-            || self.outbox.send(notification).await.is_err()
-        {
-            record_failure(&self.owner.failure, "callback consumer is closed".into());
+        if let Err(error) = self.enqueue_result(notification).await {
+            record_failure(&self.owner.failure, error.to_string());
         }
+    }
+
+    async fn enqueue_result(&self, notification: Notification) -> Result<()> {
+        let _publication = self.owner.publication.lock().await;
+        if self.owner.terminal.load(Ordering::SeqCst) {
+            return Err(Error::failed("callback consumer is closed"));
+        }
+        self.outbox
+            .send(notification)
+            .await
+            .map_err(|_| Error::failed("callback consumer is closed"))
     }
 
     /// Await all preceding callbacks, returning an observed terminal delivery error.

@@ -632,6 +632,41 @@ async fn module_adapter_ingress_returns_retryable_error_when_host_rejects_event(
 }
 
 #[tokio::test]
+async fn module_adapter_ingress_returns_retryable_error_when_inbound_is_oversized() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, _callback, _server) = connected_host().await;
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    let error = sink
+        .push(inbound_envelope(&"x".repeat(140 * 1024)))
+        .await
+        .expect_err("oversized inbound callback must be rejected to the adapter");
+
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Transient);
+    assert!(error.retryable);
+    assert_eq!(error.message, "channel host ingress callback failed");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_adapter_ingress_returns_retryable_error_when_host_is_closed() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, _callback, _server) = connected_host().await;
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    host.shutdown().await.unwrap();
+
+    let error = sink
+        .push(inbound_envelope("retry me"))
+        .await
+        .expect_err("closed host callback consumer must be reported to the adapter");
+
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Transient);
+    assert!(error.retryable);
+    assert_eq!(error.message, "channel host ingress callback failed");
+}
+
+#[tokio::test]
 async fn typed_event_callback_failure_is_returned_without_poisoning_shutdown() {
     let (host, callback, _server) = connected_host().await;
     callback.event_failures.store(1, Ordering::SeqCst);
