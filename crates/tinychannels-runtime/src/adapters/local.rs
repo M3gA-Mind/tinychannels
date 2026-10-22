@@ -50,6 +50,10 @@ impl ChannelAdapter for LocalChannelAdapter {
         self.descriptor.clone()
     }
 
+    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.capabilities.clone()
+    }
+
     async fn start(
         &self,
         _sink: &(dyn ChannelInboundSink + Send + Sync),

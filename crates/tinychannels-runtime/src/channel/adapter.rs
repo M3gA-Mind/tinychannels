@@ -150,3 +150,7 @@ pub trait ChannelStreamingDraft: Send + Sync {
         intent: ChannelOutboundIntent,
     ) -> Result<MessageReceipt, ChannelSendError>;
 }
+
+#[cfg(test)]
+#[path = "adapter_tests.rs"]
+mod tests;

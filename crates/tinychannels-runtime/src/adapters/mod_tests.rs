@@ -104,6 +104,10 @@ async fn local_adapter_reports_configured_status() {
             .any(|state| { *state == crate::controllers::ChannelAccountState::Configured })
     );
     assert!(adapter.static_capabilities().reply);
+    assert_eq!(
+        adapter.declared_capabilities().actions.supported,
+        vec!["reply"]
+    );
 }
 
 #[tokio::test]

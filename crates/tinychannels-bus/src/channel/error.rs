@@ -56,3 +56,7 @@ impl Default for ChannelSendError {
 fn is_false(value: &bool) -> bool {
     !value
 }
+
+#[cfg(test)]
+#[path = "error_tests.rs"]
+mod tests;

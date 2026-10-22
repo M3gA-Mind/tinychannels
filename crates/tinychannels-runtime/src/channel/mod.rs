@@ -35,7 +35,8 @@ pub use intent::{
     outbound_intent_from_send_message,
 };
 pub use receipt::{
-    MessageReceipt, MessageReceiptPart, MessageReceiptPartKind, MessageReceiptSourceResult,
+    ChannelSendOutcome, MessageReceipt, MessageReceiptPart, MessageReceiptPartKind,
+    MessageReceiptSourceResult,
     create_message_receipt_from_outbound_results, list_message_receipt_platform_ids,
     resolve_message_receipt_primary_id,
 };
@@ -46,6 +47,7 @@ pub use session::{
 pub use types::{
     ChannelDescriptor, ChannelRef, ConversationKind, ConversationRef, SecretRef, SenderRef,
 };
+pub use tinychannels_bus::{ChannelCapabilities, ChannelIngress};
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]
