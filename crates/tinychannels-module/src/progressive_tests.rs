@@ -30,10 +30,16 @@ impl Callback {
                 self.released.notified().await;
             }
         }
-        let default = if matches!(&*request, ProgressiveTransportRequest::OutputEvent { .. }) {
-            ProgressiveTransportResult::Acknowledged
-        } else {
-            ProgressiveTransportResult::Success(serde_json::json!({"id": "fixture-message"}))
+        let default = match &*request {
+            ProgressiveTransportRequest::OutputEvent { .. } => {
+                ProgressiveTransportResult::Acknowledged
+            }
+            ProgressiveTransportRequest::SendTyped { .. } => {
+                let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+                outcome.receipt.primary_platform_message_id = Some("fixture-message".into());
+                ProgressiveTransportResult::Outcome(Box::new(outcome))
+            }
+            _ => ProgressiveTransportResult::Success(serde_json::json!({"id": "fixture-message"})),
         };
         Ok(ChannelBackendResult::ProgressiveTransport(
             self.result.lock().await.clone().unwrap_or(default),
@@ -384,6 +390,12 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
 async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
     let (replies, callback) = fixture(false).await;
     let handle = open(&replies).await;
+    let final_parts = vec![tinychannels_bus::channel::OutboundContentPart::Content {
+        part: tinychannels_bus::channel::ContentPart::Text {
+            text: "complete".into(),
+            markdown_dialect: None,
+        },
+    }];
     let events = vec![
         ChannelOutputEvent::TextDelta {
             text: "partial".into(),
@@ -391,12 +403,7 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
         },
         ChannelOutputEvent::FinalMessage {
             text: "complete".into(),
-            parts: vec![tinychannels_bus::channel::OutboundContentPart::Content {
-                part: tinychannels_bus::channel::ContentPart::Text {
-                    text: "complete".into(),
-                    markdown_dialect: None,
-                },
-            }],
+            parts: final_parts.clone(),
             receipt: None,
         },
     ];
@@ -412,9 +419,36 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
             })
             .await
             .unwrap(),
-        ProgressiveResult::Updated
+        ProgressiveResult::OutputUpdated {
+            deliveries: vec![ProgressiveTransportResult::Outcome(Box::new({
+                let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+                outcome.receipt.primary_platform_message_id = Some("fixture-message".into());
+                outcome
+            }))],
+        }
     );
     let requests = callback.requests.lock().await;
+    let send_request = requests
+        .iter()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped { .. } => Some(request),
+            _ => None,
+        })
+        .expect("final output is sent through typed provider transport");
+    assert!(matches!(
+        send_request,
+        ProgressiveTransportRequest::SendTyped {
+            turn_id: Some(turn_id),
+            sequence: Some(41),
+            idempotency_key: Some(key),
+            parts,
+            text,
+            ..
+        } if turn_id == "turn-1"
+            && key == &format!("progressive:{handle}:41")
+            && parts == &final_parts
+            && text == "complete"
+    ));
     let output_requests = requests
         .iter()
         .filter(|request| matches!(request, ProgressiveTransportRequest::OutputEvent { .. }))
@@ -436,7 +470,8 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
             sequence: 41,
             event,
             ..
-        } if turn_id == "turn-1" && **event == events[1]
+        } if turn_id == "turn-1"
+            && matches!(**event, ChannelOutputEvent::FinalMessage { receipt: Some(_), .. })
     ));
     drop(requests);
     replies
