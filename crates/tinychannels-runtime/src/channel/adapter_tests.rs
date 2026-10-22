@@ -57,6 +57,48 @@ async fn receipt_only_adapters_get_safe_capability_and_outcome_defaults() {
     assert!(outcome.error.is_none());
 }
 
+#[tokio::test]
+async fn receipt_only_adapters_project_text_but_reject_rich_typed_content() {
+    let adapter = ReceiptOnlyAdapter;
+    let text = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "legacy".into(),
+        conversation_id: "room".into(),
+        channel_ref: None,
+        conversation_ref: None,
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: None,
+        idempotency_key: "send-1".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "hello".into(),
+                markdown_dialect: None,
+            },
+        }],
+    };
+    let outcome = adapter.send_typed(&text).await.expect("text fallback");
+    assert_eq!(
+        outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("posted-1")
+    );
+
+    let image = tinychannels_bus::ChannelOutboundMessage {
+        parts: vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: Default::default(),
+                caption: None,
+                alt_text: None,
+            },
+        }],
+        ..text
+    };
+    let error = adapter
+        .send_typed(&image)
+        .await
+        .expect_err("legacy adapter must refuse rich content explicitly");
+    assert!(error.unsupported);
+}
+
 #[derive(Default)]
 struct RecordingSink {
     messages: Mutex<Vec<ChannelInboundEnvelope>>,
