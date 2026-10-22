@@ -200,6 +200,7 @@ impl ProgressiveSender for Sender {
 enum Command {
     Feed(Vec<ProgressiveEvent>, oneshot::Sender<Result<()>>),
     FeedOutput {
+        handle: String,
         turn_id: Option<String>,
         channel_ref: Option<tinychannels_bus::ChannelRef>,
         conversation: Option<tinychannels_bus::ConversationRef>,
@@ -269,14 +270,9 @@ impl Replies {
                     .await
                     .map_err(|_| Error::failed("progressive reply is closed"))?;
                 drop(closing);
-                let deliveries = wait
-                    .await
+                wait.await
                     .map_err(|_| Error::failed("progressive worker stopped"))??;
-                if deliveries.is_empty() {
-                    Ok(ProgressiveResult::Updated)
-                } else {
-                    Ok(ProgressiveResult::OutputUpdated { deliveries })
-                }
+                Ok(ProgressiveResult::Updated)
             }
             ProgressiveCommand::FeedOutput {
                 handle,
@@ -298,6 +294,7 @@ impl Replies {
                 entry
                     .commands
                     .send(Command::FeedOutput {
+                        handle: handle.clone(),
                         turn_id,
                         channel_ref,
                         conversation,
@@ -308,9 +305,14 @@ impl Replies {
                     .await
                     .map_err(|_| Error::failed("progressive reply is closed"))?;
                 drop(closing);
-                wait.await
+                let deliveries = wait
+                    .await
                     .map_err(|_| Error::failed("progressive worker stopped"))??;
-                Ok(ProgressiveResult::Updated)
+                if deliveries.is_empty() {
+                    Ok(ProgressiveResult::Updated)
+                } else {
+                    Ok(ProgressiveResult::OutputUpdated { deliveries })
+                }
             }
             ProgressiveCommand::Finish { handle, text } => {
                 if text.len() > MAX_CONTENT {
@@ -513,7 +515,7 @@ async fn run(
                     let result = apply(&mut reply, events);
                     let _ = response.send(result);
                 }
-                Some(Command::FeedOutput { turn_id, channel_ref, conversation, sequence, events, response }) => {
+                Some(Command::FeedOutput { handle, turn_id, channel_ref, conversation, sequence, events, response }) => {
                     let result = apply_output(
                         &mut reply,
                         &sender,
@@ -523,6 +525,7 @@ async fn run(
                         conversation,
                         sequence,
                         events,
+                        &handle,
                     ).await;
                     let _ = response.send(result);
                 }
@@ -550,11 +553,42 @@ async fn apply_output(
     conversation: Option<tinychannels_bus::ConversationRef>,
     sequence: u64,
     events: Vec<ChannelOutputEvent>,
-) -> Result<()> {
+    handle: &str,
+) -> Result<Vec<ProgressiveTransportResult>> {
+    let mut deliveries = Vec::new();
     for (offset, event) in events.into_iter().enumerate() {
         let sequence = sequence
             .checked_add(offset as u64)
             .ok_or_else(|| Error::failed("progressive sequence overflow"))?;
+        let event = match event {
+            ChannelOutputEvent::FinalMessage { text, parts, .. } => {
+                let delivery = sender
+                    .send_typed(
+                        channel,
+                        turn_id.clone(),
+                        channel_ref.clone(),
+                        conversation.clone(),
+                        sequence,
+                        handle,
+                        parts.clone(),
+                        text.clone(),
+                    )
+                    .await?;
+                let receipt = match &delivery {
+                    ProgressiveTransportResult::Outcome(outcome) => {
+                        Some(outcome.receipt.clone())
+                    }
+                    _ => None,
+                };
+                deliveries.push(delivery);
+                ChannelOutputEvent::FinalMessage {
+                    text,
+                    parts,
+                    receipt,
+                }
+            }
+            event => event,
+        };
         sender
             .output_event(
                 channel,
@@ -577,7 +611,7 @@ async fn apply_output(
             _ => {}
         }
     }
-    Ok(())
+    Ok(deliveries)
 }
 
 fn apply(reply: &mut ProgressiveReply, events: Vec<ProgressiveEvent>) -> Result<()> {
