@@ -435,3 +435,36 @@ fn context_mut_reaches_every_event_kind() {
     context_mut(&mut event).client_id = "c".into();
     assert_eq!(wire(&event)["client_id"], "c");
 }
+
+#[test]
+fn context_mut_supports_current_channel_bus_events() {
+    let mut outbound = WebChannelEvent::ChannelOutbound {
+        context: WebEventContext::default(),
+        full_response: Some("sent".into()),
+        structured: None,
+    };
+    context_mut(&mut outbound).seq = Some(3);
+    assert_eq!(wire(&outbound)["seq"], 3);
+
+    let mut channel_event = WebChannelEvent::ChannelEvent {
+        context: WebEventContext::default(),
+        openhuman_message_id: None,
+        channel_event: tinychannels_bus::channel::ChannelEvent {
+            version: 2,
+            event_id: "event-1".into(),
+            source_event_id: None,
+            source_timestamp: None,
+            channel: tinychannels_bus::channel::ChannelRef {
+                id: "telegram".into(),
+                account_id: None,
+            },
+            conversation: None,
+            event: tinychannels_bus::channel::ChannelEventKind::Lifecycle {
+                state: "connected".into(),
+                reason: None,
+            },
+        },
+    };
+    context_mut(&mut channel_event).request_id = "request-1".into();
+    assert_eq!(wire(&channel_event)["request_id"], "request-1");
+}

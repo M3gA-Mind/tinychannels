@@ -280,6 +280,42 @@ async fn parts_and_voice_sends_keep_their_typed_content() {
 }
 
 #[tokio::test]
+async fn send_typed_preserves_parts_through_the_current_adapter_contract() {
+    let (adapter, sink) = adapter();
+    let message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "web".into(),
+        conversation_id: "thread-9".into(),
+        channel_ref: Some(tinychannels_bus::channel::ChannelRef {
+            id: "web".into(),
+            account_id: Some("acct".into()),
+        }),
+        conversation_ref: Some(tinychannels_bus::channel::ConversationRef {
+            id: "thread-9".into(),
+            ..Default::default()
+        }),
+        idempotency_key: "typed-1".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Content {
+            part: ContentPart::Image {
+                media: MediaReference {
+                    opaque_id: Some("image-1".into()),
+                    ..Default::default()
+                },
+                caption: Some("picture".into()),
+                alt_text: None,
+            },
+        }],
+        ..Default::default()
+    };
+
+    let outcome = adapter.send_typed(&message).await.unwrap();
+    assert!(outcome.error.is_none());
+    assert_eq!(outcome.receipt.idempotency_key.as_deref(), Some("typed-1"));
+    let wire = serde_json::to_value(&sink.events.lock()[0].1).unwrap();
+    assert_eq!(wire["parts"][0]["part"]["type"], "image");
+    assert_eq!(wire["parts"][0]["part"]["media"]["opaqueId"], "image-1");
+}
+
+#[tokio::test]
 async fn send_rejects_foreign_addresses_and_undeclared_payloads() {
     let (adapter, sink) = adapter();
     let mut foreign = intent(OutboundPayload::Text { text: "x".into() });
