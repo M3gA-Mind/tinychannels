@@ -946,3 +946,26 @@ async fn concurrent_owner_opens_complete_one_legacy_migration_safely() {
             .is_some()
     );
 }
+
+#[tokio::test]
+async fn an_over_capacity_legacy_pending_queue_still_loads_its_oldest_batch() {
+    use crate::delivery::DeliveryQueueStore as _;
+    let (_backend, storage) = storage().await;
+    let docs = storage.documents().clone();
+    let over = tinychannels_bus::module_delivery::DELIVERY_PENDING_CAPACITY + 1;
+    for index in 0..over {
+        let id = format!("op-{index}");
+        seed(
+            docs.as_ref(),
+            "channels_delivery_pending",
+            &id,
+            legacy_delivery(&id),
+        )
+        .await;
+    }
+    let store = crate::storage::DocumentDeliveryStore::new(docs);
+    let loaded = store.load_pending_all().await.unwrap_or_else(|error| {
+        panic!("{over} migrated legacy pending rows made the whole queue unloadable: {error:?}")
+    });
+    assert_eq!(loaded.len(), over - 1);
+}

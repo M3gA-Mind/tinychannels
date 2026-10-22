@@ -1672,7 +1672,7 @@ async fn startup_recovery_acks_a_matching_terminal_result_without_resending() {
 }
 
 #[tokio::test]
-async fn startup_recovery_rejects_a_conflicting_terminal_result() {
+async fn startup_recovery_quarantines_a_conflicting_terminal_result() {
     use tinychannels::delivery::{DeliveryQueueStore as _, DeliveryRecoveryState, QueuedDelivery};
 
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
@@ -1693,19 +1693,22 @@ async fn startup_recovery_rejects_a_conflicting_terminal_result() {
         .await
         .unwrap();
 
-    assert!(
-        recover_delivery_channel(&channels.host, &channels.running, "fixture")
-            .await
-            .is_err(),
-        "a terminal result for a different intent is a key conflict"
-    );
+    // Another intent's result is never adopted as ours: the entry is neither
+    // acked as delivered nor re-sent, but kept in the failed collection.
+    recover_delivery_channel(&channels.host, &channels.running, "fixture")
+        .await
+        .unwrap();
     let scopes = callbacks.storage.snapshot().await;
     let scope = scopes.get("scope-a").unwrap();
-    assert_eq!(scope.pending.len(), 1, "conflicts stay retryable");
-    assert!(scope.failed.is_empty());
+    assert!(scope.pending.is_empty());
+    assert_eq!(
+        scope.failed.len(),
+        1,
+        "conflicts are quarantined, not dropped"
+    );
     drop(scopes);
     assert!(received.try_recv().is_err());
-    channels.shutdown().await.unwrap_err();
+    channels.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -3517,4 +3520,43 @@ async fn shutdown_refuses_preparation_and_execution_before_host_work() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn a_conflicting_pending_entry_is_quarantined_and_does_not_block_a_later_required_send() {
+    use tinychannels::delivery::{
+        DeliveryQueueStore as _, DeliveryRecoveryState, DeliveryResultStore as _, QueuedDelivery,
+    };
+
+    let (sent, mut received) = tokio::sync::mpsc::channel(1);
+    let (channels, _callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
+    let store = crate::delivery::HostDeliveryStore::from_host(&channels.host);
+    let mut stuck = QueuedDelivery::new(
+        "stuck",
+        required_intent("stuck", "older intent"),
+        now_unix_ms(),
+    );
+    stuck.recovery_state = Some(DeliveryRecoveryState::SendAttemptStarted);
+    stuck.platform_send_started_at_unix_ms = Some(now_unix_ms());
+    store.save_pending(stuck).await.unwrap();
+    store
+        .save_result(tinychannels_bus::DeliveryTerminalResult {
+            id: "stuck".into(),
+            intent_fingerprint: "f".repeat(64),
+            completed_at_unix_ms: now_unix_ms(),
+            receipt: None,
+        })
+        .await
+        .unwrap();
+
+    let result = channels
+        .send_channel_intent("fixture".into(), required_intent("later", "hello"))
+        .await;
+    assert!(
+        result.is_ok(),
+        "an unrelated stuck entry blocked a new required send: {result:?}"
+    );
+    assert_eq!(received.recv().await.unwrap().content, "hello");
+    assert!(store.load_pending("stuck").await.unwrap().is_none());
+    assert!(store.load_failed("stuck").await.unwrap().is_some());
 }

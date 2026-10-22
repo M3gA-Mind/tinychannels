@@ -494,3 +494,30 @@ async fn a_result_expires_through_record_metadata_and_keeps_no_time_but_completi
         Some(result("r", completed))
     );
 }
+
+#[tokio::test]
+async fn an_unreadable_pending_row_does_not_hide_the_readable_ones() {
+    let backing = docs();
+    let store = DocumentDeliveryStore::new(backing.clone());
+    store.save_pending(entry("good", 1)).await.unwrap();
+    backing
+        .put_with(
+            PENDING_COLLECTION,
+            "junk",
+            serde_json::json!({ "not": "a delivery" }),
+            Precondition::Absent,
+            write_options(),
+        )
+        .await
+        .unwrap();
+    let loaded = store.load_pending_all().await.unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].id, "good");
+    assert!(
+        backing
+            .get(PENDING_COLLECTION, "junk")
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
