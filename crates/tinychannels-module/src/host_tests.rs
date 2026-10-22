@@ -602,6 +602,36 @@ async fn module_adapter_ingress_preserves_message_and_event_order() {
 }
 
 #[tokio::test]
+async fn module_adapter_ingress_returns_retryable_error_when_host_rejects_event() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, callback, _server) = connected_host().await;
+    callback.event_failures.store(1, Ordering::SeqCst);
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    let error = sink
+        .push_event(tinychannels_bus::ChannelEvent {
+            version: 2,
+            event_id: "event-1".into(),
+            source_event_id: None,
+            source_timestamp: None,
+            channel: Default::default(),
+            conversation: None,
+            event: tinychannels_bus::ChannelEventKind::Lifecycle {
+                state: "connected".into(),
+                reason: None,
+            },
+        })
+        .await
+        .expect_err("host callback failure must return to the adapter");
+
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Transient);
+    assert!(error.retryable);
+    assert!(!error.unsupported);
+    assert_eq!(error.message, "channel host ingress callback failed");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn typed_event_callback_failure_is_returned_without_poisoning_shutdown() {
     let (host, callback, _server) = connected_host().await;
     callback.event_failures.store(1, Ordering::SeqCst);

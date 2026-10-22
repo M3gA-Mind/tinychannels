@@ -90,12 +90,27 @@ async fn receipt_only_adapters_project_text_but_reject_rich_typed_content() {
                 alt_text: None,
             },
         }],
-        ..text
+        ..text.clone()
     };
     let error = adapter
         .send_typed(&image)
         .await
         .expect_err("legacy adapter must refuse rich content explicitly");
+    assert!(error.unsupported);
+
+    let formatted = tinychannels_bus::ChannelOutboundMessage {
+        parts: vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "**hello**".into(),
+                markdown_dialect: Some("commonmark".into()),
+            },
+        }],
+        ..text
+    };
+    let error = adapter
+        .send_typed(&formatted)
+        .await
+        .expect_err("legacy adapter must not discard the text dialect");
     assert!(error.unsupported);
 }
 

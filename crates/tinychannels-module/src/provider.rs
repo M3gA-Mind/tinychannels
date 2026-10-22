@@ -433,7 +433,10 @@ impl tinychannels::channel::ChannelInboundSink for ModuleEvents {
         self.publish_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
             .await
             .map(|_| ())
-            .map_err(|_| host_ingress_error())
+            .map_err(|error| {
+                tracing::warn!(%error, "channel host ingress callback failed");
+                host_ingress_error()
+            })
     }
 
     async fn push_event(
@@ -443,7 +446,10 @@ impl tinychannels::channel::ChannelInboundSink for ModuleEvents {
         self.publish_ingress(tinychannels_bus::ChannelIngress::Event(event))
             .await
             .map(|_| ())
-            .map_err(|_| host_ingress_error())
+            .map_err(|error| {
+                tracing::warn!(%error, "channel host ingress callback failed");
+                host_ingress_error()
+            })
     }
 }
 

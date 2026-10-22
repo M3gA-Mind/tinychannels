@@ -97,8 +97,19 @@ pub trait ChannelAdapter: Send + Sync {
             .iter()
             .map(|part| match part {
                 tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Text { text, .. },
+                    part:
+                        tinychannels_bus::ContentPart::Text {
+                            text,
+                            markdown_dialect: None,
+                        },
                 } => Ok(text.as_str()),
+                tinychannels_bus::OutboundContentPart::Content {
+                    part:
+                        tinychannels_bus::ContentPart::Text {
+                            markdown_dialect: Some(_),
+                            ..
+                        },
+                } => Err(unsupported_content_error()),
                 _ => Err(unsupported_content_error()),
             })
             .collect::<Result<Vec<_>, _>>()?
