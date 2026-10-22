@@ -9,6 +9,9 @@
 /// Well-known bus name exported by the TinyChannels module.
 pub const BUS_NAME: &str = "ai.tinyhumans.tinychannels.Channels";
 
+/// Stable module registry identifier for the TinyChannels module.
+pub const MODULE_ID: &str = "tinychannels";
+
 /// Object path served by the TinyChannels module.
 pub const OBJECT_PATH: &str = "/ai/tinyhumans/tinychannels/Channels";
 

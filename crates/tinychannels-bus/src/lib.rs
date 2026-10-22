@@ -1,6 +1,7 @@
 //! Pure serialized vocabulary, schema declarations and errors for TinyChannels.
 //! Provider seams and algorithms live in `tinychannels-runtime`; the root
 //! implementation crate preserves legacy module paths through re-exports.
+pub mod approvals;
 pub mod capabilities;
 #[allow(
     deprecated,
@@ -80,7 +81,9 @@ pub use module_media::{
     MediaReadHandle, MediaReadInfo, MediaUploadBegin, MediaUploadChunk, MediaUploadFinish,
     MediaUploadHandle, MediaUploadResult,
 };
-pub use names::{BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH, methods};
+pub use names::{
+    BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, MODULE_ID, OBJECT_PATH, methods,
+};
 #[allow(
     deprecated,
     reason = "re-export the one-release v21 compatibility DTOs"
@@ -113,3 +116,9 @@ pub use module_interaction::{
 pub use module_supervision::ChannelSupervisionPolicy;
 
 pub use module_runtime::{ChannelRuntimeDispatchPolicy, ChannelRuntimeReservation};
+
+pub use approvals::ReplyContext;
+
+#[cfg(test)]
+#[path = "approvals_tests.rs"]
+mod approvals_tests;

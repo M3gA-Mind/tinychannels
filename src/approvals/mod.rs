@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::context::conversation_history_key_parts;
 use crate::traits::{Channel, ChannelSendExt, SendMessage};
+pub use tinychannels_bus::ReplyContext;
 
 const LOG_PREFIX: &str = "[channel-approval]";
 
@@ -24,13 +25,6 @@ pub fn format_approval_prompt(tool_name: &str, action_summary: &str) -> String {
     format!(
         "🔐 Approval needed\nTool: `{tool_name}`\nAction: {action_summary}\n\nReply `yes` to approve or `no` to deny."
     )
-}
-
-/// Where to deliver a prompt for a conversation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReplyContext {
-    pub reply_target: String,
-    pub thread_ts: Option<String>,
 }
 
 /// A parked tool call to ask about.

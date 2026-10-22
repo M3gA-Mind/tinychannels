@@ -1,6 +1,6 @@
 use super::{
-    BUS_NAME, HOST_BUS_NAME, HOST_METHODS, HOST_OBJECT_PATH, METHODS, OBJECT_PATH, host_methods,
-    methods,
+    BUS_NAME, HOST_BUS_NAME, HOST_METHODS, HOST_OBJECT_PATH, METHODS, MODULE_ID, OBJECT_PATH,
+    host_methods, methods,
 };
 
 /// `METHODS` is what a host iterates to build its interface, so a member
@@ -129,6 +129,11 @@ fn member_names_are_unique_within_each_object() {
 fn the_module_and_host_objects_are_distinct() {
     assert_ne!(BUS_NAME, HOST_BUS_NAME);
     assert_ne!(OBJECT_PATH, HOST_OBJECT_PATH);
+}
+
+#[test]
+fn module_id_is_the_registry_identity_for_the_module() {
+    assert_eq!(MODULE_ID, "tinychannels");
 }
 
 /// Bus names are dotted and object paths are their slashed form. A host
