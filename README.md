@@ -20,6 +20,14 @@ the OpenHuman application crate.
 > the current crate and implementation; it does not define the v2 wire
 > contract.
 
+The v2 bus types, unified configured-account capabilities, adapter traits,
+relay transport, and progressive delivery primitives are available. The
+built-in provider migration is still in progress: most direct providers remain
+on the legacy `Channel` trait, so v2 support must be checked per provider and
+must not be inferred from these shared types. See the
+[contract specification](docs/spec/contract-v2.md) for its implementation
+inventory and compatibility rules.
+
 Configured provider discovery, legacy intent normalization, and external-webhook
 outbound startup are confidential module operations. The catalog returns provider
 facts without listening; outbound-only startup preserves Linq and WhatsApp Cloud
