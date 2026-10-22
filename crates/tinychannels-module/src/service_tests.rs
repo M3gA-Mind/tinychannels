@@ -262,7 +262,7 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
 }
 
 #[tokio::test]
-async fn prepared_legacy_payload_uses_the_legacy_provider_send_path() {
+async fn prepared_legacy_payloads_use_the_legacy_provider_send_path() {
     let bus = tinybus::transport::memory::MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
     let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
@@ -306,12 +306,27 @@ async fn prepared_legacy_payload_uses_the_legacy_provider_send_path() {
         .send_channel_intent("fixture".to_owned(), intent)
         .await
         .unwrap();
+    let typed_intent = tinychannels::outbound_intent_from_send_message(
+        "fixture",
+        &SendMessage::new("typed hello", "room-8")
+            .in_thread(Some("thread-10".into()))
+            .with_idempotency_key("typed-legacy-key"),
+    );
+    channels
+        .send_channel_intent("fixture".to_owned(), typed_intent)
+        .await
+        .unwrap();
 
     let sent = received.recv().await.unwrap();
     assert_eq!(sent.content, "hello");
     assert_eq!(sent.recipient, "room-7");
     assert_eq!(sent.thread_ts.as_deref(), Some("thread-9"));
     assert_eq!(sent.idempotency_key.as_deref(), Some("legacy-key"));
+    let sent = received.recv().await.unwrap();
+    assert_eq!(sent.content, "typed hello");
+    assert_eq!(sent.recipient, "room-8");
+    assert_eq!(sent.thread_ts.as_deref(), Some("thread-10"));
+    assert_eq!(sent.idempotency_key.as_deref(), Some("typed-legacy-key"));
     channels.shutdown().await.unwrap();
     host.shutdown().await.unwrap();
 }
