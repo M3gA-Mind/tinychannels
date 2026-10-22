@@ -1,6 +1,7 @@
 use super::*;
 use crate::providers::telegram::fixtures::*;
 use crate::providers::telegram::text::TELEGRAM_MAX_MESSAGE_LENGTH;
+use crate::traits::{Channel, SendMessage};
 use std::sync::Arc;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
@@ -241,7 +242,49 @@ async fn send_text_chunks_retries_without_markdown_when_markdown_rejected() {
 }
 
 #[tokio::test]
-async fn send_text_chunks_fails_when_markdown_fallback_is_rejected() {
+async fn channel_send_short_message_retries_plain_preserving_thread_and_reply() {
+    let server = mock_api().await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .and(body_partial_json(
+            serde_json::json!({ "parse_mode": "Markdown" }),
+        ))
+        .respond_with(ResponseTemplate::new(400).set_body_string("can't parse entities"))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &["*"]);
+
+    ch.send(&SendMessage::new("**markdown fallback**", "100:3").in_thread(Some("5".into())))
+        .await
+        .unwrap();
+
+    let bodies = json_bodies(&server, "sendMessage").await;
+    assert_eq!(
+        bodies,
+        vec![
+            serde_json::json!({
+                "chat_id": "100",
+                "text": "**markdown fallback**",
+                "parse_mode": "Markdown",
+                "message_thread_id": "3",
+                "reply_to_message_id": 5,
+            }),
+            serde_json::json!({
+                "chat_id": "100",
+                "text": "**markdown fallback**",
+                "message_thread_id": "3",
+                "reply_to_message_id": 5,
+            }),
+        ],
+        "short messages retry once without Markdown while preserving reply routing"
+    );
+    assert!(bodies[1].get("parse_mode").is_none());
+}
+
+#[tokio::test]
+async fn send_text_chunks_fails_when_markdown_and_plain_both_rejected() {
     let server = mock_api().await;
     Mock::given(method("POST"))
         .and(path(api_path("sendMessage")))
@@ -465,6 +508,14 @@ async fn send_by_url_includes_caption_and_surfaces_rejections() {
         .unwrap();
     ch.send_voice_by_url("1", None, url, None).await.unwrap();
 
+    for (_, api_method, _) in ALL_KINDS {
+        assert_eq!(
+            json_bodies(&server, api_method).await.len(),
+            1,
+            "{api_method}"
+        );
+    }
+
     assert_eq!(
         json_bodies(&server, "sendDocument").await[0],
         serde_json::json!({
@@ -503,6 +554,51 @@ async fn send_by_url_includes_caption_and_surfaces_rejections() {
         assert!(err.contains(label), "{err}");
         assert!(err.contains("wrong file identifier"), "{err}");
     }
+}
+
+#[tokio::test]
+async fn byte_uploads_preserve_configured_filenames_and_optional_thread() {
+    let server = mock_api().await;
+    mount_post(&server, "sendDocument", ok()).await;
+    mount_post(&server, "sendPhoto", ok()).await;
+    let ch = channel_for(&server, &["*"]);
+
+    ch.send_document_bytes(
+        "100",
+        Some("3"),
+        b"document-payload".to_vec(),
+        "document.txt",
+        Some("document caption"),
+    )
+    .await
+    .unwrap();
+    ch.send_photo_bytes(
+        "100",
+        None,
+        b"photo-payload".to_vec(),
+        "photo.png",
+        Some("photo caption"),
+    )
+    .await
+    .unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+
+    let documents = raw_bodies(&server, "sendDocument").await;
+    assert_eq!(documents.len(), 1);
+    assert!(documents[0].contains("filename=\"document.txt\""));
+    assert!(documents[0].contains("document-payload"));
+    assert!(documents[0].contains("document caption"));
+    assert!(documents[0].contains("name=\"message_thread_id\""));
+    assert!(documents[0].contains("\r\n3\r\n"));
+
+    let photos = raw_bodies(&server, "sendPhoto").await;
+    assert_eq!(photos.len(), 1);
+    assert!(photos[0].contains("filename=\"photo.png\""));
+    assert!(photos[0].contains("photo-payload"));
+    assert!(photos[0].contains("photo caption"));
+    assert!(!photos[0].contains("name=\"message_thread_id\""));
 }
 
 #[test]
