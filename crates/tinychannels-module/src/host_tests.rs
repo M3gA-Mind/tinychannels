@@ -900,7 +900,11 @@ async fn legacy_module_inbound_ingress_preserves_host_rejection() {
         .await
         .expect_err("legacy inbound ingress must report host rejection");
 
-    assert!(error.to_string().contains("channel host rejected ingress payload"));
+    assert!(
+        error
+            .to_string()
+            .contains("channel host rejected ingress payload")
+    );
     host.shutdown().await.unwrap();
 }
 
