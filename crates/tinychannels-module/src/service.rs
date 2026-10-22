@@ -97,6 +97,33 @@ fn legacy_text_message(intent: &ChannelOutboundIntent) -> Option<SendMessage> {
     let tinychannels_bus::OutboundPayload::NativeChannelData { data } = &intent.payload else {
         return None;
     };
+    let allowed_fields = [
+        "content",
+        "text",
+        "recipient",
+        "conversationId",
+        "conversation_id",
+        "subject",
+        "thread_ts",
+        "threadId",
+        "thread_id",
+        "topicId",
+        "topic_id",
+        "replyToId",
+        "reply_to_id",
+        "idempotencyKey",
+        "idempotency_key",
+        "turnId",
+        "turn_id",
+        "originatingTurnId",
+    ];
+    if data
+        .as_object()?
+        .keys()
+        .any(|field| !allowed_fields.contains(&field.as_str()))
+    {
+        return None;
+    }
     let content = data
         .get("content")
         .or_else(|| data.get("text"))
@@ -123,7 +150,10 @@ fn legacy_text_message(intent: &ChannelOutboundIntent) -> Option<SendMessage> {
             .as_ref()
             .and_then(|conversation| conversation.topic_id.clone())
             .or_else(|| first_string(&["topicId", "topic_id"])),
-        reply_to_id: intent.reply_to_id.clone(),
+        reply_to_id: intent
+            .reply_to_id
+            .clone()
+            .or_else(|| first_string(&["replyToId", "reply_to_id"])),
         idempotency_key: (!intent.idempotency_key.is_empty())
             .then(|| intent.idempotency_key.clone()),
     })
