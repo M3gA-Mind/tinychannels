@@ -248,6 +248,11 @@ pub enum ProgressiveCommand {
 pub enum ProgressiveResult {
     Opened { handle: String },
     Updated,
+    /// Canonical output events were observed; typed terminal delivery results
+    /// are returned in event order and retain receipts and partial failures.
+    OutputUpdated {
+        deliveries: Vec<ProgressiveTransportResult>,
+    },
     Closed,
 }
 
@@ -334,7 +339,7 @@ pub enum ProgressiveTransportRequest {
 }
 
 /// Typed transport facts preserve the module's existing recovery rules.
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum ProgressiveTransportResult {
     /// Observation callback accepted the event; this does not acknowledge a
