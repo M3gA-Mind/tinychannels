@@ -246,7 +246,9 @@ pub enum ProgressiveCommand {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum ProgressiveResult {
-    Opened { handle: String },
+    Opened {
+        handle: String,
+    },
     Updated,
     /// Canonical output events were observed; typed terminal delivery results
     /// are returned in event order and retain receipts and partial failures.

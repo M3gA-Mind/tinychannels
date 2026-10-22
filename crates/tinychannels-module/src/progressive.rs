@@ -56,8 +56,7 @@ impl Sender {
             .map_err(|_| Error::failed("progressive output callback failed"))?;
         match result {
             ChannelBackendResult::ProgressiveTransport(
-                ProgressiveTransportResult::Acknowledged
-                | ProgressiveTransportResult::Accepted,
+                ProgressiveTransportResult::Acknowledged | ProgressiveTransportResult::Accepted,
             ) => Ok(()),
             _ => Err(Error::failed("progressive output callback failed")),
         }
@@ -496,7 +495,11 @@ async fn run(
     capabilities: tinychannels_bus::ChannelCapabilities,
     mut inbox: mpsc::Receiver<Command>,
 ) {
-    let mut reply = ProgressiveReply::new(Arc::new(Sender(host.clone())), channel.clone(), capabilities);
+    let mut reply = ProgressiveReply::new(
+        Arc::new(Sender(host.clone())),
+        channel.clone(),
+        capabilities,
+    );
     let sender = Sender(host);
     let mut edits = tokio::time::interval(EDIT_FLUSH_INTERVAL);
     let mut typing = tokio::time::interval(TYPING_REFRESH_INTERVAL);
@@ -561,7 +564,11 @@ async fn apply_output(
             .checked_add(offset as u64)
             .ok_or_else(|| Error::failed("progressive sequence overflow"))?;
         let event = match event {
-            ChannelOutputEvent::FinalMessage { text, parts, .. } => {
+            ChannelOutputEvent::FinalMessage {
+                text,
+                parts,
+                receipt: original_receipt,
+            } => {
                 let delivery = sender
                     .send_typed(
                         channel,
@@ -575,10 +582,8 @@ async fn apply_output(
                     )
                     .await?;
                 let receipt = match &delivery {
-                    ProgressiveTransportResult::Outcome(outcome) => {
-                        Some(outcome.receipt.clone())
-                    }
-                    _ => None,
+                    ProgressiveTransportResult::Outcome(outcome) => Some(outcome.receipt.clone()),
+                    _ => original_receipt,
                 };
                 deliveries.push(delivery);
                 ChannelOutputEvent::FinalMessage {
@@ -602,9 +607,7 @@ async fn apply_output(
         match event {
             ChannelOutputEvent::TextDelta { text, .. } => reply.on_text_delta(&text),
             ChannelOutputEvent::ThinkingDelta { text, .. } => reply.on_thinking_delta(&text),
-            ChannelOutputEvent::ToolCallStarted { tool_name, .. } => {
-                reply.on_tool_call(&tool_name)
-            }
+            ChannelOutputEvent::ToolCallStarted { tool_name, .. } => reply.on_tool_call(&tool_name),
             ChannelOutputEvent::ToolCallCompleted {
                 tool_name, success, ..
             } => reply.on_tool_result(&tool_name, success),
