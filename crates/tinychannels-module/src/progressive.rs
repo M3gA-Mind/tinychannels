@@ -806,8 +806,7 @@ fn replay_output(
     let previous = previous?;
     let previous_end = previous
         .sequence
-        .checked_add(previous.events.len().saturating_sub(1) as u64)
-        .unwrap_or(u64::MAX);
+        .saturating_add(previous.events.len().saturating_sub(1) as u64);
     if sequence == previous.sequence {
         return Some(if previous.scope == *scope && previous.events == events {
             Ok(previous.result.clone())

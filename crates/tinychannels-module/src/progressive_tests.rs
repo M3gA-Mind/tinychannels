@@ -24,12 +24,12 @@ impl Callback {
             return Err(Error::failed("unexpected callback"));
         };
         self.requests.lock().await.push((*request).clone());
-        if let ProgressiveTransportRequest::OutputEvent { sequence, .. } = &*request {
-            if self.failed_output_sequences.lock().await.contains(sequence) {
-                return Ok(ChannelBackendResult::ProgressiveTransport(
-                    ProgressiveTransportResult::Failed,
-                ));
-            }
+        if let ProgressiveTransportRequest::OutputEvent { sequence, .. } = &*request
+            && self.failed_output_sequences.lock().await.contains(sequence)
+        {
+            return Ok(ChannelBackendResult::ProgressiveTransport(
+                ProgressiveTransportResult::Failed,
+            ));
         }
         if let ProgressiveTransportRequest::Send { message, .. } = &*request {
             self.sends.lock().await.push(message.clone());
