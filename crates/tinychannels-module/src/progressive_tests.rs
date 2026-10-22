@@ -394,6 +394,7 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
             parts: vec![tinychannels_bus::channel::OutboundContentPart::Content {
                 part: tinychannels_bus::channel::ContentPart::Text {
                     text: "complete".into(),
+                    markdown_dialect: None,
                 },
             }],
             receipt: None,
