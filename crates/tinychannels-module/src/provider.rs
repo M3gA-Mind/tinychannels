@@ -420,6 +420,42 @@ impl tinychannels::host::EventSink for ModuleEvents {
     }
 }
 
+/// Bridge the runtime's unified provider ingress into the existing ordered
+/// TinyBus host callback path. Envelope-only adapters continue to work through
+/// `push`; adapters that emit lifecycle or message events opt into
+/// `push_event` and preserve ordering with inbound messages.
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelInboundSink for ModuleEvents {
+    async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        self.publish_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+            .map(|_| ())
+            .map_err(|_| host_ingress_error())
+    }
+
+    async fn push_event(
+        &self,
+        event: tinychannels_bus::ChannelEvent,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        self.publish_ingress(tinychannels_bus::ChannelIngress::Event(event))
+            .await
+            .map(|_| ())
+            .map_err(|_| host_ingress_error())
+    }
+}
+
+fn host_ingress_error() -> tinychannels::channel::ChannelSendError {
+    tinychannels::channel::ChannelSendError {
+        kind: tinychannels::channel::SendErrorKind::Transient,
+        message: "channel host ingress callback failed".into(),
+        retryable: true,
+        ..Default::default()
+    }
+}
+
 /// Reconnect execution stays in the module; raw provider errors never cross callbacks.
 async fn listen_with_supervision(
     channel: Arc<dyn Channel>,
