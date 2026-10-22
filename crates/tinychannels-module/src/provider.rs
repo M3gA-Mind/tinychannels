@@ -335,6 +335,30 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
 
 pub(crate) struct ModuleEvents(pub(crate) HostChannels, pub(crate) String);
 
+fn scope_channel_event(
+    account_id: &str,
+    mut event: tinychannels_bus::ChannelEvent,
+) -> tinychannels_bus::ChannelEvent {
+    // The module start call is the authenticated source of instance scope;
+    // provider payloads cannot choose or spoof their account identity.
+    event.channel.id = tinychannels_bus::provider_id(account_id).to_owned();
+    event.channel.account_id = Some(account_id.to_owned());
+    let kind = match &event.event {
+        tinychannels_bus::ChannelEventKind::Typing { .. } => "typing",
+        tinychannels_bus::ChannelEventKind::ReadReceipt { .. } => "read_receipt",
+        tinychannels_bus::ChannelEventKind::DeliveredReceipt { .. } => "delivered_receipt",
+        tinychannels_bus::ChannelEventKind::ReactionAdded { .. } => "reaction_added",
+        tinychannels_bus::ChannelEventKind::ReactionRemoved { .. } => "reaction_removed",
+        tinychannels_bus::ChannelEventKind::OutboundReaction { .. } => "outbound_reaction",
+        tinychannels_bus::ChannelEventKind::MessageUpdated { .. } => "message_updated",
+        tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "message_deleted",
+        tinychannels_bus::ChannelEventKind::Presence { .. } => "presence",
+        tinychannels_bus::ChannelEventKind::Lifecycle { .. } => "lifecycle",
+    };
+    event.event_id = format!("{account_id}:{}:{kind}", event.event_id);
+    event
+}
+
 #[async_trait::async_trait]
 impl tinychannels::host::EventSink for ModuleEvents {
     async fn publish(
@@ -355,29 +379,13 @@ impl tinychannels::host::EventSink for ModuleEvents {
 
     async fn publish_channel_event(
         &self,
-        mut event: tinychannels_bus::ChannelEvent,
+        event: tinychannels_bus::ChannelEvent,
     ) -> anyhow::Result<()> {
-        // The module start call is the authenticated source of instance scope;
-        // provider payloads cannot choose or spoof their account identity.
-        event.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
-        event.channel.account_id = Some(self.1.clone());
-        let kind = match &event.event {
-            tinychannels_bus::ChannelEventKind::Typing { .. } => "typing",
-            tinychannels_bus::ChannelEventKind::ReadReceipt { .. } => "read_receipt",
-            tinychannels_bus::ChannelEventKind::DeliveredReceipt { .. } => "delivered_receipt",
-            tinychannels_bus::ChannelEventKind::ReactionAdded { .. } => "reaction_added",
-            tinychannels_bus::ChannelEventKind::ReactionRemoved { .. } => "reaction_removed",
-            tinychannels_bus::ChannelEventKind::OutboundReaction { .. } => "outbound_reaction",
-            tinychannels_bus::ChannelEventKind::MessageUpdated { .. } => "message_updated",
-            tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "message_deleted",
-            tinychannels_bus::ChannelEventKind::Presence { .. } => "presence",
-            tinychannels_bus::ChannelEventKind::Lifecycle { .. } => "lifecycle",
-        };
-        event.event_id = format!("{}:{}:{kind}", self.1, event.event_id);
-        self.0
-            .deliver_event(event)
-            .await
-            .map_err(|error| anyhow::anyhow!(error.to_string()))
+        let event = scope_channel_event(&self.1, event);
+        self.0.deliver_event(event).await.map_err(|error| {
+            tracing::warn!(%error, "channel host ingress callback failed");
+            anyhow::anyhow!(error.to_string())
+        })
     }
 
     async fn publish_ingress(
@@ -388,11 +396,16 @@ impl tinychannels::host::EventSink for ModuleEvents {
             tinychannels_bus::ChannelIngress::Inbound(mut envelope) => {
                 envelope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
                 envelope.channel.account_id = Some(self.1.clone());
-                self.0.deliver_inbound(&self.1, envelope).await;
+                self.0
+                    .try_deliver_inbound(&self.1, envelope)
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error.message))?;
                 Ok(true)
             }
             tinychannels_bus::ChannelIngress::Event(event) => {
-                self.publish_channel_event(event).await?;
+                self.publish_channel_event(event)
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
                 Ok(true)
             }
         }
@@ -417,6 +430,39 @@ impl tinychannels::host::EventSink for ModuleEvents {
         }
         self.publish_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
             .await
+    }
+}
+
+/// Bridge the runtime's unified provider ingress into the existing ordered
+/// TinyBus host callback path. Envelope-only adapters continue to work through
+/// `push`; adapters that emit lifecycle or message events opt into
+/// `push_event` and preserve ordering with inbound messages.
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelInboundSink for ModuleEvents {
+    async fn push(
+        &self,
+        mut envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        envelope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        envelope.channel.account_id = Some(self.1.clone());
+        self.0
+            .try_deliver_inbound(&self.1, envelope)
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(message = %error.message, "channel host ingress callback failed");
+            })
+    }
+
+    async fn push_event(
+        &self,
+        event: tinychannels_bus::ChannelEvent,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        self.0
+            .try_deliver_event(scope_channel_event(&self.1, event))
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(message = %error.message, "channel host ingress callback failed");
+            })
     }
 }
 

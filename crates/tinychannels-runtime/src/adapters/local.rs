@@ -2,7 +2,7 @@
 
 use crate::channel::{
     ChannelAdapter, ChannelDescriptor, ChannelInboundSink, ChannelOutboundIntent, ChannelSendError,
-    ChannelStaticCapabilities, MessageReceipt,
+    ChannelStaticCapabilities, MessageReceipt, OutboundPayload,
 };
 use crate::controllers::{ChannelAccountSnapshot, ChannelAccountState};
 use async_trait::async_trait;
@@ -50,6 +50,10 @@ impl ChannelAdapter for LocalChannelAdapter {
         self.descriptor.clone()
     }
 
+    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.capabilities.clone()
+    }
+
     async fn start(
         &self,
         _sink: &(dyn ChannelInboundSink + Send + Sync),
@@ -66,6 +70,33 @@ impl ChannelAdapter for LocalChannelAdapter {
         intent: ChannelOutboundIntent,
     ) -> Result<MessageReceipt, ChannelSendError> {
         self.outbound.send(intent).await
+    }
+
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, ChannelSendError> {
+        let receipt = self
+            .outbound
+            .send(ChannelOutboundIntent {
+                idempotency_key: message.idempotency_key.clone(),
+                channel_id: message.channel_id.clone(),
+                conversation_id: message.conversation_id.clone(),
+                channel_ref: message.channel_ref.clone(),
+                conversation_ref: message.conversation_ref.clone(),
+                reply_to_id: message.reply_to_id.clone(),
+                thread_id: message.thread_id.clone(),
+                turn_id: message.turn_id.clone(),
+                payload: OutboundPayload::Parts {
+                    parts: message.parts.clone(),
+                },
+                ..Default::default()
+            })
+            .await?;
+        Ok(tinychannels_bus::channel::ChannelSendOutcome {
+            receipt,
+            error: None,
+        })
     }
 
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError> {

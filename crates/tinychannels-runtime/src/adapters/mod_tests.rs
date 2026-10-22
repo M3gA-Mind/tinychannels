@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 struct RecordingOutboundSink {
     ids: Mutex<Vec<String>>,
+    intents: Mutex<Vec<ChannelOutboundIntent>>,
 }
 
 #[async_trait]
@@ -20,7 +21,8 @@ impl LocalOutboundSink for RecordingOutboundSink {
         self.ids
             .lock()
             .expect("ids lock")
-            .push(intent.idempotency_key);
+            .push(intent.idempotency_key.clone());
+        self.intents.lock().expect("intents lock").push(intent);
         Ok(MessageReceipt {
             primary_platform_message_id: Some("local-1".into()),
             platform_message_ids: vec!["local-1".into()],
@@ -90,6 +92,93 @@ async fn local_adapter_delegates_outbound_delivery() {
 }
 
 #[tokio::test]
+async fn local_adapter_forwards_ordered_typed_content_without_loss() {
+    let sink = Arc::new(RecordingOutboundSink::default());
+    let capabilities = tinychannels_bus::ChannelCapabilities {
+        content: tinychannels_bus::ContentCapabilities {
+            image: tinychannels_bus::ContentCapability {
+                outbound: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        voice_out: tinychannels_bus::VoiceCapabilities {
+            supported: true,
+            synthesis: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let adapter = LocalChannelAdapter::new(
+        ChannelDescriptor {
+            id: "local".into(),
+            account_id: Some("host".into()),
+            ..Default::default()
+        },
+        capabilities.clone(),
+        sink.clone(),
+    );
+    let message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "local".into(),
+        conversation_id: "chat-1".into(),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "local".into(),
+            account_id: Some("host".into()),
+        }),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            id: "chat-1".into(),
+            thread_id: Some("thread-2".into()),
+            ..Default::default()
+        }),
+        reply_to_id: Some("message-1".into()),
+        thread_id: Some("thread-2".into()),
+        turn_id: Some("turn-3".into()),
+        idempotency_key: "send-4".into(),
+        parts: vec![
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Image {
+                    media: tinychannels_bus::MediaReference {
+                        url: Some("https://example.test/image.png".into()),
+                        kind: tinychannels_bus::MediaKind::Image,
+                        ..Default::default()
+                    },
+                    caption: Some("caption".into()),
+                    alt_text: Some("alt".into()),
+                },
+            },
+            tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Synthesize {
+                    text: "spoken".into(),
+                    voice: Some("calm".into()),
+                },
+            },
+        ],
+    };
+
+    let outcome = adapter
+        .send_typed(&message)
+        .await
+        .expect("local host accepts typed content");
+
+    assert_eq!(adapter.declared_capabilities(), capabilities);
+    assert!(outcome.error.is_none());
+    let delivered = sink.intents.lock().unwrap();
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].idempotency_key, "send-4");
+    assert_eq!(delivered[0].channel_ref, message.channel_ref);
+    assert_eq!(delivered[0].conversation_ref, message.conversation_ref);
+    assert_eq!(delivered[0].reply_to_id.as_deref(), Some("message-1"));
+    assert_eq!(delivered[0].thread_id.as_deref(), Some("thread-2"));
+    assert_eq!(delivered[0].turn_id.as_deref(), Some("turn-3"));
+    assert_eq!(
+        delivered[0].payload,
+        OutboundPayload::Parts {
+            parts: message.parts
+        }
+    );
+}
+
+#[tokio::test]
 async fn local_adapter_reports_configured_status() {
     let adapter = local_adapter(Arc::new(RecordingOutboundSink::default()));
     adapter.start(&NoopInboundSink).await.expect("start");
@@ -104,6 +193,10 @@ async fn local_adapter_reports_configured_status() {
             .any(|state| { *state == crate::controllers::ChannelAccountState::Configured })
     );
     assert!(adapter.static_capabilities().reply);
+    assert_eq!(
+        adapter.declared_capabilities().actions.supported,
+        vec!["reply"]
+    );
 }
 
 #[tokio::test]

@@ -14,12 +14,47 @@ pub use tinychannels_bus::channel::adapter::*;
 #[async_trait]
 pub trait ChannelInboundSink: Send + Sync {
     async fn push(&self, envelope: ChannelInboundEnvelope) -> Result<(), ChannelSendError>;
+
+    /// Deliver one normalized event. Existing sinks remain source-compatible;
+    /// sinks that do not consume provider events return an explicit unsupported
+    /// result until they opt into this additive surface.
+    async fn push_event(
+        &self,
+        _event: tinychannels_bus::ChannelEvent,
+    ) -> Result<(), ChannelSendError> {
+        Err(ChannelSendError::unsupported(
+            "inbound events are not supported by this sink",
+        ))
+    }
+
+    /// Unified message/event ingress for providers. The default preserves all
+    /// existing envelope-only sinks while allowing new sinks to handle events.
+    async fn push_ingress(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), ChannelSendError> {
+        match ingress {
+            tinychannels_bus::ChannelIngress::Inbound(envelope) => self.push(envelope).await,
+            tinychannels_bus::ChannelIngress::Event(event) => self.push_event(event).await,
+        }
+    }
 }
 
 /// Base channel adapter contract.
 #[async_trait]
 pub trait ChannelAdapter: Send + Sync {
     fn descriptor(&self) -> ChannelDescriptor;
+
+    /// Capabilities declared by this configured provider instance. The
+    /// default is conservative, so older adapters do not accidentally claim
+    /// operations they have not implemented.
+    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+        capabilities.content.parts.push("text".into());
+        capabilities.content.text.outbound = true;
+        capabilities.actions.supported.push("send".into());
+        capabilities
+    }
 
     fn receive_ack_policy(&self) -> ChannelReceiveAckPolicy {
         ChannelReceiveAckPolicy::AfterReceiveRecord
@@ -35,7 +70,70 @@ pub trait ChannelAdapter: Send + Sync {
     async fn send(&self, intent: ChannelOutboundIntent)
     -> Result<MessageReceipt, ChannelSendError>;
 
+    /// Send while preserving partial-delivery information. The default wraps
+    /// the legacy receipt-only result; adapters that can report an
+    /// undelivered tail may override it without changing existing callers.
+    async fn send_outcome(
+        &self,
+        intent: ChannelOutboundIntent,
+    ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, ChannelSendError> {
+        self.send(intent)
+            .await
+            .map(|receipt| tinychannels_bus::channel::ChannelSendOutcome {
+                receipt,
+                error: None,
+            })
+    }
+
+    /// Send a canonical typed message. Older adapters retain a safe text-only
+    /// projection by default; provider implementations override this method
+    /// when they support rich content or voice.
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, ChannelSendError> {
+        let text = message
+            .parts
+            .iter()
+            .map(|part| match part {
+                tinychannels_bus::OutboundContentPart::Content {
+                    part:
+                        tinychannels_bus::ContentPart::Text {
+                            text,
+                            markdown_dialect: None,
+                        },
+                } => Ok(text.as_str()),
+                tinychannels_bus::OutboundContentPart::Content {
+                    part:
+                        tinychannels_bus::ContentPart::Text {
+                            markdown_dialect: Some(_),
+                            ..
+                        },
+                } => Err(unsupported_content_error()),
+                _ => Err(unsupported_content_error()),
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .join("\n");
+        let intent = ChannelOutboundIntent {
+            idempotency_key: message.idempotency_key.clone(),
+            channel_id: message.channel_id.clone(),
+            conversation_id: message.conversation_id.clone(),
+            channel_ref: message.channel_ref.clone(),
+            conversation_ref: message.conversation_ref.clone(),
+            reply_to_id: message.reply_to_id.clone(),
+            thread_id: message.thread_id.clone(),
+            turn_id: message.turn_id.clone(),
+            payload: tinychannels_bus::OutboundPayload::Text { text },
+            ..Default::default()
+        };
+        self.send_outcome(intent).await
+    }
+
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError>;
+}
+
+fn unsupported_content_error() -> ChannelSendError {
+    ChannelSendError::unsupported("adapter does not support this typed content")
 }
 
 /// Optional setup/config extension.
@@ -100,3 +198,7 @@ pub trait ChannelStreamingDraft: Send + Sync {
         intent: ChannelOutboundIntent,
     ) -> Result<MessageReceipt, ChannelSendError>;
 }
+
+#[cfg(test)]
+#[path = "adapter_tests.rs"]
+mod tests;

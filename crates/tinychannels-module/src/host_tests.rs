@@ -557,6 +557,171 @@ async fn typed_channel_event_crosses_memory_bus_with_full_source_and_address() {
 }
 
 #[tokio::test]
+async fn module_adapter_ingress_preserves_message_and_event_order() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, callback, _server) = connected_host().await;
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    let event = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "connected".into(),
+        source_event_id: None,
+        source_timestamp: None,
+        channel: Default::default(),
+        conversation: None,
+        event: tinychannels_bus::ChannelEventKind::Lifecycle {
+            state: "connected".into(),
+            reason: None,
+        },
+    };
+
+    sink.push_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_envelope(
+        "hello",
+    )))
+    .await
+    .unwrap();
+    sink.push_ingress(tinychannels_bus::ChannelIngress::Event(event))
+        .await
+        .unwrap();
+    host.flush().await.unwrap();
+
+    assert_eq!(
+        callback.events.lock().await.as_slice(),
+        [
+            "inbound:telegram:bot-7:hello",
+            "typed_event:telegram:bot-7:connected:lifecycle"
+        ]
+    );
+    let delivered = callback.typed_events.lock().await;
+    assert_eq!(delivered[0].channel.id, "telegram");
+    assert_eq!(
+        delivered[0].channel.account_id.as_deref(),
+        Some("telegram:bot-7")
+    );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_adapter_ingress_returns_retryable_error_when_host_rejects_event() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, callback, _server) = connected_host().await;
+    callback.event_failures.store(1, Ordering::SeqCst);
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    let error = sink
+        .push_event(tinychannels_bus::ChannelEvent {
+            version: 2,
+            event_id: "event-1".into(),
+            source_event_id: None,
+            source_timestamp: None,
+            channel: Default::default(),
+            conversation: None,
+            event: tinychannels_bus::ChannelEventKind::Lifecycle {
+                state: "connected".into(),
+                reason: None,
+            },
+        })
+        .await
+        .expect_err("host callback failure must return to the adapter");
+
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Transient);
+    assert!(error.retryable);
+    assert!(!error.is_unsupported());
+    assert_eq!(error.message, "channel host ingress callback failed");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_adapter_ingress_returns_non_retryable_error_when_event_is_oversized() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, _callback, _server) = connected_host().await;
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    let error = sink
+        .push_event(tinychannels_bus::ChannelEvent {
+            version: 2,
+            event_id: "too-large".into(),
+            source_event_id: None,
+            source_timestamp: None,
+            channel: Default::default(),
+            conversation: None,
+            event: tinychannels_bus::ChannelEventKind::Lifecycle {
+                state: "connected".into(),
+                reason: Some("x".repeat(140 * 1024)),
+            },
+        })
+        .await
+        .expect_err("oversized event must be rejected without requesting retry");
+
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::BadFormat);
+    assert!(!error.retryable);
+    assert_eq!(error.message, "channel host rejected ingress payload");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_adapter_ingress_returns_non_retryable_error_when_event_host_is_closed() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, _callback, _server) = connected_host().await;
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    host.shutdown().await.unwrap();
+    let error = sink
+        .push_event(tinychannels_bus::ChannelEvent {
+            version: 2,
+            event_id: "after-shutdown".into(),
+            source_event_id: None,
+            source_timestamp: None,
+            channel: Default::default(),
+            conversation: None,
+            event: tinychannels_bus::ChannelEventKind::Lifecycle {
+                state: "connected".into(),
+                reason: None,
+            },
+        })
+        .await
+        .expect_err("closed event consumer must be reported as non-retryable");
+
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Unknown);
+    assert!(!error.retryable);
+}
+
+#[tokio::test]
+async fn module_adapter_ingress_returns_retryable_error_when_inbound_is_oversized() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, _callback, _server) = connected_host().await;
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    let error = sink
+        .push(inbound_envelope(&"x".repeat(140 * 1024)))
+        .await
+        .expect_err("oversized inbound callback must be rejected to the adapter");
+
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::BadFormat);
+    assert!(!error.retryable);
+    assert_eq!(error.message, "channel host rejected ingress payload");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_adapter_ingress_returns_retryable_error_when_host_is_closed() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, _callback, _server) = connected_host().await;
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    host.shutdown().await.unwrap();
+
+    let error = sink
+        .push(inbound_envelope("retry me"))
+        .await
+        .expect_err("closed host callback consumer must be reported to the adapter");
+
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Unknown);
+    assert!(!error.retryable);
+    assert_eq!(error.message, "channel host ingress consumer is closed");
+}
+
+#[tokio::test]
 async fn typed_event_callback_failure_is_returned_without_poisoning_shutdown() {
     let (host, callback, _server) = connected_host().await;
     callback.event_failures.store(1, Ordering::SeqCst);
@@ -691,6 +856,54 @@ async fn module_event_enrichment_separates_accounts_and_overwrites_provider_auth
     assert_eq!(
         events[1].event_id,
         "telegram:account-b:telegram:update:44:reaction:added:typing"
+    );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn legacy_module_event_ingress_preserves_host_callback_failure() {
+    use tinychannels::host::EventSink;
+
+    let (host, callback, _server) = connected_host().await;
+    callback.event_failures.store(1, Ordering::SeqCst);
+    let error = crate::provider::ModuleEvents(host.clone(), "telegram:account-a".into())
+        .publish_ingress(tinychannels_bus::ChannelIngress::Event(
+            tinychannels_bus::ChannelEvent {
+                version: 2,
+                event_id: "callback-failure".into(),
+                source_event_id: None,
+                source_timestamp: None,
+                channel: Default::default(),
+                conversation: None,
+                event: tinychannels_bus::ChannelEventKind::Lifecycle {
+                    state: "connected".into(),
+                    reason: None,
+                },
+            },
+        ))
+        .await
+        .expect_err("legacy event ingress must report the host callback failure");
+
+    assert!(error.to_string().contains("fixture event failure"));
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn legacy_module_inbound_ingress_preserves_host_rejection() {
+    use tinychannels::host::EventSink;
+
+    let (host, _callback, _server) = connected_host().await;
+    let error = crate::provider::ModuleEvents(host.clone(), "telegram:account-a".into())
+        .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_envelope(
+            &"x".repeat(140 * 1024),
+        )))
+        .await
+        .expect_err("legacy inbound ingress must report host rejection");
+
+    assert!(
+        error
+            .to_string()
+            .contains("channel host rejected ingress payload")
     );
     host.shutdown().await.unwrap();
 }
