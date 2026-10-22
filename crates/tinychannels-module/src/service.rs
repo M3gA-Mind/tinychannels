@@ -87,6 +87,48 @@ fn is_webhook_backed(name: &str, config: &ChannelsConfig) -> bool {
                 .is_some_and(|wa| wa.backend_type() == "cloud"))
 }
 
+/// Preserve the v21 text-send path for prepared legacy JSON messages.
+///
+/// `NativeChannelData` is the compatibility representation used by both the
+/// legacy JSON and `SendMessage` preparation members. Providers that have not
+/// migrated to typed sends still receive their original text through `send`;
+/// opaque native payloads without a text field continue through typed dispatch.
+fn legacy_text_message(intent: &ChannelOutboundIntent) -> Option<SendMessage> {
+    let tinychannels_bus::OutboundPayload::NativeChannelData { data } = &intent.payload else {
+        return None;
+    };
+    let content = data
+        .get("content")
+        .or_else(|| data.get("text"))
+        .and_then(serde_json::Value::as_str)?;
+    let first_string = |keys: &[&str]| {
+        keys.iter()
+            .filter_map(|key| data.get(*key))
+            .find_map(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    Some(SendMessage {
+        content: content.to_owned(),
+        recipient: first_string(&["recipient", "conversationId", "conversation_id"])
+            .unwrap_or_else(|| intent.conversation_id.clone()),
+        subject: first_string(&["subject"]),
+        thread_ts: intent.thread_id.clone().or_else(|| {
+            intent
+                .conversation_ref
+                .as_ref()
+                .and_then(|conversation| conversation.thread_id.clone())
+        }),
+        topic_id: intent
+            .conversation_ref
+            .as_ref()
+            .and_then(|conversation| conversation.topic_id.clone())
+            .or_else(|| first_string(&["topicId", "topic_id"])),
+        reply_to_id: intent.reply_to_id.clone(),
+        idempotency_key: (!intent.idempotency_key.is_empty())
+            .then(|| intent.idempotency_key.clone()),
+    })
+}
+
 async fn configured_capabilities(
     running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
     name: &str,
