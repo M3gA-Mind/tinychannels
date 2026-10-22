@@ -889,6 +889,22 @@ async fn legacy_module_event_ingress_preserves_host_callback_failure() {
 }
 
 #[tokio::test]
+async fn legacy_module_inbound_ingress_preserves_host_rejection() {
+    use tinychannels::host::EventSink;
+
+    let (host, _callback, _server) = connected_host().await;
+    let error = crate::provider::ModuleEvents(host.clone(), "telegram:account-a".into())
+        .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_envelope(
+            &"x".repeat(140 * 1024),
+        )))
+        .await
+        .expect_err("legacy inbound ingress must report host rejection");
+
+    assert!(error.to_string().contains("channel host rejected ingress payload"));
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 #[allow(
     deprecated,
     reason = "this test covers the legacy inbound bridge ordering contract"
