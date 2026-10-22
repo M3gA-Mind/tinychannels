@@ -1,14 +1,15 @@
 use super::super::MediaRepository;
 use super::*;
 use base64::Engine;
+use futures_util::StreamExt;
 use std::ops::Range;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::Poll;
 use tinychannels_bus::{ChannelRef, ConversationKind, ConversationRef};
-use tinystoragedrivers_core::{
-    Blob, BlobMeta, BlobReader, BlobStore, MemoryStorage, Precondition, Result as StorageResult,
-    Scope, StorageBackend, StorageError,
+use tinystoragedrivers_api::{BlobReader, BlobStore, StorageBackend};
+use tinystoragedrivers_testkit::{MemoryBackend, memory_storage};
+use tinystoragedrivers_types::{
+    Blob, BlobMeta, Precondition, Result as StorageResult, Scope, StorageError,
 };
 
 fn media_scope() -> MediaScope {
@@ -31,10 +32,22 @@ fn media_scope() -> MediaScope {
 }
 
 fn store() -> ScopedMediaStore {
-    let storage = MemoryStorage::new()
-        .for_scope(&Scope::new("module:tinychannels@test").unwrap())
-        .unwrap();
+    let storage = memory_storage(&Scope::new("module:tinychannels@test").unwrap());
     ScopedMediaStore::new(Arc::clone(storage.documents()), Arc::clone(storage.blobs()))
+}
+
+fn byte_stream(bytes: Vec<u8>) -> BlobReader {
+    Box::pin(futures_util::stream::once(async move {
+        Ok::<bytes::Bytes, StorageError>(bytes.into())
+    }))
+}
+
+fn panic_reader() -> BlobReader {
+    Box::pin(futures_util::stream::poll_fn(
+        |_| -> Poll<Option<StorageResult<bytes::Bytes>>> {
+            panic!("invalid scope must be rejected before reading the media body")
+        },
+    ))
 }
 
 #[derive(Debug)]
@@ -57,43 +70,16 @@ struct PausedFirstPut {
     first: std::sync::atomic::AtomicBool,
 }
 
-struct CountingReader {
-    inner: std::io::Cursor<Vec<u8>>,
-    bytes_read: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl tokio::io::AsyncRead for CountingReader {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-        buffer: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        let before = buffer.filled().len();
-        let result = Pin::new(&mut self.inner).poll_read(context, buffer);
-        if let Poll::Ready(Ok(())) = result {
-            self.bytes_read.fetch_add(
-                buffer.filled().len() - before,
-                std::sync::atomic::Ordering::SeqCst,
-            );
-        }
-        result
-    }
-}
-
-struct PanicReader;
-
-impl tokio::io::AsyncRead for PanicReader {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        _context: &mut Context<'_>,
-        _buffer: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        panic!("invalid scope must be rejected before reading the media body")
-    }
-}
-
 #[async_trait::async_trait]
 impl BlobStore for FailDeleteOnce {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn max_key_len(&self) -> usize {
+        self.inner.max_key_len()
+    }
+
     async fn put(
         &self,
         key: &str,
@@ -129,6 +115,14 @@ impl BlobStore for FailDeleteOnce {
 
 #[async_trait::async_trait]
 impl BlobStore for PartialPutAndDeleteOnce {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn max_key_len(&self) -> usize {
+        self.inner.max_key_len()
+    }
+
     async fn put(
         &self,
         key: &str,
@@ -183,6 +177,14 @@ impl BlobStore for PartialPutAndDeleteOnce {
 
 #[async_trait::async_trait]
 impl BlobStore for PausedFirstPut {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn max_key_len(&self) -> usize {
+        self.inner.max_key_len()
+    }
+
     async fn put(
         &self,
         key: &str,
@@ -295,7 +297,7 @@ async fn media_repository_trait_routes_bounded_store_read_stream_and_delete_oper
         &store,
         MediaStreamRequest {
             metadata: media_request(valid_png(), None, None).metadata,
-            reader: Box::pin(std::io::Cursor::new(valid_png())),
+            reader: byte_stream(valid_png()),
         },
     )
     .await
@@ -394,7 +396,7 @@ async fn streamed_media_accepts_actual_length_and_rejects_unknown_length_over_ca
     let reference = store
         .store_stream(MediaStreamRequest {
             metadata: media_request(valid_png(), None, None).metadata,
-            reader: Box::pin(std::io::Cursor::new(valid_png())),
+            reader: byte_stream(valid_png()),
         })
         .await
         .unwrap();
@@ -410,14 +412,20 @@ async fn streamed_media_accepts_actual_length_and_rejects_unknown_length_over_ca
     let mut metadata = media_request(Vec::new(), None, None).metadata;
     metadata.max_bytes = 64;
     let bytes_read = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = Arc::clone(&bytes_read);
+    let reader = futures_util::stream::iter(
+        (0..4096).map(|_| Ok::<_, StorageError>(bytes::Bytes::from_static(b"x"))),
+    )
+    .inspect(move |chunk| {
+        if let Ok(chunk) = chunk {
+            observed.fetch_add(chunk.len(), std::sync::atomic::Ordering::SeqCst);
+        }
+    });
     assert!(
         store
             .store_stream(MediaStreamRequest {
                 metadata,
-                reader: Box::pin(CountingReader {
-                    inner: std::io::Cursor::new(vec![b'x'; 4096]),
-                    bytes_read: Arc::clone(&bytes_read),
-                }),
+                reader: Box::pin(reader),
             })
             .await
             .is_err()
@@ -433,7 +441,7 @@ async fn invalid_stream_scope_is_rejected_before_reading_body() {
     let result = store
         .store_stream(MediaStreamRequest {
             metadata,
-            reader: Box::pin(PanicReader),
+            reader: panic_reader(),
         })
         .await;
     assert!(result.is_err());
@@ -447,7 +455,7 @@ async fn whitespace_only_account_scope_is_rejected_before_reading_body() {
     let result = store
         .store_stream(MediaStreamRequest {
             metadata,
-            reader: Box::pin(PanicReader),
+            reader: panic_reader(),
         })
         .await;
     assert!(result.is_err());
@@ -486,7 +494,7 @@ async fn unsupported_stream_mime_is_rejected_before_reading_body() {
     let result = store
         .store_stream(MediaStreamRequest {
             metadata,
-            reader: Box::pin(PanicReader),
+            reader: panic_reader(),
         })
         .await;
     assert!(result.is_err());
@@ -540,7 +548,7 @@ async fn media_store_rejects_spoofed_mime_and_truncated_image_bodies() {
 
 #[tokio::test]
 async fn independent_store_instances_cannot_replace_a_deduplicated_blob() {
-    let backend = MemoryStorage::new();
+    let backend = MemoryBackend::new();
     let scope = Scope::new("module:tinychannels@test").unwrap();
     let first_storage = backend.for_scope(&scope).unwrap();
     let second_storage = backend.for_scope(&scope).unwrap();
@@ -593,7 +601,7 @@ async fn independent_store_instances_cannot_replace_a_deduplicated_blob() {
 
 #[tokio::test]
 async fn deleting_an_inflight_media_write_cannot_orphan_its_blob() {
-    let backend = MemoryStorage::new();
+    let backend = MemoryBackend::new();
     let scope = Scope::new("module:tinychannels@test").unwrap();
     let writer_storage = backend.for_scope(&scope).unwrap();
     let deleter_storage = backend.for_scope(&scope).unwrap();
@@ -631,7 +639,7 @@ async fn deleting_an_inflight_media_write_cannot_orphan_its_blob() {
 
 #[tokio::test]
 async fn failed_blob_cleanup_can_be_retried_after_reopening_the_store() {
-    let backend = MemoryStorage::new();
+    let backend = MemoryBackend::new();
     let storage = backend
         .for_scope(&Scope::new("module:tinychannels@test").unwrap())
         .unwrap();
@@ -660,7 +668,7 @@ async fn failed_blob_cleanup_can_be_retried_after_reopening_the_store() {
 
 #[tokio::test]
 async fn partially_committed_failed_upload_is_cleaned_after_restart() {
-    let backend = MemoryStorage::new();
+    let backend = MemoryBackend::new();
     let storage = backend
         .for_scope(&Scope::new("module:tinychannels@test").unwrap())
         .unwrap();

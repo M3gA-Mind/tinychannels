@@ -9,6 +9,24 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  storage-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Verify every native library depends on ports only
+        run: |
+          python3 scripts/check-webpki-roots.py --self-test
+          python3 scripts/check-webpki-roots.py
+          scripts/check-storage-engine-trees.sh --self-test
+          scripts/check-storage-engine-trees.sh
+          cargo deny check all
   module-ci:
     uses: tinyhumansai/.github/.github/workflows/module-ci.yml@3e87ade76b622844985d0c665a3b075313e4545c
     with:

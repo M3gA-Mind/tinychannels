@@ -222,11 +222,13 @@ async fn configured_stanzas_build_every_supported_provider_in_order() {
         "discord",
         "slack",
         "mattermost",
-        "imessage",
         "signal",
         "whatsapp",
         "linq",
     ];
+    if cfg!(feature = "imessage") {
+        expected.insert(4, "imessage");
+    }
     if cfg!(feature = "email") {
         expected.push("email");
     }
