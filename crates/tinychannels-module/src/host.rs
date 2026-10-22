@@ -461,7 +461,7 @@ impl HostChannels {
     ) -> Result<Response>
     where
         Request: serde::Serialize + Send + 'static,
-        Response: serde::de::DeserializeOwned + Send + 'static,
+        Response: serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
     {
         if serde_json::to_vec(&request).map_or(true, |bytes| bytes.len() > request_limit) {
             return Err(Error::failed("voice callback request exceeds byte limit"));
