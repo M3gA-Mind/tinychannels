@@ -415,7 +415,7 @@ async fn edit_message_uses_receipt_identity_and_preserves_receipt() {
         vec![serde_json::json!({
             "chat_id": "-10042",
             "message_id": 81,
-            "text": "updated  \\*text\\*",
+            "text": "updated  *text*",
             "parse_mode": "MarkdownV2",
         })]
     );
