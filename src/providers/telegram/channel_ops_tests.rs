@@ -336,6 +336,151 @@ fn telegram_receipt(message_id: Option<&str>) -> tinychannels_bus::channel::Mess
     }
 }
 
+#[derive(Clone)]
+struct ReadMediaFixture {
+    stored: crate::host::StoredMedia,
+    reads: Arc<std::sync::Mutex<Vec<(crate::host::MediaScope, String, u64)>>>,
+}
+
+#[async_trait::async_trait]
+impl crate::host::MediaRepository for ReadMediaFixture {
+    async fn store_media(
+        &self,
+        _request: crate::host::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        anyhow::bail!("fixture is read-only")
+    }
+
+    async fn read_media(
+        &self,
+        scope: crate::host::MediaScope,
+        opaque_id: String,
+        max_bytes: u64,
+    ) -> anyhow::Result<crate::host::StoredMedia> {
+        self.reads
+            .lock()
+            .unwrap()
+            .push((scope, opaque_id, max_bytes));
+        Ok(self.stored.clone())
+    }
+}
+
+fn image_message(opaque_id: &str) -> tinychannels_bus::ChannelOutboundMessage {
+    tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "-10042".into(),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram-main".into()),
+        }),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            id: "-10042".into(),
+            kind: tinychannels_bus::ConversationKind::Group,
+            thread_id: Some("18".into()),
+            ..Default::default()
+        }),
+        reply_to_id: Some("27".into()),
+        turn_id: Some("turn-image-1".into()),
+        idempotency_key: "image-send-1".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some(opaque_id.into()),
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: Some("photo <tool_call>hidden</tool_call>".into()),
+                alt_text: Some("preview".into()),
+            },
+        }],
+    }
+}
+
+fn png_with_dimensions(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = vec![0; 24];
+    bytes[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+    bytes[16..20].copy_from_slice(&width.to_be_bytes());
+    bytes[20..24].copy_from_slice(&height.to_be_bytes());
+    bytes
+}
+
+#[tokio::test]
+async fn typed_image_upload_reads_host_scope_and_returns_provider_receipt() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendPhoto",
+        ok_with(serde_json::json!({ "message_id": 902 })),
+    )
+    .await;
+    let image = png_with_dimensions(320, 240);
+    let repository = ReadMediaFixture {
+        stored: crate::host::StoredMedia {
+            media: tinychannels_bus::MediaReference {
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            content_type: "image/png".into(),
+            file_name: Some("preview.png".into()),
+            bytes: image.clone(),
+        },
+        reads: Arc::default(),
+    };
+    let reads = repository.reads.clone();
+    let ch = channel_for(&server, &["*"]).with_media_repository(Arc::new(repository));
+
+    let outcome = ch
+        .send_v2_with_receipt(&image_message("opaque-photo-1"))
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.error, None);
+    assert_eq!(outcome.receipt.platform_message_ids, ["902"]);
+    assert_eq!(outcome.receipt.parts.len(), 1);
+    assert_eq!(
+        outcome.receipt.parts[0].kind,
+        tinychannels_bus::channel::MessageReceiptPartKind::Media
+    );
+    assert_eq!(outcome.receipt.parts[0].thread_id.as_deref(), Some("18"));
+    let reads = reads.lock().unwrap();
+    assert_eq!(reads.len(), 1);
+    assert_eq!(reads[0].1, "opaque-photo-1");
+    assert_eq!(reads[0].2, 20 * 1024 * 1024);
+    assert_eq!(reads[0].0.configured_instance, "telegram-main");
+    assert_eq!(reads[0].0.channel.id, "telegram");
+    assert_eq!(reads[0].0.conversation.thread_id.as_deref(), Some("18"));
+    assert_eq!(reads[0].0.turn_id, "turn-image-1");
+    let bodies = raw_bodies(&server, "sendPhoto").await;
+    assert_eq!(bodies.len(), 1);
+    assert!(bodies[0].contains("name=\"reply_parameters\"\r\n\r\n{\"message_id\":27}"));
+    assert!(bodies[0].contains("name=\"message_thread_id\"\r\n\r\n18"));
+    assert!(bodies[0].contains("name=\"caption\"\r\n\r\nphoto "));
+    assert!(bodies[0].contains("filename=\"preview.png\""));
+    assert!(bodies[0].contains("Content-Type: image/png"));
+    assert!(bodies[0].contains(&String::from_utf8_lossy(&image)));
+}
+
+#[test]
+fn telegram_image_dimensions_accept_png_and_jpeg_headers_and_reject_invalid_data() {
+    assert_eq!(
+        telegram_image_dimensions("image/png", &png_with_dimensions(640, 480)),
+        Some((640, 480))
+    );
+    assert_eq!(telegram_image_dimensions("image/png", b"not png"), None);
+    assert_eq!(telegram_image_dimensions("image/gif", b"GIF89a"), None);
+    let jpeg_sof = [
+        0xff, 0xd8, 0xff, 0xc0, 0x00, 0x07, 0x08, 0x01, 0x2c, 0x01, 0x90,
+    ];
+    assert_eq!(
+        telegram_image_dimensions("image/jpeg", &jpeg_sof),
+        Some((400, 300))
+    );
+    assert_eq!(
+        telegram_image_dimensions("image/jpeg", &[0xff, 0xd8, 0xff]),
+        None
+    );
+}
+
 #[tokio::test]
 async fn reaction_removal_sends_empty_reaction_and_rejects_failed_receipts() {
     let server = mock_api().await;
