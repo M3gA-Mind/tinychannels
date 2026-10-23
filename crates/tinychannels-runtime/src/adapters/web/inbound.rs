@@ -43,8 +43,13 @@ pub fn normalize_chat_start(
     start: &WebChatStart,
     account_id: Option<&str>,
 ) -> Result<ChannelInboundEnvelope, ChannelSendError> {
-    if start.thread_id.trim().is_empty() || start.request_id.trim().is_empty() {
-        return Err(bad("web chat start requires thread_id and request_id"));
+    if start.client_id.trim().is_empty()
+        || start.thread_id.trim().is_empty()
+        || start.request_id.trim().is_empty()
+    {
+        return Err(bad(
+            "web chat start requires client_id, thread_id and request_id",
+        ));
     }
     let mut parts = Vec::with_capacity(start.attachments.len() + 1);
     let mut media = Vec::new();

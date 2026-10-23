@@ -198,13 +198,17 @@ async fn publish_output_serializes_same_turn_sequence_and_sink_delivery() {
 
     let first_adapter = adapter.clone();
     let first = tokio::spawn(async move {
-        first_adapter.publish_output("c", "t", "r", delta("one")).await
+        first_adapter
+            .publish_output("c", "t", "r", delta("one"))
+            .await
     });
     sink.first_entered.notified().await;
 
     let second_adapter = adapter.clone();
     let second = tokio::spawn(async move {
-        second_adapter.publish_output("c", "t", "r", delta("two")).await
+        second_adapter
+            .publish_output("c", "t", "r", delta("two"))
+            .await
     });
     tokio::task::yield_now().await;
     sink.release_first.notify_one();
@@ -218,19 +222,21 @@ async fn publish_output_serializes_same_turn_sequence_and_sink_delivery() {
 async fn failed_terminal_publication_keeps_projector_state() {
     let (adapter, sink) = adapter();
     sink.fail.store(true, Ordering::SeqCst);
-    assert!(adapter
-        .publish_output(
-            "c",
-            "t",
-            "r",
-            ChannelOutputEvent::FinalMessage {
-                text: "done".into(),
-                parts: Vec::new(),
-                receipt: None,
-            },
-        )
-        .await
-        .is_err());
+    assert!(
+        adapter
+            .publish_output(
+                "c",
+                "t",
+                "r",
+                ChannelOutputEvent::FinalMessage {
+                    text: "done".into(),
+                    parts: Vec::new(),
+                    receipt: None,
+                },
+            )
+            .await
+            .is_err()
+    );
     assert_eq!(adapter.turns.lock().len(), 1);
 }
 
@@ -497,7 +503,13 @@ async fn send_typed_rejects_parts_the_web_adapter_does_not_declare() {
             idempotency_key: "typed-unsupported".into(),
             parts: vec![OutboundContentPart::Content { part }],
         };
-        assert!(adapter.send_typed(&message).await.unwrap_err().is_unsupported());
+        assert!(
+            adapter
+                .send_typed(&message)
+                .await
+                .unwrap_err()
+                .is_unsupported()
+        );
     }
     assert!(sink.events.lock().is_empty());
 }

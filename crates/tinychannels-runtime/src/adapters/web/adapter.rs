@@ -47,6 +47,7 @@ pub struct WebChannelAdapter {
     running: AtomicBool,
     clock: fn() -> u64,
     turns: Mutex<HashMap<TurnKey, WebTurnProjector>>,
+    publish_lock: tokio::sync::Mutex<()>,
 }
 
 fn unix_ms() -> u64 {
@@ -78,6 +79,7 @@ impl WebChannelAdapter {
             running: AtomicBool::new(false),
             clock: unix_ms,
             turns: Mutex::new(HashMap::new()),
+            publish_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -175,6 +177,10 @@ impl WebChannelAdapter {
         request_id: &str,
         event: ChannelOutputEvent,
     ) -> Result<usize, ChannelSendError> {
+        // Keep sequence assignment and sink delivery in one order. The sink is
+        // scoped to this adapter instance, so serializing its publications also
+        // preserves each turn's increasing sequence numbers on the wire.
+        let _publish = self.publish_lock.lock().await;
         let key = (
             client_id.to_owned(),
             thread_id.to_owned(),
@@ -202,6 +208,7 @@ impl WebChannelAdapter {
     /// Publish a host-authored event unchanged (queue, goal, todo, error and
     /// other events with no `ChannelOutputEvent` form).
     pub async fn publish_event(&self, mut event: WebChannelEvent) -> Result<(), ChannelSendError> {
+        let _publish = self.publish_lock.lock().await;
         let terminal_key = if is_terminal(&event) {
             let context = event.context_mut().clone();
             Some((context.client_id, context.thread_id, context.request_id))
@@ -232,14 +239,21 @@ impl WebChannelAdapter {
             }
             OutboundPayload::Parts { parts } => {
                 for part in parts {
-                    if let OutboundContentPart::Content {
-                        part: ContentPart::Text { text: body, .. },
-                    } = part
-                    {
-                        if !text.is_empty() {
-                            text.push('\n');
+                    match part {
+                        OutboundContentPart::Content { part } => {
+                            if !web_content_supported(part) {
+                                return Err(ChannelSendError::unsupported(
+                                    "web adapter does not declare this content part",
+                                ));
+                            }
+                            if let ContentPart::Text { text: body, .. } = part {
+                                if !text.is_empty() {
+                                    text.push('\n');
+                                }
+                                text.push_str(body);
+                            }
                         }
-                        text.push_str(body);
+                        OutboundContentPart::Voice { .. } => {}
                     }
                 }
                 parts.clone()
@@ -253,6 +267,14 @@ impl WebChannelAdapter {
         let thread_id = intent
             .thread_id
             .clone()
+            .filter(|thread_id| !thread_id.trim().is_empty())
+            .or_else(|| {
+                intent
+                    .conversation_ref
+                    .as_ref()
+                    .and_then(|conversation| conversation.thread_id.clone())
+                    .filter(|thread_id| !thread_id.trim().is_empty())
+            })
             .unwrap_or_else(|| intent.conversation_id.clone());
         Ok(WebChannelEvent::ProactiveMessage {
             context: WebEventContext {
@@ -273,6 +295,18 @@ impl WebChannelAdapter {
             parts: (!parts.is_empty()).then_some(parts),
         })
     }
+}
+
+fn web_content_supported(part: &ContentPart) -> bool {
+    matches!(
+        part,
+        ContentPart::Text { .. }
+            | ContentPart::Image { .. }
+            | ContentPart::Video { .. }
+            | ContentPart::Audio { .. }
+            | ContentPart::File { .. }
+            | ContentPart::VoiceNote { .. }
+    )
 }
 
 fn is_terminal(event: &WebChannelEvent) -> bool {
@@ -303,6 +337,7 @@ impl ChannelAdapter for WebChannelAdapter {
     }
 
     async fn stop(&self) -> Result<(), ChannelSendError> {
+        let _publish = self.publish_lock.lock().await;
         self.running.store(false, Ordering::SeqCst);
         self.turns.lock().clear();
         Ok(())

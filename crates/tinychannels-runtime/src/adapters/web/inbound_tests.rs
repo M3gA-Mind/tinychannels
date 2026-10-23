@@ -239,7 +239,13 @@ fn sender_identity_is_host_assigned_after_wire_deserialization() {
 
     let mut authenticated = parsed;
     authenticated.sender_id = Some("user-1".into());
-    assert_eq!(normalize_chat_start(&authenticated, None).unwrap().sender.id, "user-1");
+    assert_eq!(
+        normalize_chat_start(&authenticated, None)
+            .unwrap()
+            .sender
+            .id,
+        "user-1"
+    );
 }
 
 #[test]
