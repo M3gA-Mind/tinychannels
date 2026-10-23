@@ -991,6 +991,48 @@ async fn scoped_open_rejects_feed_output_from_another_turn() {
         })
         .await
         .is_err());
+    assert!(replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            turn_id: Some("turn-bound".into()),
+            channel_ref: Some(Box::new(tinychannels_bus::ChannelRef {
+                id: "channel-other".into(),
+                account_id: Some("account-bound".into()),
+            })),
+            conversation: Some(Box::new(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Thread,
+                id: "conversation-bound".into(),
+                scope_id: None,
+                parent_id: None,
+                thread_id: Some("thread-bound".into()),
+                topic_id: None,
+            })),
+            sequence: 2,
+            events: vec![],
+        })
+        .await
+        .is_err());
+    assert!(replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            turn_id: Some("turn-bound".into()),
+            channel_ref: Some(Box::new(tinychannels_bus::ChannelRef {
+                id: "channel-bound".into(),
+                account_id: Some("account-bound".into()),
+            })),
+            conversation: Some(Box::new(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Thread,
+                id: "conversation-other".into(),
+                scope_id: None,
+                parent_id: None,
+                thread_id: Some("thread-bound".into()),
+                topic_id: None,
+            })),
+            sequence: 3,
+            events: vec![],
+        })
+        .await
+        .is_err());
     assert!(callback.requests.lock().await.is_empty());
 
     let matching_output = || ProgressiveCommand::FeedOutput {
