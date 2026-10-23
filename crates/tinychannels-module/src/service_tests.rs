@@ -1961,6 +1961,16 @@ async fn provider_failure_stays_pending_then_recovery_fails_closed_once() {
         channels_with_store(Arc::new(FailingChannel(calls.clone()))).await;
     let intent = required_intent("provider-fail", "body");
     assert!(
+        !channels
+            .running
+            .lock()
+            .await
+            .get("fixture")
+            .unwrap()
+            .is_finished(),
+        "provider should be available before required delivery"
+    );
+    assert!(
         channels
             .send_channel_intent("fixture".into(), intent.clone())
             .await
