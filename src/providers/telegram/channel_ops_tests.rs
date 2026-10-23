@@ -1621,6 +1621,65 @@ async fn structured_sends_reject_invalid_bot_api_payloads_before_network_io() {
 }
 
 #[tokio::test]
+async fn structured_send_marks_uncertain_bot_api_replies_as_nonretryable() {
+    use tinychannels_bus::{ContentPart, OutboundContentPart};
+
+    let responses = [
+        ResponseTemplate::new(200).set_body_string("not json"),
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": false })),
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true, "result": {} })),
+        ResponseTemplate::new(502).set_body_json(serde_json::json!({ "ok": true })),
+    ];
+    for response in responses {
+        let server = mock_api().await;
+        mount_post(&server, "sendLocation", response).await;
+        let message = structured_message(vec![OutboundContentPart::Content {
+            part: ContentPart::Location {
+                latitude: 51.5,
+                longitude: -0.1,
+                label: None,
+                address: None,
+                accuracy_meters: None,
+                live_until_unix_ms: None,
+            },
+        }]);
+
+        let error = channel_for(&server, &["*"])
+            .send_v2_with_receipt(&message)
+            .await
+            .unwrap_err();
+        let typed = typed_send_error(error);
+        assert!(typed.sent_before_error);
+        assert!(!typed.retryable);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendLocation",
+        ok_with(serde_json::json!({ "message_id": 812 })),
+    )
+    .await;
+    let mut message = structured_message(vec![OutboundContentPart::Content {
+        part: ContentPart::Location {
+            latitude: 51.5,
+            longitude: -0.1,
+            label: None,
+            address: None,
+            accuracy_meters: None,
+            live_until_unix_ms: None,
+        },
+    }]);
+    message.channel_ref = None;
+    let outcome = channel_for(&server, &["*"])
+        .send_v2_with_receipt(&message)
+        .await
+        .unwrap();
+    assert_eq!(outcome.receipt.channel.unwrap().id, "telegram");
+}
+
+#[tokio::test]
 async fn callback_ingress_preserves_actor_scope_and_authorizes_only_numeric_id_or_username() {
     let update = serde_json::json!({
         "update_id": 9001,
