@@ -309,6 +309,188 @@ async fn typed_send_rejects_non_numeric_reply_reference_before_provider_io() {
     assert!(json_bodies(&server, "sendMessage").await.is_empty());
 }
 
+fn edit_intent(conversation_id: &str) -> tinychannels_bus::ChannelOutboundIntent {
+    tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "edit-1".into(),
+        channel_id: "telegram".into(),
+        conversation_id: conversation_id.into(),
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: "updated <tool_call>hidden</tool_call> *text*".into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn telegram_receipt(message_id: Option<&str>) -> tinychannels_bus::channel::MessageReceipt {
+    tinychannels_bus::channel::MessageReceipt {
+        channel: Some(tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: None,
+        }),
+        conversation: Some(tinychannels_bus::ConversationRef {
+            id: "-10042".into(),
+            ..Default::default()
+        }),
+        primary_platform_message_id: message_id.map(str::to_owned),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn reaction_removal_sends_empty_reaction_and_rejects_failed_receipts() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "setMessageReaction",
+        ok_with(serde_json::Value::Null),
+    )
+    .await;
+    let ch = channel_for(&server, &["*"]);
+    let conversation = tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        ..Default::default()
+    };
+
+    ch.send_reaction_v2(
+        &conversation,
+        "81",
+        &tinychannels_bus::channel::ChannelReaction::default(),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        json_bodies(&server, "setMessageReaction").await,
+        vec![serde_json::json!({
+            "chat_id": "-10042",
+            "message_id": 81,
+            "reaction": [],
+            "is_big": false,
+        })]
+    );
+
+    let rejected = mock_api().await;
+    mount_post(
+        &rejected,
+        "setMessageReaction",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": false,
+            "description": "message cannot be changed"
+        })),
+    )
+    .await;
+    let ch = channel_for(&rejected, &["*"]);
+    let error = ch
+        .send_reaction_v2(
+            &conversation,
+            "81",
+            &tinychannels_bus::channel::ChannelReaction::default(),
+            true,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("reaction removal failed"));
+}
+
+#[tokio::test]
+async fn edit_message_uses_receipt_identity_and_preserves_receipt() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "editMessageText",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })),
+    )
+    .await;
+    let ch = channel_for(&server, &["*"]);
+    let receipt = telegram_receipt(Some("81"));
+
+    let updated = ch
+        .edit_message_v2(&receipt, &edit_intent("-10042"))
+        .await
+        .unwrap();
+
+    assert_eq!(updated, receipt);
+    assert_eq!(
+        json_bodies(&server, "editMessageText").await,
+        vec![serde_json::json!({
+            "chat_id": "-10042",
+            "message_id": 81,
+            "text": "updated  \\*text\\*",
+            "parse_mode": "MarkdownV2",
+        })]
+    );
+}
+
+#[tokio::test]
+async fn edit_and_delete_reject_mismatched_or_incomplete_receipts_before_io() {
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["*"]);
+    let mut wrong_channel = telegram_receipt(Some("81"));
+    wrong_channel.channel.as_mut().unwrap().id = "discord".into();
+    assert!(
+        ch.edit_message_v2(&wrong_channel, &edit_intent("-10042"))
+            .await
+            .is_err()
+    );
+    assert!(
+        ch.edit_message_v2(&telegram_receipt(None), &edit_intent("-10042"))
+            .await
+            .is_err()
+    );
+
+    let mut mismatched_intent = edit_intent("-10042");
+    mismatched_intent.conversation_id = "different-chat".into();
+    assert!(
+        ch.edit_message_v2(&telegram_receipt(Some("81")), &mismatched_intent)
+            .await
+            .is_err()
+    );
+    assert!(ch.delete_message_v2(&telegram_receipt(None)).await.is_err());
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn delete_message_requires_telegram_success_and_true_result() {
+    let rejected = mock_api().await;
+    mount_post(
+        &rejected,
+        "deleteMessage",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": false,
+            "description": "message is too old"
+        })),
+    )
+    .await;
+    let ch = channel_for(&rejected, &["*"]);
+    assert!(
+        ch.delete_message_v2(&telegram_receipt(Some("81")))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("deleteMessage failed")
+    );
+
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "deleteMessage",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": true
+        })),
+    )
+    .await;
+    channel_for(&server, &["*"])
+        .delete_message_v2(&telegram_receipt(Some("81")))
+        .await
+        .unwrap();
+    assert_eq!(
+        json_bodies(&server, "deleteMessage").await,
+        vec![serde_json::json!({"chat_id": "-10042", "message_id": 81})]
+    );
+}
+
 #[test]
 #[allow(
     deprecated,

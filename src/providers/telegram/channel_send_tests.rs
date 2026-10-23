@@ -302,7 +302,12 @@ async fn channel_send_short_message_retries_plain_preserving_thread_and_reply() 
 #[tokio::test]
 async fn media_upload_includes_routing_caption_title_and_rounded_duration() {
     let server = mock_api().await;
-    mount_post(&server, "sendAudio", ok_with(serde_json::json!({"message_id": 84}))).await;
+    mount_post(
+        &server,
+        "sendAudio",
+        ok_with(serde_json::json!({"message_id": 84})),
+    )
+    .await;
     let ch = channel_for(&server, &["*"]);
 
     let id = ch
@@ -335,7 +340,10 @@ async fn media_upload_includes_routing_caption_title_and_rounded_duration() {
         "filename=\"voice.ogg\"",
         "Content-Type: audio/ogg",
     ] {
-        assert!(bodies[0].contains(field), "multipart body missing {field:?}");
+        assert!(
+            bodies[0].contains(field),
+            "multipart body missing {field:?}"
+        );
     }
 }
 
@@ -357,20 +365,26 @@ async fn media_and_voice_uploads_reject_invalid_inputs_before_network_access() {
         file_name: "image.png",
     };
 
-    assert!(ch.send_media_bytes_with_id(media(vec![], None, "image/png")).await.is_err());
-    assert!(ch
-        .send_media_bytes_with_id(media(vec![1], Some("not-an-id"), "image/png"))
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("reply target is invalid"));
-    assert!(ch
-        .send_media_bytes_with_id(media(vec![1], None, "not a mime type"))
-        .await
-        .is_err());
+    assert!(
+        ch.send_media_bytes_with_id(media(vec![], None, "image/png"))
+            .await
+            .is_err()
+    );
+    assert!(
+        ch.send_media_bytes_with_id(media(vec![1], Some("not-an-id"), "image/png"))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("reply target is invalid")
+    );
+    assert!(
+        ch.send_media_bytes_with_id(media(vec![1], None, "not a mime type"))
+            .await
+            .is_err()
+    );
 
-    assert!(ch
-        .send_voice_bytes_with_id(TelegramVoiceUpload {
+    assert!(
+        ch.send_voice_bytes_with_id(TelegramVoiceUpload {
             method: "sendVoice",
             field: "voice",
             chat_id: "chat-1",
@@ -383,18 +397,20 @@ async fn media_and_voice_uploads_reject_invalid_inputs_before_network_access() {
         .await
         .unwrap_err()
         .to_string()
-        .contains("reply target is invalid"));
+        .contains("reply target is invalid")
+    );
 
     let too_large = vec![0; 20 * 1024 * 1024 + 1];
-    assert!(ch
-        .send_media_bytes_with_id(media(too_large, None, "image/png"))
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("inline limit"));
+    assert!(
+        ch.send_media_bytes_with_id(media(too_large, None, "image/png"))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("inline limit")
+    );
     let too_large = vec![0; 8 * 1024 * 1024 + 1];
-    assert!(ch
-        .send_voice_bytes_with_id(TelegramVoiceUpload {
+    assert!(
+        ch.send_voice_bytes_with_id(TelegramVoiceUpload {
             method: "sendVoice",
             field: "voice",
             chat_id: "chat-1",
@@ -407,7 +423,8 @@ async fn media_and_voice_uploads_reject_invalid_inputs_before_network_access() {
         .await
         .unwrap_err()
         .to_string()
-        .contains("inline limit"));
+        .contains("inline limit")
+    );
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -433,8 +450,12 @@ async fn upload_receipt_requires_success_status_and_a_message_id() {
             })
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("unsuccessful or unknown receipt")
-            || error.to_string().contains("omitted message receipt"));
+        assert!(
+            error
+                .to_string()
+                .contains("unsuccessful or unknown receipt")
+                || error.to_string().contains("omitted message receipt")
+        );
         let body = raw_bodies(&server, "sendVoice").await;
         assert!(body[0].contains("name=\"message_thread_id\"\r\n\r\ntopic-3"));
         assert!(body[0].contains("name=\"reply_parameters\""));
@@ -449,10 +470,11 @@ async fn custom_reaction_uses_custom_emoji_id_and_rejects_blank_values() {
     let ch = channel_for(&server, &["*"]);
 
     assert!(!ch.send_message_custom_reaction("1", 2, "  ").await.unwrap());
-    assert!(ch
-        .send_message_custom_reaction("1", 2, " custom-emoji ")
-        .await
-        .unwrap());
+    assert!(
+        ch.send_message_custom_reaction("1", 2, " custom-emoji ")
+            .await
+            .unwrap()
+    );
     let bodies = json_bodies(&server, "setMessageReaction").await;
     assert_eq!(bodies.len(), 1);
     assert_eq!(bodies[0]["reaction"][0]["type"], "custom_emoji");
