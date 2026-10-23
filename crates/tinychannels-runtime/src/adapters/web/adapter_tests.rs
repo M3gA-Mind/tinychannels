@@ -157,6 +157,59 @@ async fn publish_output_stamps_seq_per_turn_and_resets_after_a_terminal_event() 
 }
 
 #[tokio::test]
+async fn failed_terminal_output_keeps_its_sequence_until_delivery_succeeds() {
+    let (adapter, sink) = adapter();
+    adapter.publish_output("c", "t", "r", delta("a")).await.unwrap();
+    sink.fail.store(true, Ordering::SeqCst);
+    let terminal = ChannelOutputEvent::FinalMessage {
+        text: "done".into(),
+        parts: Vec::new(),
+        receipt: None,
+    };
+    assert!(adapter
+        .publish_output("c", "t", "r", terminal.clone())
+        .await
+        .is_err());
+
+    sink.fail.store(false, Ordering::SeqCst);
+    adapter.publish_output("c", "t", "r", terminal).await.unwrap();
+    adapter.publish_output("c", "t", "r", delta("next")).await.unwrap();
+    assert_eq!(seqs(&sink), [1, 3, 1]);
+}
+
+#[tokio::test]
+async fn host_terminal_event_keeps_projector_on_failure_and_clears_after_success() {
+    let (adapter, sink) = adapter();
+    adapter.publish_output("c", "t", "r", delta("a")).await.unwrap();
+    let terminal = WebChannelEvent::ChatDone {
+        context: WebEventContext {
+            client_id: "c".into(),
+            thread_id: "t".into(),
+            request_id: "r".into(),
+            ..Default::default()
+        },
+        full_response: Some("done".into()),
+        citations: None,
+        usage: None,
+        timing: None,
+        parts: None,
+    };
+
+    sink.fail.store(true, Ordering::SeqCst);
+    assert!(adapter.publish_event(terminal.clone()).await.is_err());
+    sink.fail.store(false, Ordering::SeqCst);
+    adapter.publish_output("c", "t", "r", delta("still same turn"))
+        .await
+        .unwrap();
+    adapter.publish_event(terminal).await.unwrap();
+    adapter.publish_output("c", "t", "r", delta("new turn"))
+        .await
+        .unwrap();
+
+    assert_eq!(seqs(&sink), [1, 2, 1]);
+}
+
+#[tokio::test]
 async fn unrepresentable_output_publishes_nothing_and_sink_errors_propagate() {
     let (adapter, sink) = adapter();
     let none = adapter
@@ -214,10 +267,8 @@ async fn text_send_publishes_a_proactive_message_and_returns_a_receipt() {
     request.reply_to_id = Some("m0".into());
     let outcome = adapter.send_outcome(request).await.unwrap();
     assert!(outcome.error.is_none());
-    assert_eq!(
-        outcome.receipt.primary_platform_message_id.as_deref(),
-        Some("idem-1")
-    );
+    assert_eq!(outcome.receipt.primary_platform_message_id, None);
+    assert!(outcome.receipt.platform_message_ids.is_empty());
     assert_eq!(outcome.receipt.sent_at, 42);
     assert_eq!(
         outcome.receipt.channel.unwrap().account_id.as_deref(),

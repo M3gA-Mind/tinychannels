@@ -63,6 +63,22 @@ fn text_submission_maps_addressing_and_authority() {
 }
 
 #[test]
+fn anonymous_submissions_do_not_authorize_commands() {
+    let envelope = normalize_chat_start(&start(), None).unwrap();
+    assert!(!envelope.access.command_authorized);
+}
+
+#[test]
+fn client_input_cannot_choose_the_authenticated_sender() {
+    let parsed: WebChatStart = serde_json::from_str(
+        r#"{"clientId":"client-7","threadId":"thread-9","requestId":"request-2","text":"hello","senderId":"forged-user"}"#,
+    )
+    .unwrap();
+    let envelope = normalize_chat_start(&parsed, None).unwrap();
+    assert_eq!(envelope.sender.id, "client-7");
+}
+
+#[test]
 fn authenticated_sender_overrides_client_id_and_blank_falls_back() {
     let mut with_user = start();
     with_user.sender_id = Some("user-1".into());
