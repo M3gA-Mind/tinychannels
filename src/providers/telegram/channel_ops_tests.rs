@@ -759,6 +759,81 @@ async fn adapter_status_reports_health_and_send_returns_typed_receipt() {
 }
 
 #[tokio::test]
+async fn callback_ingress_preserves_actor_scope_and_authorizes_only_numeric_id_or_username() {
+    let update = serde_json::json!({
+        "update_id": 9001,
+        "callback_query": {
+            "id": "query-4",
+            "data": "approve-action",
+            "from": {"id": 77, "username": "operator", "first_name": "Display", "is_bot": false},
+            "message": {
+                "message_id": 81,
+                "message_thread_id": 18,
+                "chat": {"id": -10042, "type": "supergroup"}
+            }
+        }
+    });
+    let ch = TelegramChannel::new("token".into(), vec!["77".into()], false);
+
+    assert!(ch.callback_is_allowed(&update));
+    let event = TelegramChannel::callback_event(&update).unwrap();
+    assert_eq!(event.event_id, "telegram:update:9001:callback:query-4");
+    assert_eq!(event.source_event_id.as_deref(), Some("9001"));
+    assert_eq!(event.conversation.as_ref().unwrap().id, "-10042");
+    assert_eq!(
+        event.conversation.as_ref().unwrap().topic_id.as_deref(),
+        Some("18")
+    );
+    match event.event {
+        tinychannels_bus::ChannelEventKind::ButtonCallback {
+            query_id,
+            action_id,
+            provider_message_id,
+            actor,
+        } => {
+            assert_eq!(query_id, "query-4");
+            assert_eq!(action_id, "approve-action");
+            assert_eq!(provider_message_id.as_deref(), Some("81"));
+            assert_eq!(actor.id, "77");
+            assert_eq!(actor.name.as_deref(), Some("operator"));
+            assert!(!actor.is_bot);
+        }
+        other => panic!("unexpected callback event {other:?}"),
+    }
+
+    let username_only = TelegramChannel::new("token".into(), vec!["operator".into()], false);
+    assert!(username_only.callback_is_allowed(&update));
+    let display_name_only = TelegramChannel::new("token".into(), vec!["Display".into()], false);
+    assert!(!display_name_only.callback_is_allowed(&update));
+    assert!(!ch.callback_is_allowed(&serde_json::json!({"message": {}})));
+
+    let mut invalid_action = update.clone();
+    invalid_action["callback_query"]["data"] = serde_json::json!("");
+    assert!(TelegramChannel::callback_event(&invalid_action).is_none());
+    invalid_action["callback_query"]["data"] = serde_json::json!("x".repeat(65));
+    assert!(TelegramChannel::callback_event(&invalid_action).is_none());
+    assert!(TelegramChannel::callback_event(&serde_json::json!({})).is_none());
+
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "answerCallbackQuery",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": false,
+            "description": "query already expired"
+        })),
+    )
+    .await;
+    channel_for(&server, &["*"])
+        .acknowledge_callback("query-4")
+        .await;
+    assert_eq!(
+        json_bodies(&server, "answerCallbackQuery").await,
+        vec![serde_json::json!({"callback_query_id": "query-4"})]
+    );
+}
+
+#[tokio::test]
 async fn reaction_removal_sends_empty_reaction_and_rejects_failed_receipts() {
     let server = mock_api().await;
     mount_post(
