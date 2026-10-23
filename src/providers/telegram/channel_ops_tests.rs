@@ -103,7 +103,7 @@ async fn streaming_draft_routes_forum_topic_and_reply_separately() {
         vec![serde_json::json!({
             "chat_id": "-10042",
             "text": "Draft reply",
-            "message_thread_id": 18,
+            "message_thread_id": "18",
             "reply_to_message_id": 81,
         })]
     );
