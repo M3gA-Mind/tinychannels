@@ -79,7 +79,7 @@ async fn legacy_interaction_boundary_handles_only_v21_operations() {
 #[test]
 #[allow(deprecated)]
 fn compatibility_text_and_telegram_address_preserve_legacy_conventions() {
-    let email = SendMessage::new("body", "recipient").with_subject("  first\nsecond\rline  ");
+    let email = SendMessage::with_subject("body", "recipient", "  first\nsecond\rline  ");
     assert_eq!(
         compatibility_text("email:account", &email),
         "Subject: first secondline\nbody"
