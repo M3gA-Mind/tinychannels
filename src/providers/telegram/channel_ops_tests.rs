@@ -71,7 +71,7 @@ async fn streaming_draft_routes_forum_topic_and_reply_separately() {
         ok_with(serde_json::json!({ "message_id": 322 })),
     )
     .await;
-    let channel = channel_for(&server, &["*"]);
+    let channel = streaming(&server);
     let intent = tinychannels_bus::ChannelOutboundIntent {
         idempotency_key: "draft-topic".into(),
         channel_id: "telegram".into(),
