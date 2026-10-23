@@ -2478,6 +2478,42 @@ async fn reaction_removal_sends_empty_reaction_and_rejects_failed_receipts() {
 }
 
 #[tokio::test]
+async fn reaction_add_rejects_invalid_message_and_empty_reaction_before_io() {
+    let server = mock_api().await;
+    let channel = channel_for(&server, &["*"]);
+    let conversation = tinychannels_bus::channel::ConversationRef {
+        id: "-10042".into(),
+        ..Default::default()
+    };
+
+    let invalid_message = channel
+        .send_reaction_v2(
+            &conversation,
+            "message-x",
+            &tinychannels_bus::channel::ChannelReaction {
+                value: "👍".into(),
+                ..Default::default()
+            },
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert!(invalid_message.downcast_ref::<TelegramPreDispatchError>().is_some());
+
+    let empty_reaction = channel
+        .send_reaction_v2(
+            &conversation,
+            "81",
+            &tinychannels_bus::channel::ChannelReaction::default(),
+            false,
+        )
+        .await
+        .unwrap_err();
+    assert!(empty_reaction.downcast_ref::<TelegramPreDispatchError>().is_some());
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn edit_message_uses_receipt_identity_and_preserves_receipt() {
     let server = mock_api().await;
     mount_post(
