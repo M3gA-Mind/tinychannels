@@ -1063,7 +1063,6 @@ async fn required_durable_ambiguous_send_without_ids_is_not_retried() {
             .await
             .is_err()
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 1, "initial delivery reaches provider");
     assert_eq!(sends.load(Ordering::SeqCst), 1);
     let pending = callbacks.storage.snapshot().await;
     let entry = pending
@@ -1967,6 +1966,7 @@ async fn provider_failure_stays_pending_then_recovery_fails_closed_once() {
             .await
             .is_err()
     );
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "initial delivery reaches provider");
     {
         let scopes = callbacks.storage.snapshot().await;
         let scope = scopes.get("scope-a").unwrap();
