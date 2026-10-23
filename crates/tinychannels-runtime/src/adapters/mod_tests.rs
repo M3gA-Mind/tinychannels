@@ -6,6 +6,29 @@ use crate::channel::{
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 
+#[test]
+fn web_adapter_projects_output_with_turn_context_and_sequence() {
+    let mut projector = crate::adapters::web::WebTurnProjector::new("client", "thread", "request");
+    let events = projector.project(
+        tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+            text: "hello".into(),
+            iteration: Some(2),
+        },
+        123,
+    );
+
+    assert_eq!(events.len(), 1);
+    let value = serde_json::to_value(&events[0]).expect("serialize web event");
+    assert_eq!(value["event"], "text_delta");
+    assert_eq!(value["client_id"], "client");
+    assert_eq!(value["thread_id"], "thread");
+    assert_eq!(value["request_id"], "request");
+    assert_eq!(value["seq"], 1);
+    assert_eq!(value["ts"], 123);
+    assert_eq!(value["delta"], "hello");
+    assert_eq!(value["round"], 2);
+}
+
 #[derive(Default)]
 struct RecordingOutboundSink {
     ids: Mutex<Vec<String>>,
