@@ -262,11 +262,12 @@ async fn completed_replies_are_evicted_when_the_retained_handle_limit_is_reached
     assert_eq!(replies.state.lock().await.entries.len(), MAX_RETAINED);
 
     let newest = open(&replies).await;
-    let entries = replies.state.lock().await.entries;
-    assert_eq!(entries.len(), MAX_RETAINED);
-    assert!(!entries.contains_key(first_handle.as_deref().unwrap()));
-    assert!(entries.contains_key(&newest));
-    drop(entries);
+    {
+        let state = replies.state.lock().await;
+        assert_eq!(state.entries.len(), MAX_RETAINED);
+        assert!(!state.entries.contains_key(first_handle.as_deref().unwrap()));
+        assert!(state.entries.contains_key(&newest));
+    }
     replies.shutdown().await.unwrap();
     assert_eq!(callback.sends.lock().await.len(), MAX_RETAINED + 1);
 }
