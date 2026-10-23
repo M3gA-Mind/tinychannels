@@ -862,3 +862,43 @@ async fn typed_legacy_projection_failure_is_not_reported_as_dispatched() {
     assert_eq!(sends.load(Ordering::SeqCst), 0);
     running.stop().await.unwrap();
 }
+
+struct EmptyReceiptProvider;
+
+#[async_trait::async_trait]
+impl TestProviderBehavior for EmptyReceiptProvider {
+    fn test_provider_id(&self) -> &'static str {
+        "telegram"
+    }
+
+    async fn test_send(
+        &self,
+        _message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ChannelSendError> {
+        Ok(Default::default())
+    }
+}
+
+#[tokio::test]
+async fn provider_fills_missing_receipt_scope_from_the_submitted_message() {
+    let host = memory_host().await;
+    let hooks = Arc::new(Hooks::default());
+    let _provider_host = hooks.host(host.clone(), "telegram:primary".into(), None);
+    let running = Running::start_test_outbound(Arc::new(EmptyReceiptProvider), hooks, host);
+
+    let mut message = SendMessage::new("hello", "chat-7");
+    message.thread_ts = Some("thread-3".into());
+    let receipt = running.send(message).await.unwrap();
+
+    assert_eq!(receipt.idempotency_key.as_deref(), Some("telegram:primary:chat-7"));
+    assert_eq!(
+        receipt.channel,
+        Some(tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:primary".into()),
+        })
+    );
+    assert_eq!(receipt.conversation.as_ref().map(|r| r.id.as_str()), Some("chat-7"));
+    assert_eq!(receipt.thread_id.as_deref(), Some("thread-3"));
+    running.stop().await.unwrap();
+}
