@@ -2396,7 +2396,7 @@ async fn native_interaction_adapters_preserve_uncertain_provider_errors() {
             tinychannels_bus::channel::SendErrorKind::Unknown
         );
     }
-    assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    assert_eq!(server.received_requests().await.unwrap().len(), 4);
 }
 
 #[tokio::test]
@@ -3383,7 +3383,7 @@ async fn listener_projects_authorized_callback_without_provider_update_id() {
     assert_eq!(recorded[0].2["sourceEventId"], serde_json::Value::Null);
     assert_eq!(recorded[0].2["conversation"]["topicId"], "88");
     assert_eq!(recorded[0].2["actor"]["isBot"], true);
-    assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    assert_eq!(server.received_requests().await.unwrap().len(), 4);
 }
 
 #[derive(Default)]
