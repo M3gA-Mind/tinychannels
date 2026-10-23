@@ -1616,6 +1616,8 @@ async fn adapter_status_reports_health_and_send_returns_typed_receipt() {
         ChannelAdapter::proactive_target(&configured_target).as_deref(),
         Some("-10042")
     );
+    configured_target.chat_id = Some("   ".into());
+    assert_eq!(ChannelAdapter::proactive_target(&configured_target), None);
     let status = ChannelAdapter::status(&channel).await.unwrap();
     assert_eq!(status.channel_id, "telegram");
     assert_eq!(status.health_state.as_deref(), Some("healthy"));
