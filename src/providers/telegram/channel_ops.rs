@@ -682,13 +682,13 @@ Ensure only one `openhuman` process is using this bot token."
                         .get("update_id")
                         .and_then(serde_json::Value::as_i64)
                         .unwrap_or_default();
+                    // Advance offset past this update, deduplicated or not, so
+                    // Telegram stops re-sending it.
+                    if let Some(uid) = update.get("update_id").and_then(serde_json::Value::as_i64) {
+                        offset = offset.max(uid + 1);
+                    }
                     if update_id > 0 && !self.track_update_id(update_id) {
                         continue;
-                    }
-
-                    // Advance offset past this update
-                    if let Some(uid) = update.get("update_id").and_then(serde_json::Value::as_i64) {
-                        offset = uid + 1;
                     }
 
                     let reactions = self.parse_update_reactions(update);
