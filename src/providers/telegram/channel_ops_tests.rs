@@ -820,6 +820,49 @@ async fn oversized_voice_transcript_is_sent_as_a_follow_up_with_combined_receipt
     assert_eq!(sent_texts(&server).await, [transcript]);
 }
 
+#[tokio::test]
+async fn oversized_voice_transcript_failure_keeps_audio_receipt_nonretryable() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendVoice",
+        ok_with(serde_json::json!({ "message_id": 913 })),
+    )
+    .await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ResponseTemplate::new(500).set_body_string("text endpoint unavailable"),
+    )
+    .await;
+    let store = ReadVoiceFixture {
+        stored: tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(b"voice audio"),
+            mime_type: "audio/ogg".into(),
+            file_name: None,
+        },
+        reads: Arc::default(),
+    };
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(store));
+
+    let outcome = channel
+        .send_v2_with_receipt(&voice_message(
+            "opaque-voice-partial",
+            Some("spoken detail ".repeat(100)),
+            Some("ogg_opus"),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["913"]);
+    let error = outcome
+        .error
+        .expect("transcript delivery failure is reported");
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}
+
 #[test]
 fn telegram_image_dimensions_accept_png_and_jpeg_headers_and_reject_invalid_data() {
     assert_eq!(
