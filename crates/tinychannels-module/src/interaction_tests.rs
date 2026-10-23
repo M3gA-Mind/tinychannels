@@ -189,6 +189,48 @@ impl tinychannels::channel::ChannelAdapter for NativeDescribeAdapter {
 #[derive(Default)]
 struct NativeDraftLifecyclePort(Mutex<Vec<String>>);
 
+struct UnsupportedDraftPort;
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelStreamingDraft for UnsupportedDraftPort {}
+
+struct FailedDraftPort;
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelStreamingDraft for FailedDraftPort {
+    async fn start_draft(
+        &self,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<Option<String>, tinychannels::channel::ChannelSendError> {
+        Err(tinychannels::channel::ChannelSendError {
+            message: "provider failed".into(),
+            ..Default::default()
+        })
+    }
+
+    async fn update_draft(
+        &self,
+        _draft_id: &str,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<(), tinychannels::channel::ChannelSendError> {
+        Err(tinychannels::channel::ChannelSendError {
+            message: "provider failed".into(),
+            ..Default::default()
+        })
+    }
+
+    async fn finalize_draft(
+        &self,
+        _draft_id: &str,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<(), tinychannels::channel::ChannelSendError> {
+        Err(tinychannels::channel::ChannelSendError {
+            message: "provider failed".into(),
+            ..Default::default()
+        })
+    }
+}
+
 #[async_trait::async_trait]
 impl tinychannels::channel::ChannelStreamingDraft for NativeDraftLifecyclePort {
     async fn start_draft(
@@ -323,6 +365,65 @@ async fn native_draft_lifecycle_converts_v1_interactions_to_scoped_typed_intents
             "finalize:draft-id:final"
         ]
     );
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn native_draft_dispatch_falls_back_only_for_unsupported_provider_operations() {
+    let adapter = NativeDescribeAdapter;
+    let drafts = UnsupportedDraftPort;
+    for interaction in [
+        ChannelInteraction::SendDraft {
+            message: SendMessage::new("partial", "room"),
+        },
+        ChannelInteraction::UpdateDraft {
+            recipient: "room".into(),
+            message_id: "draft-1".into(),
+            text: "updated".into(),
+        },
+        ChannelInteraction::FinalizeDraft {
+            recipient: "room".into(),
+            message_id: "draft-1".into(),
+            text: "final".into(),
+            thread_ts: None,
+        },
+    ] {
+        assert!(
+            dispatch_native_draft(&adapter, &drafts, "fixture:configured", interaction)
+                .await
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn native_draft_dispatch_keeps_provider_failures_as_errors() {
+    let adapter = NativeDescribeAdapter;
+    let drafts = FailedDraftPort;
+    for interaction in [
+        ChannelInteraction::SendDraft {
+            message: SendMessage::new("partial", "room"),
+        },
+        ChannelInteraction::UpdateDraft {
+            recipient: "room".into(),
+            message_id: "draft-1".into(),
+            text: "updated".into(),
+        },
+        ChannelInteraction::FinalizeDraft {
+            recipient: "room".into(),
+            message_id: "draft-1".into(),
+            text: "final".into(),
+            thread_ts: None,
+        },
+    ] {
+        assert!(
+            dispatch_native_draft(&adapter, &drafts, "fixture:configured", interaction)
+                .await
+                .expect("operation is supported")
+                .is_err()
+        );
+    }
 }
 
 #[tokio::test]
