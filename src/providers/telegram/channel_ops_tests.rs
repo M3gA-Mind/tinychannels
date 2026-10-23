@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+use base64::Engine as _;
 
 /// Hang guard for loops that must terminate on their own.
 const GUARD: Duration = Duration::from_secs(20);
@@ -398,6 +399,60 @@ fn image_message(opaque_id: &str) -> tinychannels_bus::ChannelOutboundMessage {
             },
         }],
     }
+}
+
+#[derive(Clone)]
+struct ReadVoiceFixture {
+    stored: tinychannels_bus::HostReadVoiceMediaResult,
+    reads: Arc<std::sync::Mutex<Vec<(tinychannels_bus::HostVoiceScope, String)>>>,
+}
+
+#[async_trait::async_trait]
+impl crate::host::VoiceMediaStore for ReadVoiceFixture {
+    async fn store_voice(
+        &self,
+        _request: crate::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        anyhow::bail!("fixture is read-only")
+    }
+
+    async fn read_voice(
+        &self,
+        scope: tinychannels_bus::HostVoiceScope,
+        opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        self.reads.lock().unwrap().push((scope, opaque_id));
+        Ok(self.stored.clone())
+    }
+}
+
+fn voice_message(
+    opaque_id: &str,
+    transcript: Option<String>,
+    codec: Option<&str>,
+) -> tinychannels_bus::ChannelOutboundMessage {
+    let mut message = image_message("voice-send-1");
+    message.reply_to_id = Some("27".into());
+    message.parts = vec![
+        tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some(opaque_id.into()),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    ..Default::default()
+                },
+                codec: codec.map(str::to_owned),
+                duration_ms: Some(1_001),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: transcript.unwrap_or_default(),
+                markdown_dialect: None,
+            },
+        },
+    ];
+    message
 }
 
 fn png_with_dimensions(width: u32, height: u32) -> Vec<u8> {
