@@ -201,6 +201,28 @@ async fn typed_send_validation_rejects_unsupported_parts_and_invalid_reply_ids()
 }
 
 #[tokio::test]
+async fn typed_send_validation_allows_host_media_when_scoped_repository_is_available() {
+    let server = mock_api().await;
+    let repository = ReadMediaFixture {
+        stored: crate::host::StoredMedia {
+            media: tinychannels_bus::MediaReference {
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            content_type: "image/png".into(),
+            file_name: Some("preview.png".into()),
+            bytes: png_with_dimensions(1, 1),
+        },
+        reads: Arc::default(),
+    };
+    let channel = channel_for(&server, &["*"]).with_media_repository(Arc::new(repository));
+
+    assert!(
+        ChannelAdapter::validate_typed_send(&channel, &image_message("opaque-photo-1")).is_ok()
+    );
+}
+
+#[tokio::test]
 async fn typed_send_receipt_rejects_non_text_parts_before_provider_io() {
     let server = mock_api().await;
     let ch = channel_for(&server, &["*"]);
