@@ -58,7 +58,7 @@ fn text_submission_maps_addressing_and_authority() {
     assert_eq!(envelope.sender.id, "client-7");
     assert_eq!(envelope.text, "hello");
     assert_eq!(envelope.parts.len(), 1);
-    assert!(envelope.access.command_authorized);
+    assert!(!envelope.access.command_authorized);
     assert_eq!(envelope.raw.as_ref().unwrap()["queueMode"], "interrupt");
 }
 
@@ -71,11 +71,35 @@ fn anonymous_submissions_do_not_authorize_commands() {
 #[test]
 fn client_input_cannot_choose_the_authenticated_sender() {
     let parsed: WebChatStart = serde_json::from_str(
-        r#"{"clientId":"client-7","threadId":"thread-9","requestId":"request-2","text":"hello","senderId":"forged-user"}"#,
+        r#"{"clientId":"client-7","threadId":"thread-9","requestId":"request-2","text":"hello","senderId":"forged-user","commandAuthorized":true}"#,
     )
     .unwrap();
+    assert_eq!(parsed.sender_id, None);
+    assert!(!parsed.command_authorized);
     let envelope = normalize_chat_start(&parsed, None).unwrap();
     assert_eq!(envelope.sender.id, "client-7");
+    assert!(!envelope.access.command_authorized);
+}
+
+#[test]
+fn command_authority_requires_a_host_authenticated_sender() {
+    let mut authenticated = start();
+    authenticated.sender_id = Some("user-1".into());
+    authenticated.command_authorized = true;
+    assert!(
+        normalize_chat_start(&authenticated, None)
+            .unwrap()
+            .access
+            .command_authorized
+    );
+
+    authenticated.sender_id = None;
+    assert!(
+        !normalize_chat_start(&authenticated, None)
+            .unwrap()
+            .access
+            .command_authorized
+    );
 }
 
 #[test]

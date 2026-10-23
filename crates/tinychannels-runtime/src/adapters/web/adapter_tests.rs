@@ -159,28 +159,42 @@ async fn publish_output_stamps_seq_per_turn_and_resets_after_a_terminal_event() 
 #[tokio::test]
 async fn failed_terminal_output_keeps_its_sequence_until_delivery_succeeds() {
     let (adapter, sink) = adapter();
-    adapter.publish_output("c", "t", "r", delta("a")).await.unwrap();
+    adapter
+        .publish_output("c", "t", "r", delta("a"))
+        .await
+        .unwrap();
     sink.fail.store(true, Ordering::SeqCst);
     let terminal = ChannelOutputEvent::FinalMessage {
         text: "done".into(),
         parts: Vec::new(),
         receipt: None,
     };
-    assert!(adapter
-        .publish_output("c", "t", "r", terminal.clone())
-        .await
-        .is_err());
+    assert!(
+        adapter
+            .publish_output("c", "t", "r", terminal.clone())
+            .await
+            .is_err()
+    );
 
     sink.fail.store(false, Ordering::SeqCst);
-    adapter.publish_output("c", "t", "r", terminal).await.unwrap();
-    adapter.publish_output("c", "t", "r", delta("next")).await.unwrap();
+    adapter
+        .publish_output("c", "t", "r", terminal)
+        .await
+        .unwrap();
+    adapter
+        .publish_output("c", "t", "r", delta("next"))
+        .await
+        .unwrap();
     assert_eq!(seqs(&sink), [1, 3, 1]);
 }
 
 #[tokio::test]
 async fn host_terminal_event_keeps_projector_on_failure_and_clears_after_success() {
     let (adapter, sink) = adapter();
-    adapter.publish_output("c", "t", "r", delta("a")).await.unwrap();
+    adapter
+        .publish_output("c", "t", "r", delta("a"))
+        .await
+        .unwrap();
     let terminal = WebChannelEvent::ChatDone {
         context: WebEventContext {
             client_id: "c".into(),
@@ -198,15 +212,17 @@ async fn host_terminal_event_keeps_projector_on_failure_and_clears_after_success
     sink.fail.store(true, Ordering::SeqCst);
     assert!(adapter.publish_event(terminal.clone()).await.is_err());
     sink.fail.store(false, Ordering::SeqCst);
-    adapter.publish_output("c", "t", "r", delta("still same turn"))
+    adapter
+        .publish_output("c", "t", "r", delta("still same turn"))
         .await
         .unwrap();
     adapter.publish_event(terminal).await.unwrap();
-    adapter.publish_output("c", "t", "r", delta("new turn"))
+    adapter
+        .publish_output("c", "t", "r", delta("new turn"))
         .await
         .unwrap();
 
-    assert_eq!(seqs(&sink), [1, 2, 1]);
+    assert_eq!(seqs(&sink), [1, 2, 0, 1]);
 }
 
 #[tokio::test]
