@@ -300,6 +300,166 @@ async fn channel_send_short_message_retries_plain_preserving_thread_and_reply() 
 }
 
 #[tokio::test]
+async fn media_upload_includes_routing_caption_title_and_rounded_duration() {
+    let server = mock_api().await;
+    mount_post(&server, "sendAudio", ok_with(serde_json::json!({"message_id": 84}))).await;
+    let ch = channel_for(&server, &["*"]);
+
+    let id = ch
+        .send_media_bytes_with_id(TelegramMediaUpload {
+            method: "sendAudio",
+            field: "audio",
+            chat_id: "chat-1",
+            thread_id: Some("topic-2"),
+            reply_to_id: Some("17"),
+            caption: Some("A recording"),
+            title: Some("Meeting"),
+            duration_ms: Some(1_001),
+            bytes: vec![1, 2, 3],
+            content_type: "audio/ogg",
+            file_name: "voice.ogg",
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(id, "84");
+    let bodies = raw_bodies(&server, "sendAudio").await;
+    assert_eq!(bodies.len(), 1);
+    for field in [
+        "name=\"chat_id\"\r\n\r\nchat-1",
+        "name=\"message_thread_id\"\r\n\r\ntopic-2",
+        "name=\"reply_parameters\"\r\n\r\n{\\\"message_id\\\":17}",
+        "name=\"caption\"\r\n\r\nA recording",
+        "name=\"title\"\r\n\r\nMeeting",
+        "name=\"duration\"\r\n\r\n2",
+        "filename=\"voice.ogg\"",
+        "Content-Type: audio/ogg",
+    ] {
+        assert!(bodies[0].contains(field), "multipart body missing {field:?}");
+    }
+}
+
+#[tokio::test]
+async fn media_and_voice_uploads_reject_invalid_inputs_before_network_access() {
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["*"]);
+    let media = |bytes, reply_to_id, content_type| TelegramMediaUpload {
+        method: "sendPhoto",
+        field: "photo",
+        chat_id: "chat-1",
+        thread_id: None,
+        reply_to_id,
+        caption: None,
+        title: None,
+        duration_ms: None,
+        bytes,
+        content_type,
+        file_name: "image.png",
+    };
+
+    assert!(ch.send_media_bytes_with_id(media(vec![], None, "image/png")).await.is_err());
+    assert!(ch
+        .send_media_bytes_with_id(media(vec![1], Some("not-an-id"), "image/png"))
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("reply target is invalid"));
+    assert!(ch
+        .send_media_bytes_with_id(media(vec![1], None, "not a mime type"))
+        .await
+        .is_err());
+
+    assert!(ch
+        .send_voice_bytes_with_id(TelegramVoiceUpload {
+            method: "sendVoice",
+            field: "voice",
+            chat_id: "chat-1",
+            thread_id: None,
+            reply_to_id: Some("bad"),
+            caption: None,
+            bytes: vec![1],
+            file_name: "voice.ogg",
+        })
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("reply target is invalid"));
+
+    let too_large = vec![0; 20 * 1024 * 1024 + 1];
+    assert!(ch
+        .send_media_bytes_with_id(media(too_large, None, "image/png"))
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("inline limit"));
+    let too_large = vec![0; 8 * 1024 * 1024 + 1];
+    assert!(ch
+        .send_voice_bytes_with_id(TelegramVoiceUpload {
+            method: "sendVoice",
+            field: "voice",
+            chat_id: "chat-1",
+            thread_id: None,
+            reply_to_id: None,
+            caption: None,
+            bytes: too_large,
+            file_name: "voice.ogg",
+        })
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("inline limit"));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn upload_receipt_requires_success_status_and_a_message_id() {
+    for response in [
+        ResponseTemplate::new(400).set_body_json(serde_json::json!({"ok": false})),
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true, "result": {}})),
+    ] {
+        let server = mock_api().await;
+        mount_post(&server, "sendVoice", response).await;
+        let ch = channel_for(&server, &["*"]);
+        let error = ch
+            .send_voice_bytes_with_id(TelegramVoiceUpload {
+                method: "sendVoice",
+                field: "voice",
+                chat_id: "chat-1",
+                thread_id: Some("topic-3"),
+                reply_to_id: Some("12"),
+                caption: Some("spoken"),
+                bytes: vec![1, 2],
+                file_name: "voice.ogg",
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("unsuccessful or unknown receipt")
+            || error.to_string().contains("omitted message receipt"));
+        let body = raw_bodies(&server, "sendVoice").await;
+        assert!(body[0].contains("name=\"message_thread_id\"\r\n\r\ntopic-3"));
+        assert!(body[0].contains("name=\"reply_parameters\""));
+        assert!(body[0].contains("name=\"caption\"\r\n\r\nspoken"));
+    }
+}
+
+#[tokio::test]
+async fn custom_reaction_uses_custom_emoji_id_and_rejects_blank_values() {
+    let server = mock_api().await;
+    mount_post(&server, "setMessageReaction", ok()).await;
+    let ch = channel_for(&server, &["*"]);
+
+    assert!(!ch.send_message_custom_reaction("1", 2, "  ").await.unwrap());
+    assert!(ch
+        .send_message_custom_reaction("1", 2, " custom-emoji ")
+        .await
+        .unwrap());
+    let bodies = json_bodies(&server, "setMessageReaction").await;
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(bodies[0]["reaction"][0]["type"], "custom_emoji");
+    assert_eq!(bodies[0]["reaction"][0]["custom_emoji_id"], "custom-emoji");
+}
+
+#[tokio::test]
 async fn send_text_chunks_fails_when_markdown_and_plain_both_rejected() {
     let server = mock_api().await;
     Mock::given(method("POST"))
