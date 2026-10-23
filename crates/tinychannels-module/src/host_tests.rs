@@ -319,9 +319,7 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
 #[tokio::test]
 async fn module_host_rejects_empty_speech_results() {
     let (host, callback, _server) = connected_host().await;
-    callback
-        .empty_speech_result
-        .store(true, Ordering::SeqCst);
+    callback.empty_speech_result.store(true, Ordering::SeqCst);
     let error = host
         .synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
             scope: tinychannels_bus::HostVoiceScope {
