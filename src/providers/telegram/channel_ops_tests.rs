@@ -4,7 +4,6 @@ use crate::channel::{
     LegacyChannelReaction,
 };
 use crate::providers::telegram::fixtures::*;
-use base64::Engine as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{body_partial_json, method, path};
@@ -640,7 +639,7 @@ async fn oversized_voice_transcript_is_sent_as_a_follow_up_with_combined_receipt
         reads: Arc::default(),
     };
     let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(store));
-    let transcript = "spoken detail ".repeat(100);
+    let transcript = format!("{}spoken detail", "spoken detail ".repeat(99));
 
     let outcome = channel
         .send_v2_with_receipt(&voice_message(
