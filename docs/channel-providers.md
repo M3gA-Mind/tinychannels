@@ -25,20 +25,23 @@ centralized from `src/lib.rs` and `src/providers/mod.rs`.
 
 ## Provider and host boundary
 
-Providers run inside the TinyChannels module. OpenHuman sends typed bus
-operations to the configured module instead of constructing provider objects.
-Provider-specific events are normalized into `ChannelInboundEnvelope` with
-ordered typed content; outbound sends preserve typed parts and return a
-structured receipt. The host supplies scoped capabilities such as media reads,
-speech, and event publication without taking ownership of provider transport.
+Configured providers run inside the TinyChannels module as adapter-backed
+`BuiltChannel` instances. OpenHuman sends typed bus operations to the configured
+module instead of constructing provider objects. Provider-specific events are
+normalized into `ChannelInboundEnvelope` with ordered typed content; outbound
+sends preserve typed parts and return a structured receipt. The host supplies
+scoped capabilities such as media, speech, event publication, and storage
+without taking ownership of provider transport or delivery policy. Legacy
+`Channel` and `ChannelBackend` APIs remain compatibility surfaces and are not
+the module's production factory path.
 
 ## Conformance matrix
 
-The shared `tinychannels-conformance` crate defines the 24 canonical cases.
-Provider test suites run the matrix against mock transports and check declared
-support against observed requests and receipts. This table identifies the
-current full-matrix suites; it is a test-coverage index, not a claim that all
-providers support every feature.
+The shared `tinychannels-conformance` crate defines 24 canonical cases.
+Provider test suites run the applicable cases against mock transports and
+check declared support against observed requests and receipts. This table is a
+test-coverage index, not a claim that each listed suite runs every case or that
+all providers support every feature.
 
 | Provider | Conformance suite |
 | --- | --- |
@@ -55,21 +58,20 @@ providers support every feature.
 | WhatsApp Cloud and Web | `providers/whatsapp*/conformance_tests.rs` |
 | Yuanbao | `providers/yuanbao/conformance_tests.rs` |
 
-The matrix names the operations being tested. The provider descriptor and
-mock-wire assertion in each suite are authoritative for its supported subset.
-The Telegram suite runs the same 24 canonical cases against the configured
-adapter and mock wire. IRC has a full 24-case suite against a local protocol
-peer. Controller-mediated operations are checked separately from these 24
-provider cases.
+The matrix names the operations being tested. The configured provider
+descriptor and mock-wire assertion in each suite are authoritative for its
+supported subset. Some providers have broad conformance coverage; others have
+focused suites or exercise only the cases their transport supports. Controller-
+mediated operations are checked separately from the shared cases.
 
 ## Declared capability overview
 
 These are descriptor declarations, not a promise that every configured account
 has every capability. Provider constructors derive the descriptor from the
 services and protocol options actually wired for that account. `conditional`
-means the capability is omitted until its required host service or provider
-option is present; consult the provider's capability implementation for the
-accepted MIME types, limits, and exact events.
+means the capability depends on host services, provider options, or protocol
+support; consult the provider's capability implementation for accepted MIME
+types, limits, and exact events. The runtime descriptor is authoritative.
 
 | Provider | Text | Typed media | Voice | Addressing and interaction highlights |
 | --- | --- | --- | --- | --- |

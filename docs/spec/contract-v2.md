@@ -370,19 +370,20 @@ versioned relay capability exchange. The harness exposes turn admission,
 inbound lifecycle stages, and output events. Wire revision 22 and module
 operation version 1.23 are current contract facts.
 
-The provider implementation has not caught up with those shared surfaces. At
-this revision, the built-in direct providers still implement the legacy
-`Channel` trait; no built-in provider implements `ChannelAdapter` with a v2
-descriptor. Provider voice paths may transcribe audio before legacy dispatch,
-and legacy paths still contain textual media markers. Therefore typed bus
-types, event schemas, and the unified descriptor are implemented, while
-provider adoption, marker removal, and conformance for every declared
-capability remain migration requirements. See the provider migration snapshot
-in the [wiki](https://github.com/tinyhumansai/tinychannels/wiki/Providers).
+The configured-provider factory now returns adapter-backed `BuiltChannel`
+instances to the module runtime. The legacy `Channel` APIs remain for source
+compatibility, but are not the production factory path. Provider support still
+varies by configured account and installed host services; the runtime
+descriptor and mock-wire conformance tests define that support. Provider
+sources are also checked to ensure media is carried as typed content rather
+than textual media markers. See the [provider capability and conformance
+matrix](../channel-providers.md) and the provider snapshot in the
+[wiki](https://github.com/tinyhumansai/tinychannels/wiki/Providers).
 
-Track implementation status in code changes and release notes, not by editing
-this normative vocabulary to imply that a partially migrated producer has
-finished the contract.
+The migration is complete at the contract and configured-factory boundary;
+individual capability coverage remains provider-specific and should be read
+from the runtime descriptor and conformance results, not inferred from the
+shared types alone.
 
 ## Superseded material
 

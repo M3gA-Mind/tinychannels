@@ -1,9 +1,9 @@
 # Architecture
 
-TinyChannels owns provider I/O and normalization; OpenHuman owns application
-policy and execution. Hosts exchange typed requests, events, and results with
-the loaded module through `tinychannels-bus`, rather than linking provider
-implementations.
+TinyChannels owns provider I/O, normalization, and channel delivery behavior;
+OpenHuman owns application policy and agent execution. Hosts exchange typed
+requests, events, and results with the loaded module through `tinychannels-bus`,
+rather than linking provider implementations.
 
 ## Layered Model
 
@@ -50,8 +50,14 @@ implementations.
                                         |
                                         v
                          +----------------------------+
-                         | Delivery queue             |
-                         | durability + retry policy  |
+                         | TinyChannels delivery      |
+                         | queue + retry policy       |
+                         +----------------------------+
+                                        |
+                                        v
+                         +----------------------------+
+                         | Scoped host storage port   |
+                         | DocumentStore             |
                          +----------------------------+
 ```
 
@@ -64,6 +70,8 @@ TinyChannels owns provider behavior and portable contracts:
 - what a UI setup definition needs to render auth forms
 - what a relay connector sends over the socket
 - provider normalization, capability declarations, and send behavior
+- required-delivery negotiation, queue state, retry, and unknown-send
+  reconciliation
 
 OpenHuman owns host-specific behavior:
 
@@ -71,6 +79,8 @@ OpenHuman owns host-specific behavior:
 - REST/JWT/session authorization
 - model and harness execution
 - durable conversation history, sessions, and run-ledger storage
+- the storage backend and the module's scoped storage grant; TinyChannels uses
+  that grant to persist its own delivery records
 - event-bus fanout and process lifecycle management
 
 The host depends on the bus contract and loaded module. Module operations call
@@ -98,7 +108,8 @@ agent output or controller send
   -> typed outbound request over TinyBus
   -> module/provider send or relay action
   -> typed receipt and delivery result
-  -> host-owned durable queue where required
+  -> TinyChannels delivery queue when required
+  -> DocumentStore over the module's scoped host storage capability
 ```
 
 Setup and control:
@@ -117,4 +128,5 @@ Compatibility DTOs remain at selected migration boundaries. New host
 integration should use bus DTOs and operations, preserve typed content and
 address fields, and keep authenticated relay provenance outside serialized
 message data. Provider normalization prepares identity inputs; OpenHuman selects
-and persists the durable conversation session.
+and persists the durable conversation session. The module owns delivery policy
+and records; the host provides the storage backend and scope.

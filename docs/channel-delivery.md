@@ -1,6 +1,9 @@
 # Delivery
 
-`src/delivery/` owns durable outbound delivery state and retry policy.
+TinyChannels owns durable outbound delivery state and retry policy in
+`src/delivery/`. The module runs the queue and its provider handler. It stores
+records through `DocumentDeliveryStore` over a `DocumentStore`; the loaded
+module obtains that store through its scoped host storage capability.
 
 ## Goals
 
@@ -30,6 +33,11 @@ against adapter-advertised capabilities.
 `negotiate_delivery_durability` downgrades to best effort when required
 capabilities are missing.
 
+A capability declaration is the provider's statement, not proof of behavior.
+Use required durability only when conformance coverage verifies enqueue
+ordering, retries, and unknown-send reconciliation for the relevant payload
+and address shape.
+
 ## Queue State Machine
 
 The queue module provides operations for:
@@ -43,8 +51,15 @@ The queue module provides operations for:
 - loading and draining pending deliveries
 - recovering pending deliveries in enqueue order
 
-`DeliveryQueueStore` owns persistence. `DeliveryQueueHandler` owns the actual
-send and unknown-send reconciliation behavior.
+`DeliveryQueueStore` and `DeliveryResultStore` define the persistence ports.
+TinyChannels' `DocumentDeliveryStore` stores pending, failed, and terminal
+records in `channels.delivery_pending`, `channels.delivery_failed`, and
+`channels.delivery_results`. The module's host-store adapter supplies the
+scoped `DocumentStore`; OpenHuman owns the backend and grant, while TinyChannels
+owns the queue records and state transitions. If storage is unavailable, the
+module reports the capability as unsupported; it does not silently switch to
+an in-memory queue. `DeliveryQueueHandler` owns provider send and unknown-send
+reconciliation behavior.
 
 ## Retry Policy
 

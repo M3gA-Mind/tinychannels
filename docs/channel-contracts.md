@@ -15,6 +15,12 @@ provider implementation details stay behind that boundary. The
 `tinychannels-runtime` crate contains shared provider algorithms, and
 `tinychannels-module` exposes configured behavior through TinyBus.
 
+The production provider factory returns `BuiltChannel` values backed by the
+`ChannelAdapter` runtime contract. Optional adapter ports add provider-specific
+operations such as typing, reactions, edits, deletes, and streaming drafts. The
+older `Channel` and `ChannelBackend` APIs remain compatibility surfaces; the
+module does not use the legacy test adapter as its production provider path.
+
 Compatibility conversion is explicit. Legacy `thread_ts` maps to the
 appropriate thread or topic address without changing its serialized field.
 Text projections preserve text-part order, and non-text content must not be
@@ -85,6 +91,10 @@ Provider capability data is split by concern:
 - `DurableFinalDeliveryCapability` describes whether a provider can guarantee
   durable final delivery for text, media, polls, payloads, replies, threads,
   reconciliation, hooks, batch sends, and commit timing.
+
+Configured adapter descriptors are the runtime source of truth. The provider
+matrix documents declared and tested support; it does not promise that every
+provider or account supports every content kind or action.
 
 ## Provider conformance
 
