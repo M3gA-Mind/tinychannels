@@ -1133,6 +1133,256 @@ async fn structured_sends_map_location_venue_contact_buttons_poll_and_presentati
 }
 
 #[tokio::test]
+async fn structured_sends_reject_invalid_bot_api_payloads_before_network_io() {
+    use tinychannels_bus::{ButtonAction, ContactMethod, ContentPart, OutboundContentPart};
+
+    let content = |part| OutboundContentPart::Content { part };
+    let button = |id: &str, style, disabled| ButtonAction {
+        id: id.into(),
+        label: "Continue".into(),
+        style,
+        disabled,
+    };
+    let mut cases = vec![
+        (
+            "location coordinates",
+            vec![content(ContentPart::Location {
+                latitude: f64::NAN,
+                longitude: 0.0,
+                label: None,
+                address: None,
+                accuracy_meters: None,
+                live_until_unix_ms: None,
+            })],
+        ),
+        (
+            "incomplete venue",
+            vec![content(ContentPart::Location {
+                latitude: 0.0,
+                longitude: 0.0,
+                label: Some("Office".into()),
+                address: None,
+                accuracy_meters: None,
+                live_until_unix_ms: None,
+            })],
+        ),
+        (
+            "venue with live location metadata",
+            vec![content(ContentPart::Location {
+                latitude: 0.0,
+                longitude: 0.0,
+                label: Some("Office".into()),
+                address: Some("1 Main St".into()),
+                accuracy_meters: Some(1.0),
+                live_until_unix_ms: None,
+            })],
+        ),
+        (
+            "invalid accuracy",
+            vec![content(ContentPart::Location {
+                latitude: 0.0,
+                longitude: 0.0,
+                label: None,
+                address: None,
+                accuracy_meters: Some(1501.0),
+                live_until_unix_ms: None,
+            })],
+        ),
+        (
+            "expired live location",
+            vec![content(ContentPart::Location {
+                latitude: 0.0,
+                longitude: 0.0,
+                label: None,
+                address: None,
+                accuracy_meters: None,
+                live_until_unix_ms: Some(0),
+            })],
+        ),
+        (
+            "contact without a phone",
+            vec![content(ContentPart::Contact {
+                display_name: "Ada Lovelace".into(),
+                phone_numbers: vec![],
+                emails: vec![],
+                organization: None,
+            })],
+        ),
+        (
+            "contact with oversized phone",
+            vec![content(ContentPart::Contact {
+                display_name: "Ada Lovelace".into(),
+                phone_numbers: vec![ContactMethod {
+                    value: "1".repeat(257),
+                    label: None,
+                }],
+                emails: vec![],
+                organization: None,
+            })],
+        ),
+        (
+            "contact with oversized vcard",
+            vec![content(ContentPart::Contact {
+                display_name: "A".repeat(2050),
+                phone_numbers: vec![ContactMethod {
+                    value: "+1".into(),
+                    label: None,
+                }],
+                emails: vec![],
+                organization: None,
+            })],
+        ),
+        (
+            "buttons without text",
+            vec![content(ContentPart::Buttons {
+                rows: vec![vec![button("continue", None, false)]],
+            })],
+        ),
+        (
+            "disabled button",
+            vec![
+                content(ContentPart::Text {
+                    text: "Choose".into(),
+                    markdown_dialect: None,
+                }),
+                content(ContentPart::Buttons {
+                    rows: vec![vec![button("continue", None, true)]],
+                }),
+            ],
+        ),
+        (
+            "styled button",
+            vec![
+                content(ContentPart::Text {
+                    text: "Choose".into(),
+                    markdown_dialect: None,
+                }),
+                content(ContentPart::Buttons {
+                    rows: vec![vec![button(
+                        "continue",
+                        Some(tinychannels_bus::ButtonStyle::Primary),
+                        false,
+                    )]],
+                }),
+            ],
+        ),
+        (
+            "empty callback id",
+            vec![
+                content(ContentPart::Text {
+                    text: "Choose".into(),
+                    markdown_dialect: None,
+                }),
+                content(ContentPart::Buttons {
+                    rows: vec![vec![button("", None, false)]],
+                }),
+            ],
+        ),
+        (
+            "empty keyboard",
+            vec![
+                content(ContentPart::Text {
+                    text: "Choose".into(),
+                    markdown_dialect: None,
+                }),
+                content(ContentPart::Buttons { rows: vec![vec![]] }),
+            ],
+        ),
+        (
+            "poll with too few options",
+            vec![content(ContentPart::Poll {
+                question: "Lunch?".into(),
+                options: vec!["Soup".into()],
+                multiple_choice: false,
+                closes_at_unix_ms: None,
+                provider_poll_id: None,
+            })],
+        ),
+        (
+            "poll with blank option",
+            vec![content(ContentPart::Poll {
+                question: "Lunch?".into(),
+                options: vec!["Soup".into(), "  ".into()],
+                multiple_choice: false,
+                closes_at_unix_ms: None,
+                provider_poll_id: None,
+            })],
+        ),
+        (
+            "poll with invalid close time",
+            vec![content(ContentPart::Poll {
+                question: "Lunch?".into(),
+                options: vec!["Soup".into(), "Salad".into()],
+                multiple_choice: false,
+                closes_at_unix_ms: Some(0),
+                provider_poll_id: None,
+            })],
+        ),
+        (
+            "empty presentation",
+            vec![content(ContentPart::Presentation {
+                blocks: serde_json::json!([]),
+            })],
+        ),
+        (
+            "unsupported native content",
+            vec![content(ContentPart::Native {
+                provider: "other".into(),
+                data: serde_json::json!({}),
+            })],
+        ),
+    ];
+
+    cases.push((
+        "mixed structured content",
+        vec![
+            content(ContentPart::Location {
+                latitude: 0.0,
+                longitude: 0.0,
+                label: None,
+                address: None,
+                accuracy_meters: None,
+                live_until_unix_ms: None,
+            }),
+            content(ContentPart::Text {
+                text: "extra".into(),
+                markdown_dialect: None,
+            }),
+        ],
+    ));
+
+    let server = mock_api().await;
+    for (label, parts) in cases {
+        let message = structured_message(parts);
+        assert!(
+            channel_for(&server, &["*"])
+                .send_v2_with_receipt(&message)
+                .await
+                .is_err(),
+            "accepted invalid structured payload: {label}"
+        );
+    }
+
+    let mut missing_conversation = structured_message(vec![content(ContentPart::Location {
+        latitude: 0.0,
+        longitude: 0.0,
+        label: None,
+        address: None,
+        accuracy_meters: None,
+        live_until_unix_ms: None,
+    })]);
+    missing_conversation.conversation_ref.as_mut().unwrap().id = "  ".into();
+    assert!(
+        channel_for(&server, &["*"])
+            .send_v2_with_receipt(&missing_conversation)
+            .await
+            .is_err(),
+        "accepted a structured send without a conversation"
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn callback_ingress_preserves_actor_scope_and_authorizes_only_numeric_id_or_username() {
     let update = serde_json::json!({
         "update_id": 9001,
