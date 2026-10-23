@@ -2,6 +2,7 @@ use super::*;
 use tinychannels_bus::channel::{
     VoiceNote, VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState,
 };
+use tinychannels_bus::web::QueueMode;
 
 fn start() -> WebChatStart {
     WebChatStart {

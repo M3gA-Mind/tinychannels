@@ -7,7 +7,7 @@ use tinychannels_bus::channel::{
     AccessContext, ChannelInboundEnvelope, ChannelRef, ContentPart, ConversationKind,
     ConversationRef, MediaReference, SendErrorKind, SenderDmDecision, SenderRef,
 };
-use tinychannels_bus::web::{QueueMode, WebChatStart};
+use tinychannels_bus::web::WebChatStart;
 
 /// Channel id the in-app chat is registered under.
 pub const WEB_CHANNEL_ID: &str = "web";
