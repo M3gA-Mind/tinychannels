@@ -888,9 +888,10 @@ async fn provider_fills_missing_receipt_scope_from_the_submitted_message() {
 
     let mut message = SendMessage::new("hello", "chat-7");
     message.thread_ts = Some("thread-3".into());
+    message.idempotency_key = Some("send-42".into());
     let receipt = running.send(message).await.unwrap();
 
-    assert_eq!(receipt.idempotency_key.as_deref(), Some("telegram:primary:chat-7"));
+    assert_eq!(receipt.idempotency_key.as_deref(), Some("send-42"));
     assert_eq!(
         receipt.channel,
         Some(tinychannels_bus::ChannelRef {
@@ -898,7 +899,10 @@ async fn provider_fills_missing_receipt_scope_from_the_submitted_message() {
             account_id: Some("telegram:primary".into()),
         })
     );
-    assert_eq!(receipt.conversation.as_ref().map(|r| r.id.as_str()), Some("chat-7"));
+    assert_eq!(
+        receipt.conversation.as_ref().map(|r| r.id.as_str()),
+        Some("chat-7")
+    );
     assert_eq!(receipt.thread_id.as_deref(), Some("thread-3"));
     running.stop().await.unwrap();
 }
