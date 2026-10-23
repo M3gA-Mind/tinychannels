@@ -900,6 +900,34 @@ async fn typed_legacy_projection_failure_is_not_reported_as_dispatched() {
     running.stop().await.unwrap();
 }
 
+#[tokio::test]
+async fn legacy_adapter_rejects_unsupported_typed_content_before_send() {
+    let sends = Arc::new(AtomicUsize::new(0));
+    let adapter = LegacyChannelAdapter(Arc::new(LegacyTextOnlyChannel(sends.clone())));
+    let message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "legacy-text-only".into(),
+        conversation_id: "room".into(),
+        channel_ref: None,
+        conversation_ref: None,
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: None,
+        idempotency_key: "typed-image".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: Default::default(),
+                caption: None,
+                alt_text: None,
+            },
+        }],
+    };
+
+    let error = adapter.send_typed(&message).await.unwrap_err();
+
+    assert!(error.is_unsupported());
+    assert_eq!(sends.load(Ordering::SeqCst), 0);
+}
+
 struct CapturingDraftUpsert(
     std::sync::Mutex<
         Option<(
