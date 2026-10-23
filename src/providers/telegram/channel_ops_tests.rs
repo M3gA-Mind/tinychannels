@@ -1,7 +1,7 @@
 use super::*;
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelInboundSink, ChannelTyping,
-    LegacyChannelReaction,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelInboundSink, ChannelStreamingDraft,
+    ChannelTyping, LegacyChannelReaction,
 };
 use crate::providers::telegram::fixtures::*;
 use std::sync::Arc;
@@ -359,6 +359,99 @@ fn telegram_receipt(message_id: Option<&str>) -> tinychannels_bus::channel::Mess
         primary_platform_message_id: message_id.map(str::to_owned),
         ..Default::default()
     }
+}
+
+#[tokio::test]
+async fn native_draft_upsert_creates_and_updates_only_matching_text_receipts() {
+    use tinychannels_bus::{ContentPart, OutboundContentPart, OutboundPayload};
+
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 731 })),
+    )
+    .await;
+    mount_post(&server, "editMessageText", ok()).await;
+    let channel = channel_for(&server, &["*"]);
+
+    let created = channel
+        .upsert_draft(None, edit_intent("-10042"))
+        .await
+        .unwrap();
+    assert_eq!(created.primary_platform_message_id.as_deref(), Some("731"));
+    assert_eq!(created.parts[0].platform_message_id, "731");
+    assert_eq!(
+        json_bodies(&server, "sendMessage").await[0]["text"],
+        "updated  *text*"
+    );
+
+    let updated = channel
+        .upsert_draft(Some(&created), edit_intent("-10042"))
+        .await
+        .unwrap();
+    assert_eq!(updated, created);
+    assert_eq!(
+        json_bodies(&server, "editMessageText").await[0]["message_id"],
+        731
+    );
+
+    let mut invalid_payload = edit_intent("-10042");
+    invalid_payload.payload = OutboundPayload::Parts {
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::Image {
+                media: Default::default(),
+                caption: None,
+                alt_text: None,
+            },
+        }],
+    };
+    assert!(channel.upsert_draft(None, invalid_payload).await.is_err());
+
+    let mut empty_payload = edit_intent("-10042");
+    empty_payload.payload = OutboundPayload::Parts { parts: vec![] };
+    assert!(channel.upsert_draft(None, empty_payload).await.is_err());
+
+    let mut mismatched_conversation = edit_intent("-10042");
+    mismatched_conversation.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10043".into(),
+        ..Default::default()
+    });
+    assert!(
+        channel
+            .upsert_draft(None, mismatched_conversation)
+            .await
+            .is_err()
+    );
+
+    let mut wrong_receipt_scope = created.clone();
+    wrong_receipt_scope.conversation.as_mut().unwrap().id = "-10043".into();
+    assert!(
+        channel
+            .upsert_draft(Some(&wrong_receipt_scope), edit_intent("-10042"))
+            .await
+            .is_err()
+    );
+
+    let no_message_id = telegram_receipt(None);
+    assert!(
+        channel
+            .upsert_draft(Some(&no_message_id), edit_intent("-10042"))
+            .await
+            .is_err()
+    );
+    let invalid_message_id = telegram_receipt(Some("not-numeric"));
+    assert!(
+        channel
+            .upsert_draft(Some(&invalid_message_id), edit_intent("-10042"))
+            .await
+            .is_err()
+    );
+
+    let mut invalid_reply = edit_intent("-10042");
+    invalid_reply.reply_to_id = Some("reply:legacy".into());
+    assert!(channel.upsert_draft(None, invalid_reply).await.is_err());
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
 #[derive(Clone)]
