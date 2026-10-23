@@ -505,11 +505,11 @@ async fn send_typed_rejects_parts_the_web_adapter_does_not_declare() {
 #[tokio::test]
 async fn proactive_typed_send_uses_conversation_reference_thread_id() {
     let (adapter, sink) = adapter();
-    let message = tinyhumans_bus::ChannelOutboundMessage {
+    let message = tinychannels_bus::ChannelOutboundMessage {
         channel_id: "web".into(),
         conversation_id: "parent-conversation".into(),
         channel_ref: None,
-        conversation_ref: Some(tinyhumans_bus::channel::ConversationRef {
+        conversation_ref: Some(tinychannels_bus::channel::ConversationRef {
             id: "parent-conversation".into(),
             thread_id: Some("reply-thread".into()),
             ..Default::default()
