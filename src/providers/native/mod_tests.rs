@@ -133,9 +133,18 @@ async fn optional_operations_default_to_explicitly_unsupported() {
     assert!(!minimal.bundles_steps());
     assert!(
         minimal
-            .deliver_bundle(&Target::default(), &[])
+            .deliver_bundle(
+                &Target {
+                    channel: ChannelRef::default(),
+                    conversation: ConversationRef::default(),
+                    reply_to: None,
+                    thread: None,
+                },
+                &[],
+            )
             .await
-            .unwrap_err()
+            .err()
+            .expect("bundle delivery is unsupported")
             .unsupported
     );
     assert!(
