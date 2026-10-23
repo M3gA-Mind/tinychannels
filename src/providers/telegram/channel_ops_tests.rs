@@ -491,6 +491,37 @@ async fn native_draft_upsert_marks_provider_failures_as_already_attempted() {
     }
 }
 
+#[tokio::test]
+async fn streaming_draft_rejects_non_text_payloads_and_mismatched_scope() {
+    use tinychannels_bus::OutboundPayload;
+
+    let server = mock_api().await;
+    let channel = streaming(&server);
+    let mut non_text = edit_intent("-10042");
+    non_text.payload = OutboundPayload::Structured {
+        content: serde_json::json!({"kind": "approval"}),
+    };
+    let error = crate::channel::ChannelStreamingDraft::start_draft(&channel, non_text)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, crate::channel::SendErrorKind::BadFormat);
+    assert!(error.unsupported);
+    assert!(!error.retryable);
+
+    let mut wrong_scope = edit_intent("-10042");
+    wrong_scope.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "discord".into(),
+        account_id: None,
+    });
+    let error = crate::channel::ChannelStreamingDraft::start_draft(&channel, wrong_scope)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(error.message.contains("scope mismatch"));
+    assert!(!error.retryable);
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
 #[derive(Clone)]
 struct ReadMediaFixture {
     stored: crate::host::StoredMedia,
