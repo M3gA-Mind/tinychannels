@@ -114,6 +114,41 @@ impl NativeProvider for Minimal {
 #[tokio::test]
 async fn optional_operations_default_to_explicitly_unsupported() {
     let minimal = Minimal;
+    assert!(minimal.voice_caption_supported());
+    assert_eq!(minimal.health_state().await, "unknown");
+    assert!(!minimal.supports_webhook_delivery());
+    assert!(minimal
+        .deliver_webhook(None, b"payload")
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("no typed webhook ingress"));
+    minimal
+        .start_listener(&NoopInboundSink)
+        .await
+        .expect("the default listener is a no-op");
+    minimal.stop_listener().await.unwrap();
+    assert!(!minimal.bundles_steps());
+    assert!(minimal
+        .deliver_bundle(&Target::default(), &[])
+        .await
+        .unwrap_err()
+        .unsupported);
+    assert!(minimal
+        .start_draft(ChannelOutboundIntent::default())
+        .await
+        .unwrap_err()
+        .unsupported);
+    assert!(minimal
+        .update_draft("draft-1", ChannelOutboundIntent::default())
+        .await
+        .unwrap_err()
+        .unsupported);
+    assert!(minimal
+        .finalize_draft("draft-1", ChannelOutboundIntent::default())
+        .await
+        .unwrap_err()
+        .unsupported);
     assert!(minimal.set_typing("c", true).await.unwrap_err().unsupported);
     let reaction = ChannelReaction {
         value: "👍".into(),
@@ -159,6 +194,30 @@ async fn optional_operations_default_to_explicitly_unsupported() {
             .unwrap_err()
             .unsupported
     );
+}
+
+struct NoopInboundSink;
+
+#[async_trait]
+impl crate::channel::ChannelInboundSink for NoopInboundSink {
+    async fn push(
+        &self,
+        _envelope: crate::channel::ChannelInboundEnvelope,
+    ) -> Result<(), ChannelSendError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn seen_window_evicts_the_oldest_accepted_key() {
+    let ports = HostPorts::default();
+    for index in 0..SEEN_WINDOW {
+        assert!(ports.mark_seen(format!("event-{index}")));
+    }
+    assert!(!ports.mark_seen("event-0".into()));
+    assert!(ports.mark_seen("event-new".into()));
+    assert!(!ports.has_seen("event-0"));
+    assert!(ports.has_seen("event-new"));
 }
 
 #[tokio::test]
