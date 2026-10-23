@@ -422,6 +422,26 @@ impl Replies {
                     channel_ref: channel_ref.map(|value| *value),
                     conversation: conversation.map(|value| *value),
                 };
+                let previous = entry.output_replay.lock().await.clone();
+                if let Some(applied) = replay_output(previous.as_ref(), &scope, sequence, &events) {
+                    let mut applied = applied?;
+                    retry_failed_output_callbacks(
+                        &Sender::new(self.host.clone()),
+                        &scope,
+                        sequence,
+                        &events,
+                        &mut applied,
+                    )
+                    .await;
+                    if let Some(previous) = entry.output_replay.lock().await.as_mut()
+                        && previous.scope == scope
+                        && previous.sequence == sequence
+                        && previous.events == events
+                    {
+                        previous.result = applied.clone();
+                    }
+                    return output_result(applied);
+                }
                 let (response, wait) = oneshot::channel();
                 entry
                     .commands
@@ -758,27 +778,7 @@ async fn apply_output(
     let previous = output_replay.lock().await.clone();
     if let Some(applied) = replay_output(previous.as_ref(), scope, sequence, &events) {
         let mut applied = applied?;
-        let failures = std::mem::take(&mut applied.output_event_failures);
-        for failed_sequence in failures {
-            let Some(offset) = failed_sequence
-                .checked_sub(sequence)
-                .and_then(|offset| usize::try_from(offset).ok())
-            else {
-                applied.output_event_failures.push(failed_sequence);
-                continue;
-            };
-            let Some(event) = events.get(offset) else {
-                applied.output_event_failures.push(failed_sequence);
-                continue;
-            };
-            if sender
-                .output_event(scope, failed_sequence, event.clone())
-                .await
-                .is_err()
-            {
-                applied.output_event_failures.push(failed_sequence);
-            }
-        }
+        retry_failed_output_callbacks(sender, scope, sequence, &events, &mut applied).await;
         if let Some(previous) = output_replay.lock().await.as_mut()
             && previous.scope == *scope
             && previous.sequence == sequence
@@ -891,6 +891,36 @@ async fn apply_output(
         });
     }
     Ok(applied)
+}
+
+async fn retry_failed_output_callbacks(
+    sender: &Sender,
+    scope: &OutputScope,
+    sequence: u64,
+    events: &[ChannelOutputEvent],
+    applied: &mut AppliedOutput,
+) {
+    let failures = std::mem::take(&mut applied.output_event_failures);
+    for failed_sequence in failures {
+        let Some(offset) = failed_sequence
+            .checked_sub(sequence)
+            .and_then(|offset| usize::try_from(offset).ok())
+        else {
+            applied.output_event_failures.push(failed_sequence);
+            continue;
+        };
+        let Some(event) = events.get(offset) else {
+            applied.output_event_failures.push(failed_sequence);
+            continue;
+        };
+        if sender
+            .output_event(scope, failed_sequence, event.clone())
+            .await
+            .is_err()
+        {
+            applied.output_event_failures.push(failed_sequence);
+        }
+    }
 }
 
 fn replay_output(

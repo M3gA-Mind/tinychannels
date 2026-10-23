@@ -946,6 +946,56 @@ async fn feed_output_retries_failed_callbacks_without_repeating_typed_delivery()
 }
 
 #[tokio::test]
+async fn replayed_feed_output_retries_only_failed_observation_callbacks() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    *callback.failed_output_sequences.lock().await = vec![40];
+    let event = ChannelOutputEvent::TextDelta {
+        text: "once".into(),
+        iteration: Some(1),
+    };
+    let request = || ProgressiveCommand::FeedOutput {
+        handle: handle.clone(),
+        turn_id: Some("turn-1".into()),
+        channel_ref: None,
+        conversation: None,
+        sequence: 40,
+        events: vec![event.clone()],
+    };
+
+    let ProgressiveResult::OutputUpdated {
+        output_event_failures,
+        ..
+    } = replies.execute(request()).await.unwrap()
+    else {
+        panic!("expected the first callback failure to be reported");
+    };
+    assert_eq!(output_event_failures, vec![40]);
+    *callback.failed_output_sequences.lock().await = vec![];
+
+    assert_eq!(
+        replies.execute(request()).await.unwrap(),
+        ProgressiveResult::Updated
+    );
+    assert_eq!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .filter(|request| matches!(request, ProgressiveTransportRequest::OutputEvent { .. }))
+            .count(),
+        2,
+        "the retry must re-run only the failed output callback"
+    );
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn feed_output_retries_reuse_the_previous_result_without_reapplying_deltas() {
     let (replies, callback) = fixture(false).await;
     let handle = open(&replies).await;
