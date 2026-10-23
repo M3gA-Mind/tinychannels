@@ -454,6 +454,43 @@ async fn native_draft_upsert_creates_and_updates_only_matching_text_receipts() {
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
+#[tokio::test]
+async fn native_draft_upsert_marks_provider_failures_as_already_attempted() {
+    let cases = [
+        (
+            "editMessageText",
+            ResponseTemplate::new(200).set_body_string("bad json"),
+            true,
+        ),
+        (
+            "sendMessage",
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": false })),
+            false,
+        ),
+        (
+            "sendMessage",
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "ok": true, "result": {} })),
+            false,
+        ),
+    ];
+
+    for (method_name, response, existing) in cases {
+        let server = mock_api().await;
+        mount_post(&server, method_name, response).await;
+        let channel = channel_for(&server, &["*"]);
+        let previous = telegram_receipt(Some("81"));
+        let error = channel
+            .upsert_draft(existing.then_some(&previous), edit_intent("-10042"))
+            .await
+            .unwrap_err();
+
+        assert!(error.sent_before_error);
+        assert!(!error.retryable);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+}
+
 #[derive(Clone)]
 struct ReadMediaFixture {
     stored: crate::host::StoredMedia,
