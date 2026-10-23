@@ -42,6 +42,53 @@ pub const WHATSAPP_SYNC_KEY: &str = "channels.whatsapp_sync_key";
 /// LID to phone-number mappings.
 pub const WHATSAPP_LID_MAPPING: &str = "channels.whatsapp_lid_mapping";
 
+/// Legacy delivery queue read and rewritten by the delivery migration.
+pub const LEGACY_DELIVERY_PENDING: &str = "channels_delivery_pending";
+/// Legacy failed-delivery queue read and rewritten by the delivery migration.
+pub const LEGACY_DELIVERY_FAILED: &str = "channels_delivery_failed";
+/// Legacy delivery results read and rewritten by the delivery migration.
+pub const LEGACY_DELIVERY_RESULTS: &str = "channels_delivery_results";
+/// Legacy remote chat bindings read and rewritten by the remote migration.
+pub const LEGACY_REMOTE_BINDINGS: &str = "channel_remote_bindings";
+/// Legacy remote busy markers read and rewritten by the remote migration.
+pub const LEGACY_REMOTE_BUSY: &str = "channel_remote_busy";
+/// Legacy remote metadata marker read by the remote migration.
+pub const LEGACY_REMOTE_META: &str = "channel_remote_meta";
+/// Legacy linked-device record read and rewritten by the WhatsApp migration.
+pub const LEGACY_WHATSAPP_DEVICE: &str = "whatsapp_device";
+/// Legacy WhatsApp identity keys read and rewritten by the migration.
+pub const LEGACY_WHATSAPP_IDENTITY: &str = "whatsapp_identity";
+/// Legacy WhatsApp sessions read and rewritten by the migration.
+pub const LEGACY_WHATSAPP_SESSION: &str = "whatsapp_session";
+/// Legacy WhatsApp one-time pre-keys read and rewritten by the migration.
+pub const LEGACY_WHATSAPP_PREKEY: &str = "whatsapp_prekey";
+/// Legacy WhatsApp signed pre-keys read and rewritten by the migration.
+pub const LEGACY_WHATSAPP_SIGNED_PREKEY: &str = "whatsapp_signed_prekey";
+/// Legacy WhatsApp group sender keys read and rewritten by the migration.
+pub const LEGACY_WHATSAPP_SENDER_KEY: &str = "whatsapp_sender_key";
+/// Legacy WhatsApp app-state sync keys read and rewritten by the migration.
+pub const LEGACY_WHATSAPP_SYNC_KEY: &str = "whatsapp_sync_key";
+/// Legacy WhatsApp LID mappings read and rewritten by the migration.
+pub const LEGACY_WHATSAPP_LID_MAPPING: &str = "whatsapp_lid_mapping";
+
+/// Every legacy source collection read or created by a storage migration.
+pub const MIGRATION_SOURCE_COLLECTIONS: [&str; 14] = [
+    LEGACY_DELIVERY_PENDING,
+    LEGACY_DELIVERY_FAILED,
+    LEGACY_DELIVERY_RESULTS,
+    LEGACY_REMOTE_BINDINGS,
+    LEGACY_REMOTE_BUSY,
+    LEGACY_REMOTE_META,
+    LEGACY_WHATSAPP_DEVICE,
+    LEGACY_WHATSAPP_IDENTITY,
+    LEGACY_WHATSAPP_SESSION,
+    LEGACY_WHATSAPP_PREKEY,
+    LEGACY_WHATSAPP_SIGNED_PREKEY,
+    LEGACY_WHATSAPP_SENDER_KEY,
+    LEGACY_WHATSAPP_SYNC_KEY,
+    LEGACY_WHATSAPP_LID_MAPPING,
+];
+
 /// Every WhatsApp Web collection, in declaration order.
 pub const WHATSAPP_COLLECTIONS: [&str; 8] = [
     WHATSAPP_DEVICE,
@@ -55,7 +102,7 @@ pub const WHATSAPP_COLLECTIONS: [&str; 8] = [
 ];
 
 /// Every collection owned by TinyChannels, in declaration order.
-pub const COLLECTIONS: [&str; 16] = [
+pub const COLLECTIONS: [&str; 30] = [
     DELIVERY_PENDING,
     DELIVERY_FAILED,
     DELIVERY_RESULTS,
@@ -72,6 +119,20 @@ pub const COLLECTIONS: [&str; 16] = [
     WHATSAPP_SENDER_KEY,
     WHATSAPP_SYNC_KEY,
     WHATSAPP_LID_MAPPING,
+    LEGACY_DELIVERY_PENDING,
+    LEGACY_DELIVERY_FAILED,
+    LEGACY_DELIVERY_RESULTS,
+    LEGACY_REMOTE_BINDINGS,
+    LEGACY_REMOTE_BUSY,
+    LEGACY_REMOTE_META,
+    LEGACY_WHATSAPP_DEVICE,
+    LEGACY_WHATSAPP_IDENTITY,
+    LEGACY_WHATSAPP_SESSION,
+    LEGACY_WHATSAPP_PREKEY,
+    LEGACY_WHATSAPP_SIGNED_PREKEY,
+    LEGACY_WHATSAPP_SENDER_KEY,
+    LEGACY_WHATSAPP_SYNC_KEY,
+    LEGACY_WHATSAPP_LID_MAPPING,
 ];
 
 /// Canonical collection shape requested by the scoped media repository.
