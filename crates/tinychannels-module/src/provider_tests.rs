@@ -942,7 +942,7 @@ async fn draft_upsert_fills_missing_receipt_scope_and_preserves_previous_receipt
         ..Default::default()
     };
 
-    let ChannelInteractionResult::Sent(outcome) = dispatch_draft_upsert(
+    let tinychannels_bus::ChannelInteractionResult::Sent(outcome) = dispatch_draft_upsert(
         &drafts,
         "telegram:primary",
         Some(previous.clone()),
@@ -1088,6 +1088,10 @@ async fn typed_send_rejects_a_foreign_account_before_provider_io() {
             account_id: Some("telegram:other".into()),
         }),
         conversation_id: "chat-7".into(),
+        conversation_ref: None,
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: None,
         idempotency_key: "foreign-account".into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Content {
             part: tinychannels_bus::ContentPart::Text {
@@ -1095,7 +1099,6 @@ async fn typed_send_rejects_a_foreign_account_before_provider_io() {
                 markdown_dialect: None,
             },
         }],
-        ..Default::default()
     };
 
     let error = running.send_typed(message).await.unwrap_err();
