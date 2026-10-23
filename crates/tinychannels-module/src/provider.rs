@@ -687,7 +687,15 @@ impl ChannelAdapter for LegacyChannelAdapter {
         self.0
             .send_typed_with_receipt(message)
             .await
-            .map_err(|error| ChannelSendError::new(error.to_string()))
+            .map_err(|error| {
+                let mut error = ChannelSendError::new(error.to_string());
+                // The v21 error has no delivery-state field. Once its send
+                // method returns an error, the compatibility bridge cannot
+                // prove that the provider did not accept the message, so
+                // durable delivery must reconcile instead of replaying it.
+                error.sent_before_error = true;
+                error
+            })
     }
 
     fn validate_typed_send(
