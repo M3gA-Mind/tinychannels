@@ -286,18 +286,18 @@ async fn first_scoped_output_typing_uses_the_output_batch_scope() {
         .execute(ProgressiveCommand::FeedOutput {
             handle,
             turn_id: Some("turn-scoped".into()),
-            channel_ref: Some(tinychannels_bus::ChannelRef {
+            channel_ref: Some(Box::new(tinychannels_bus::ChannelRef {
                 id: "channel-ref".into(),
                 account_id: Some("account-1".into()),
-            }),
-            conversation: Some(tinychannels_bus::ConversationRef {
+            })),
+            conversation: Some(Box::new(tinychannels_bus::ConversationRef {
                 kind: tinychannels_bus::ConversationKind::Thread,
                 id: "conversation-1".into(),
                 scope_id: None,
                 parent_id: Some("parent-1".into()),
                 thread_id: Some("thread-1".into()),
                 topic_id: None,
-            }),
+            })),
             sequence: 1,
             events: vec![ChannelOutputEvent::TextDelta {
                 text: "scoped response".into(),
