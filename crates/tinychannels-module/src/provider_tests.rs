@@ -276,7 +276,7 @@ async fn provider_shutdown_replies_to_queued_sends_as_not_dispatched() {
         let running = running.clone();
         async move { running.send(SendMessage::new("queued", "room")).await }
     });
-    while running.send.len() != 1 {
+    while running.send.capacity() != 255 {
         tokio::task::yield_now().await;
     }
 
