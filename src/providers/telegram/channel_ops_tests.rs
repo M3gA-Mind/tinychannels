@@ -2341,6 +2341,14 @@ fn callback_events_preserve_optional_identity_and_map_conversation_kinds() {
 
 #[test]
 fn typed_send_errors_preserve_dispatch_certainty_and_provider_classification() {
+    assert_eq!(
+        TelegramAttemptedError.to_string(),
+        "Telegram Bot API operation failed after dispatch"
+    );
+    assert_eq!(
+        TelegramUnsupportedError.to_string(),
+        "Telegram Bot API does not support this content operation"
+    );
     let forbidden = typed_send_error(anyhow::Error::new(TelegramPreDispatchError));
     assert_eq!(forbidden.kind, crate::channel::SendErrorKind::Forbidden);
     assert!(!forbidden.sent_before_error);
