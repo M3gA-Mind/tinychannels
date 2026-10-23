@@ -415,7 +415,7 @@ impl HostChannels {
         &self,
         request: HostSpeechSynthesisRequest,
     ) -> Result<HostSpeechSynthesisResult> {
-        let result = self
+        let result: HostSpeechSynthesisResult = self
             .call_host_voice(
                 host_methods::SYNTHESIZE_SPEECH,
                 request,
