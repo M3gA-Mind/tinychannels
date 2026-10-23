@@ -1609,8 +1609,8 @@ async fn adapter_status_reports_health_and_send_returns_typed_receipt() {
     assert_eq!(descriptor.id, "telegram");
     assert_eq!(descriptor.metadata["adapterMode"], "native-v2");
     assert_eq!(ChannelAdapter::proactive_target(&channel), None);
-    assert!(ChannelAdapter::declared_capabilities(&channel).supports_reactions);
-    let mut configured_target = channel.clone();
+    assert!(ChannelAdapter::declared_capabilities(&channel).reactions);
+    let mut configured_target = channel_for(&server, &["*"]);
     configured_target.chat_id = Some("  -10042  ".into());
     assert_eq!(
         ChannelAdapter::proactive_target(&configured_target).as_deref(),
