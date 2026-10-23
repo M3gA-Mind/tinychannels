@@ -179,14 +179,18 @@ async fn media_repository_defaults_reject_streaming_and_deletion() {
     let repository = UnsupportedMediaRepository;
     let stream_error = repository
         .store_media_stream(MediaStreamRequest {
-            metadata: MediaStoreRequest {
+            metadata: MediaMetadata {
                 scope: MediaScope::default(),
+                kind: tinychannels_bus::MediaKind::Unknown,
                 content_type: "application/octet-stream".into(),
                 file_name: None,
-                expected_bytes: 0,
+                duration_ms: None,
+                codec: None,
+                voice_direction: None,
                 dedupe_key: None,
+                max_bytes: 0,
             },
-            reader: Box::pin(tokio::io::empty()),
+            reader: Box::pin(futures_util::stream::empty()),
         })
         .await
         .unwrap_err();
