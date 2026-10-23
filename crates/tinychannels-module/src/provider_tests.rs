@@ -900,6 +900,103 @@ async fn typed_legacy_projection_failure_is_not_reported_as_dispatched() {
     running.stop().await.unwrap();
 }
 
+struct CapturingDraftUpsert(
+    std::sync::Mutex<
+        Option<(
+            Option<tinychannels_bus::channel::MessageReceipt>,
+            tinychannels::channel::ChannelOutboundIntent,
+        )>,
+    >,
+);
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelStreamingDraft for CapturingDraftUpsert {
+    async fn upsert_draft(
+        &self,
+        previous: Option<&tinychannels_bus::channel::MessageReceipt>,
+        intent: tinychannels::channel::ChannelOutboundIntent,
+    ) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, ChannelSendError> {
+        *self.0.lock().unwrap() = Some((previous.cloned(), intent));
+        Ok(tinychannels_bus::channel::MessageReceipt {
+            primary_platform_message_id: Some("draft-message-4".into()),
+            ..Default::default()
+        })
+    }
+}
+
+#[tokio::test]
+async fn draft_upsert_fills_missing_receipt_scope_and_preserves_previous_receipt() {
+    let drafts = CapturingDraftUpsert(std::sync::Mutex::new(None));
+    let previous = tinychannels_bus::channel::MessageReceipt {
+        primary_platform_message_id: Some("draft-message-3".into()),
+        ..Default::default()
+    };
+    let intent = tinychannels::channel::ChannelOutboundIntent {
+        idempotency_key: "draft-4".into(),
+        channel_id: "telegram:primary".into(),
+        conversation_id: "chat-8".into(),
+        thread_id: Some("thread-2".into()),
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: "updated draft".into(),
+        },
+        ..Default::default()
+    };
+
+    let ChannelInteractionResult::Sent(outcome) = dispatch_draft_upsert(
+        &drafts,
+        "telegram:primary",
+        Some(previous.clone()),
+        intent.clone(),
+    )
+    .await
+    .unwrap()
+    else {
+        panic!("draft upsert returns a send outcome");
+    };
+
+    assert_eq!(
+        drafts.0.lock().unwrap().as_ref().unwrap(),
+        &(Some(previous), intent)
+    );
+    assert_eq!(outcome.receipt.primary_platform_message_id.as_deref(), Some("draft-message-4"));
+    assert_eq!(outcome.receipt.idempotency_key.as_deref(), Some("draft-4"));
+    assert_eq!(outcome.receipt.channel.as_ref().unwrap().id, "telegram");
+    assert_eq!(
+        outcome.receipt.channel.as_ref().unwrap().account_id.as_deref(),
+        Some("telegram:primary")
+    );
+    assert_eq!(outcome.receipt.conversation.as_ref().unwrap().id, "chat-8");
+    assert_eq!(outcome.receipt.thread_id.as_deref(), Some("thread-2"));
+    assert!(outcome.error.is_none());
+}
+
+struct RejectingDraftUpsert;
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelStreamingDraft for RejectingDraftUpsert {
+    async fn upsert_draft(
+        &self,
+        _previous: Option<&tinychannels_bus::channel::MessageReceipt>,
+        _intent: tinychannels::channel::ChannelOutboundIntent,
+    ) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, ChannelSendError> {
+        Err(ChannelSendError::new("draft update rejected"))
+    }
+}
+
+#[tokio::test]
+async fn draft_upsert_maps_provider_errors_to_bus_failures() {
+    let error = dispatch_draft_upsert(
+        &RejectingDraftUpsert,
+        "telegram:primary",
+        None,
+        tinychannels::channel::ChannelOutboundIntent::default(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.to_string().contains("draft update rejected"));
+}
+
 struct EmptyReceiptProvider;
 
 #[async_trait::async_trait]
