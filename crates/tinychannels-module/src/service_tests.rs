@@ -2,6 +2,60 @@ use super::*;
 use tinychannels_bus::ChannelsConfig;
 use tinychannels_bus::config::WhatsAppConfig;
 
+#[tokio::test]
+async fn service_web_turn_methods_open_project_and_release_one_scoped_handle() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let channels = Channels::new(HostChannels::new(connection), None);
+    let handle = channels
+        .begin_web_turn(tinychannels_bus::BeginWebTurn {
+            scope_key: "user:1/thread:2".into(),
+            context: tinychannels_bus::WebEventContext {
+                client_id: "client".into(),
+                thread_id: "thread-2".into(),
+                request_id: "request-3".into(),
+                ..Default::default()
+            },
+        })
+        .await
+        .unwrap();
+
+    let output = channels
+        .project_web_output(tinychannels_bus::ProjectWebOutput {
+            handle: handle.handle.clone(),
+            event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                text: "hello".into(),
+                iteration: Some(1),
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(output.events.len(), 1);
+    assert_eq!(output.events[0].context.thread_id, "thread-2");
+
+    channels
+        .end_web_turn(tinychannels_bus::EndWebTurn {
+            handle: handle.handle.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        channels
+            .project_web_output(tinychannels_bus::ProjectWebOutput {
+                handle: handle.handle,
+                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                    text: "after end".into(),
+                    iteration: None,
+                },
+            })
+            .await
+            .is_err()
+    );
+}
+
 #[cfg(feature = "test-support")]
 #[tokio::test]
 async fn test_remote_channel_fixture_registers_and_cleans_up_without_network() {
