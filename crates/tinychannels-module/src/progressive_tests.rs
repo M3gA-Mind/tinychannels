@@ -947,8 +947,18 @@ async fn scoped_open_rejects_feed_output_from_another_turn() {
         .execute(ProgressiveCommand::OpenScoped {
             channel: "discord:fixture".into(),
             turn_id: Some("turn-bound".into()),
-            channel_ref: None,
-            conversation: None,
+            channel_ref: Some(Box::new(tinychannels_bus::ChannelRef {
+                id: "channel-bound".into(),
+                account_id: Some("account-bound".into()),
+            })),
+            conversation: Some(Box::new(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Thread,
+                id: "conversation-bound".into(),
+                scope_id: None,
+                parent_id: None,
+                thread_id: Some("thread-bound".into()),
+                topic_id: None,
+            })),
         })
         .await
         .unwrap()
@@ -961,8 +971,18 @@ async fn scoped_open_rejects_feed_output_from_another_turn() {
         .execute(ProgressiveCommand::FeedOutput {
             handle: handle.clone(),
             turn_id: Some("turn-other".into()),
-            channel_ref: None,
-            conversation: None,
+            channel_ref: Some(Box::new(tinychannels_bus::ChannelRef {
+                id: "channel-bound".into(),
+                account_id: Some("account-bound".into()),
+            })),
+            conversation: Some(Box::new(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Thread,
+                id: "conversation-bound".into(),
+                scope_id: None,
+                parent_id: None,
+                thread_id: Some("thread-bound".into()),
+                topic_id: None,
+            })),
             sequence: 1,
             events: vec![ChannelOutputEvent::TextDelta {
                 text: "must not be projected".into(),
@@ -973,6 +993,35 @@ async fn scoped_open_rejects_feed_output_from_another_turn() {
         .is_err());
     assert!(callback.requests.lock().await.is_empty());
 
+    let matching_output = || ProgressiveCommand::FeedOutput {
+        handle: handle.clone(),
+        turn_id: Some("turn-bound".into()),
+        channel_ref: Some(Box::new(tinychannels_bus::ChannelRef {
+            id: "channel-bound".into(),
+            account_id: Some("account-bound".into()),
+        })),
+        conversation: Some(Box::new(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Thread,
+            id: "conversation-bound".into(),
+            scope_id: None,
+            parent_id: None,
+            thread_id: Some("thread-bound".into()),
+            topic_id: None,
+        })),
+        sequence: 2,
+        events: vec![ChannelOutputEvent::FinalMessage {
+            text: "final answer".into(),
+            parts: vec![],
+            receipt: None,
+        }],
+    };
+    let delivered = replies.execute(matching_output()).await.unwrap();
+    assert!(matches!(
+        &delivered,
+        ProgressiveResult::OutputUpdated { deliveries, .. } if deliveries.len() == 1
+    ));
+    assert_eq!(replies.execute(matching_output()).await.unwrap(), delivered);
+
     replies
         .execute(ProgressiveCommand::Close { handle: handle.clone() })
         .await
@@ -981,6 +1030,17 @@ async fn scoped_open_rejects_feed_output_from_another_turn() {
         .execute(ProgressiveCommand::Close { handle })
         .await
         .unwrap();
+    assert_eq!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .filter(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
+            .count(),
+        1,
+        "retrying a delivery result and cancelling repeatedly must not send twice"
+    );
     replies.shutdown().await.unwrap();
 }
 
