@@ -2845,17 +2845,20 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
                 ..Default::default()
             });
         }
-        if message.parts.iter().any(|part| {
-            matches!(
-                part,
-                tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Image { .. }
-                        | tinychannels_bus::ContentPart::Video { .. }
-                        | tinychannels_bus::ContentPart::Audio { .. }
-                        | tinychannels_bus::ContentPart::File { .. }
-                }
-            )
-        }) {
+        if self.media_repository.is_none()
+            && message.parts.iter().any(|part| {
+                matches!(
+                    part,
+                    tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Image { .. }
+                            | tinychannels_bus::ContentPart::Video { .. }
+                            | tinychannels_bus::ContentPart::Audio { .. }
+                            | tinychannels_bus::ContentPart::File { .. }
+                            | tinychannels_bus::ContentPart::Sticker { .. }
+                    }
+                )
+            })
+        {
             return Err(crate::channel::ChannelSendError::unsupported(
                 "Telegram typed adapter does not support this media part",
             ));
