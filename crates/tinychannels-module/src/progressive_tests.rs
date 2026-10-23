@@ -243,6 +243,35 @@ async fn reply_capacity_refuses_seventeenth_and_shutdown_drains_every_worker() {
 }
 
 #[tokio::test]
+async fn completed_replies_are_evicted_when_the_retained_handle_limit_is_reached() {
+    let (replies, callback) = fixture(false).await;
+    let mut first_handle = None;
+    for index in 0..MAX_RETAINED {
+        let handle = open(&replies).await;
+        if index == 0 {
+            first_handle = Some(handle.clone());
+        }
+        replies
+            .execute(ProgressiveCommand::Finish {
+                handle,
+                text: format!("completed reply {index}"),
+            })
+            .await
+            .unwrap();
+    }
+    assert_eq!(replies.state.lock().await.entries.len(), MAX_RETAINED);
+
+    let newest = open(&replies).await;
+    let entries = replies.state.lock().await.entries;
+    assert_eq!(entries.len(), MAX_RETAINED);
+    assert!(!entries.contains_key(first_handle.as_deref().unwrap()));
+    assert!(entries.contains_key(&newest));
+    drop(entries);
+    replies.shutdown().await.unwrap();
+    assert_eq!(callback.sends.lock().await.len(), MAX_RETAINED + 1);
+}
+
+#[tokio::test]
 async fn shutdown_starts_every_close_before_waiting_for_blocked_delivery() {
     let (replies, callback) = fixture(true).await;
     let replies = Arc::new(replies);
@@ -580,6 +609,24 @@ async fn scoped_output_preserves_acknowledgement_receipt_and_unsupported_content
         .unwrap(),
         ProgressiveResult::DeliveryOutcome {
             outcome: Box::new(outcome.clone())
+        }
+    );
+
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Success(
+        serde_json::to_value(outcome.clone()).unwrap(),
+    ));
+    assert_eq!(
+        feed_output(
+            &replies.host,
+            "discord:fixture",
+            Some(&scope),
+            &sequence,
+            vec![text_delta()],
+        )
+        .await
+        .unwrap(),
+        ProgressiveResult::DeliveryOutcome {
+            outcome: Box::new(outcome)
         }
     );
 
