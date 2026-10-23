@@ -375,6 +375,77 @@ async fn provider_actor_orders_interactions_with_sends_and_rejects_after_stop() 
     ));
 }
 
+struct WebhookVerificationAdapter;
+
+#[async_trait::async_trait]
+impl ChannelAdapter for WebhookVerificationAdapter {
+    fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
+        tinychannels_bus::channel::ChannelDescriptor {
+            id: "webhook-fixture".into(),
+            display_name: "Webhook fixture".into(),
+            ..Default::default()
+        }
+    }
+
+    fn supports_webhook_verification(&self) -> bool {
+        true
+    }
+
+    fn verify_webhook(&self, mode: &str, verify_token: &str, challenge: &str) -> Option<String> {
+        (mode == "subscribe" && verify_token == "fixture-token").then(|| challenge.to_owned())
+    }
+
+    async fn start(
+        &self,
+        _sink: &(dyn ChannelInboundSink + Send + Sync),
+    ) -> std::result::Result<(), ChannelSendError> {
+        Ok(())
+    }
+
+    async fn stop(&self) -> std::result::Result<(), ChannelSendError> {
+        Ok(())
+    }
+
+    async fn send(
+        &self,
+        _intent: tinychannels::channel::ChannelOutboundIntent,
+    ) -> std::result::Result<tinychannels::channel::MessageReceipt, ChannelSendError> {
+        Err(ChannelSendError::unsupported("send is not used"))
+    }
+
+    async fn status(
+        &self,
+    ) -> std::result::Result<tinychannels::controllers::ChannelAccountSnapshot, ChannelSendError>
+    {
+        Ok(Default::default())
+    }
+}
+
+#[tokio::test]
+async fn outbound_only_provider_routes_webhook_verification_to_native_adapter() {
+    let running = Running::start_built_outbound(
+        BuiltChannel::from_adapter(Arc::new(WebhookVerificationAdapter)),
+        Arc::new(Hooks::default()),
+        memory_host().await,
+    );
+
+    let result = running
+        .interact(tinychannels_bus::ChannelInteraction::VerifyWebhook {
+            mode: "subscribe".into(),
+            verify_token: "fixture-token".into(),
+            challenge: "challenge-42".into(),
+        })
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    assert!(matches!(
+        result,
+        tinychannels_bus::ChannelInteractionResult::WebhookChallenge(value)
+            if value == "challenge-42"
+    ));
+    running.stop().await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
     use tinychannels_bus::ChannelInteraction as Op;
