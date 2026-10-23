@@ -279,6 +279,129 @@ async fn accepted_typed_final_keeps_a_flushed_progressive_draft() {
 }
 
 #[tokio::test]
+async fn first_scoped_output_typing_uses_the_output_batch_scope() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            turn_id: Some("turn-scoped".into()),
+            channel_ref: Some(tinychannels_bus::ChannelRef {
+                id: "channel-ref".into(),
+                account_id: Some("account-1".into()),
+            }),
+            conversation: Some(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Thread,
+                id: "conversation-1".into(),
+                scope_id: None,
+                parent_id: Some("parent-1".into()),
+                thread_id: Some("thread-1".into()),
+                topic_id: None,
+            }),
+            sequence: 1,
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "scoped response".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap();
+
+    let requests = callback.requests.lock().await;
+    let first_typing = requests
+        .iter()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::Typing {
+                turn_id,
+                channel_ref,
+                conversation,
+                ..
+            } => Some((turn_id, channel_ref, conversation)),
+            _ => None,
+        })
+        .expect("the first scoped batch should start typing");
+    assert_eq!(first_typing.0.as_deref(), Some("turn-scoped"));
+    assert_eq!(
+        first_typing.1.as_ref().map(|channel| channel.account_id.as_deref()),
+        Some(Some("account-1"))
+    );
+    assert_eq!(
+        first_typing
+            .2
+            .as_ref()
+            .and_then(|conversation| conversation.thread_id.as_deref()),
+        Some("thread-1")
+    );
+    drop(requests);
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn rejected_legacy_feed_keeps_the_previous_progressive_sender_scope() {
+    let (replies, callback) = fixture(false).await;
+    let sender = Sender::new(replies.host.clone());
+    sender
+        .set_scope(Some(OutputScope {
+            handle: "old-handle".into(),
+            channel: "discord:fixture".into(),
+            turn_id: Some("old-turn".into()),
+            channel_ref: None,
+            conversation: None,
+        }))
+        .await;
+    let mut reply = ProgressiveReply::new(
+        Arc::new(sender.clone()),
+        "discord:fixture",
+        Default::default(),
+    );
+    let result = apply_legacy_feed(
+        &mut reply,
+        &sender,
+        vec![ProgressiveEvent::TextDelta("x".repeat(MAX_CONTENT + 1))],
+    )
+    .await;
+    assert!(result.is_err());
+
+    ProgressiveSender::typing(&sender, "discord:fixture")
+        .await
+        .unwrap();
+    let requests = callback.requests.lock().await;
+    let ProgressiveTransportRequest::Typing { turn_id, .. } = requests.last().unwrap() else {
+        panic!("expected a typing request")
+    };
+    assert_eq!(turn_id.as_deref(), Some("old-turn"));
+}
+
+#[tokio::test]
+async fn repeated_final_text_does_not_double_count_against_the_delta_budget() {
+    let (replies, _) = fixture(false).await;
+    let handle = open(&replies).await;
+    let repeated_text = "x".repeat(250 * 1024);
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            turn_id: Some("turn-1".into()),
+            channel_ref: None,
+            conversation: None,
+            sequence: 1,
+            events: vec![
+                ChannelOutputEvent::TextDelta {
+                    text: repeated_text.clone(),
+                    iteration: Some(1),
+                },
+                ChannelOutputEvent::FinalMessage {
+                    text: repeated_text,
+                    parts: vec![],
+                    receipt: None,
+                },
+            ],
+        })
+        .await;
+    assert!(result.is_ok());
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn terminal_retry_reuses_one_module_send_and_rejects_changed_content() {
     let (replies, callback) = fixture(false).await;
     let handle = open(&replies).await;
