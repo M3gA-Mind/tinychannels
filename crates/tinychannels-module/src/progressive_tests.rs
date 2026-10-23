@@ -941,6 +941,50 @@ async fn feed_output_retries_reuse_the_previous_result_without_reapplying_deltas
 }
 
 #[tokio::test]
+async fn scoped_open_rejects_feed_output_from_another_turn() {
+    let (replies, callback) = fixture(false).await;
+    let handle = match replies
+        .execute(ProgressiveCommand::OpenScoped {
+            channel: "discord:fixture".into(),
+            turn_id: Some("turn-bound".into()),
+            channel_ref: None,
+            conversation: None,
+        })
+        .await
+        .unwrap()
+    {
+        ProgressiveResult::Opened { handle } => handle,
+        _ => panic!("expected opened handle"),
+    };
+
+    assert!(replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            turn_id: Some("turn-other".into()),
+            channel_ref: None,
+            conversation: None,
+            sequence: 1,
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "must not be projected".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .is_err());
+    assert!(callback.requests.lock().await.is_empty());
+
+    replies
+        .execute(ProgressiveCommand::Close { handle: handle.clone() })
+        .await
+        .unwrap();
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn final_output_terminates_without_a_second_legacy_send_and_replays_receipt() {
     let (replies, callback) = fixture(false).await;
     let handle = open(&replies).await;
