@@ -1230,6 +1230,105 @@ async fn typed_media_keeps_successful_receipt_when_a_later_part_is_invalid() {
 }
 
 #[tokio::test]
+async fn typed_media_preflight_requires_complete_provider_scope() {
+    let server = mock_api().await;
+    let with_storage = || {
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(ReadMediaFixture {
+            stored: crate::host::StoredMedia {
+                media: tinychannels_bus::MediaReference {
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                content_type: "image/png".into(),
+                file_name: None,
+                bytes: png_with_dimensions(1, 1),
+            },
+            reads: Arc::default(),
+        }))
+    };
+
+    let mut missing_conversation = image_message("opaque");
+    missing_conversation.conversation_id.clear();
+    missing_conversation
+        .conversation_ref
+        .as_mut()
+        .unwrap()
+        .id
+        .clear();
+    assert!(
+        with_storage()
+            .send_v2_with_receipt(&missing_conversation)
+            .await
+            .is_err()
+    );
+
+    let mut missing_account = image_message("opaque");
+    missing_account.channel_ref.as_mut().unwrap().account_id = None;
+    assert!(
+        with_storage()
+            .send_v2_with_receipt(&missing_account)
+            .await
+            .is_err()
+    );
+
+    let mut missing_turn = image_message("opaque");
+    missing_turn.turn_id = None;
+    assert!(
+        with_storage()
+            .send_v2_with_receipt(&missing_turn)
+            .await
+            .is_err()
+    );
+
+    let mut invalid_thread = image_message("opaque");
+    invalid_thread.conversation_ref.as_mut().unwrap().thread_id = Some("thread-x".into());
+    assert!(
+        with_storage()
+            .send_v2_with_receipt(&invalid_thread)
+            .await
+            .is_err()
+    );
+
+    let mut invalid_reply = image_message("opaque");
+    invalid_reply.reply_to_id = Some("reply-x".into());
+    assert!(
+        with_storage()
+            .send_v2_with_receipt(&invalid_reply)
+            .await
+            .is_err()
+    );
+
+    assert!(
+        channel_for(&server, &["*"])
+            .send_v2_with_receipt(&image_message("opaque"))
+            .await
+            .is_err()
+    );
+
+    let mut unsupported_content = image_message("opaque");
+    unsupported_content
+        .parts
+        .push(tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Location {
+                latitude: 1.0,
+                longitude: 2.0,
+                label: None,
+                address: None,
+                accuracy_meters: None,
+                live_until_unix_ms: None,
+            },
+        });
+    assert!(
+        with_storage()
+            .send_v2_with_receipt(&unsupported_content)
+            .await
+            .is_err()
+    );
+
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn adapter_start_rejects_duplicate_listener_and_stop_cancels_active_poll() {
     let server = mock_api().await;
     mount_post(&server, "deleteWebhook", ok()).await;
