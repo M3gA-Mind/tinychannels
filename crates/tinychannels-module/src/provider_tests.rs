@@ -601,8 +601,7 @@ async fn outbound_only_provider_returns_legacy_description_from_native_adapter()
     assert!(matches!(
         result,
         tinychannels_bus::ChannelInteractionResult::Info(info)
-            if info.capabilities.account.configured == Some(true)
-                && info.capabilities.account.enabled == Some(true)
+            if !info.supports_reactions && !info.supports_draft_updates
     ));
     running.stop().await.unwrap();
 }
