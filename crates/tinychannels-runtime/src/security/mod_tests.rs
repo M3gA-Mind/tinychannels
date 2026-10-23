@@ -36,10 +36,25 @@ async fn try_pair_correct_code() {
 #[test]
 async fn try_pair_wrong_code() {
     let (guard, _) = PairingGuard::new(true, &[]);
-    let result = guard.try_pair("000000").await.unwrap();
-    // Might succeed if code happens to be 000000, but extremely unlikely
-    // Just check it returns Ok(None) normally
-    let _ = result;
+    let code = guard.pairing_code().unwrap().to_string();
+    // Same length, last character changed: certainly wrong.
+    let last = if code.ends_with('0') { '1' } else { '0' };
+    let wrong = format!("{}{last}", &code[..code.len() - 1]);
+    assert!(guard.try_pair(&wrong).await.unwrap().is_none());
+    assert!(!guard.is_paired());
+    assert!(
+        guard.pairing_code().is_some(),
+        "a wrong code keeps the code"
+    );
+}
+
+#[test]
+async fn a_pairing_code_is_single_use() {
+    let (guard, _) = PairingGuard::new(true, &[]);
+    let code = guard.pairing_code().unwrap().to_string();
+    assert!(guard.try_pair(&code).await.unwrap().is_some());
+    assert!(guard.try_pair(&code).await.unwrap().is_none());
+    assert!(guard.pairing_code().is_none());
 }
 
 #[test]
