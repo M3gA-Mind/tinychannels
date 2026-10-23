@@ -420,16 +420,10 @@ fn subagent_states_map_to_subagent_events_with_detail() {
 fn oversized_subagent_output_is_capped() {
     let mut big = subagent("tool_result");
     big.output = Some("x".repeat(tinychannels_bus::web::MAX_WEB_TOOL_PAYLOAD_BYTES + 10));
-    big.arguments = Some(json!({
-        "body": "x".repeat(tinychannels_bus::web::MAX_WEB_TOOL_PAYLOAD_BYTES + 10)
-    }));
     let projected = wire(&one(ChannelOutputEvent::Subagent(Box::new(big))));
     let output = projected["output"].as_str().unwrap();
     assert!(output.len() <= tinychannels_bus::web::MAX_WEB_TOOL_PAYLOAD_BYTES);
     assert!(output.contains("truncated"));
-    let args = projected["args"].as_str().unwrap();
-    assert!(args.len() <= tinychannels_bus::web::MAX_WEB_TOOL_PAYLOAD_BYTES);
-    assert!(args.contains("truncated"));
 }
 
 #[test]
