@@ -245,14 +245,11 @@ pub(crate) fn configured_adapter_capabilities(
 use tinychannels_bus::{ChannelInteraction, ChannelInteractionInfo, ChannelInteractionResult};
 
 /// The error name of a refused webhook; hosts answer it with a client error.
-#[cfg(test)]
 pub(crate) const WEBHOOK_REJECTED_ERROR: &str = "ai.tinyhumans.tinychannels.Error.WebhookRejected";
 /// The error name of a delivery that failed after it was authenticated; hosts
 /// answer it with a retryable error.
-#[cfg(test)]
 pub(crate) const WEBHOOK_FAILED_ERROR: &str = "ai.tinyhumans.tinychannels.Error.WebhookFailed";
 
-#[cfg(test)]
 fn webhook_rejected() -> tinybus::Error {
     tinybus::Error::MethodFailed {
         name: WEBHOOK_REJECTED_ERROR.to_owned(),
@@ -260,7 +257,6 @@ fn webhook_rejected() -> tinybus::Error {
     }
 }
 
-#[cfg(test)]
 fn webhook_failed() -> tinybus::Error {
     tinybus::Error::MethodFailed {
         name: WEBHOOK_FAILED_ERROR.to_owned(),
@@ -270,7 +266,6 @@ fn webhook_failed() -> tinybus::Error {
 
 /// Route a migrated provider's webhook through its typed owner port while
 /// keeping exact-byte authentication and the existing bounded wire contract.
-#[cfg(test)]
 pub(crate) async fn dispatch_native_webhook(
     provider: &dyn tinychannels::channel::ChannelAdapter,
     interaction: ChannelInteraction,
@@ -297,7 +292,6 @@ pub(crate) async fn dispatch_native_webhook(
     }
 }
 
-#[cfg(test)]
 async fn deliver_webhook_typed(
     provider: &dyn tinychannels::channel::ChannelAdapter,
     signature: Option<&str>,

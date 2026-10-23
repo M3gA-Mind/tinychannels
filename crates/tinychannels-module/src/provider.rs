@@ -988,15 +988,29 @@ impl Running {
                                     "provider draft upsert is not supported by this adapter",
                                 )),
                             },
-                            interaction => match send_legacy.as_ref() {
-                                Some(legacy) => {
-                                    dispatch_interaction(legacy.clone(), interaction, &mut typing)
-                                        .await
+                            interaction => {
+                                match crate::interaction::dispatch_native_webhook(
+                                    send_adapter.as_ref(),
+                                    interaction.clone(),
+                                )
+                                .await
+                                {
+                                    Some(result) => result,
+                                    None => match send_legacy.as_ref() {
+                                        Some(legacy) => {
+                                            dispatch_interaction(
+                                                legacy.clone(),
+                                                interaction,
+                                                &mut typing,
+                                            )
+                                            .await
+                                        }
+                                        None => Err(Error::failed(
+                                            "provider interaction is not supported by this adapter",
+                                        )),
+                                    },
                                 }
-                                None => Err(Error::failed(
-                                    "provider interaction is not supported by this adapter",
-                                )),
-                            },
+                            }
                         },
                     };
                     let _ = command.reply.send(result);
