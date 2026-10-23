@@ -1186,6 +1186,114 @@ async fn callback_ingress_preserves_actor_scope_and_authorizes_only_numeric_id_o
 }
 
 #[test]
+fn callback_events_preserve_optional_identity_and_map_conversation_kinds() {
+    for (chat_type, expected_kind) in [
+        ("private", tinychannels_bus::ConversationKind::Dm),
+        ("group", tinychannels_bus::ConversationKind::Group),
+        ("supergroup", tinychannels_bus::ConversationKind::Group),
+        ("channel", tinychannels_bus::ConversationKind::Channel),
+        ("unknown", tinychannels_bus::ConversationKind::Unknown),
+    ] {
+        let update = serde_json::json!({
+            "callback_query": {
+                "id": "query",
+                "data": "action",
+                "from": {"id": 77, "first_name": "Display"},
+                "message": {
+                    "message_id": 81,
+                    "chat": {"id": -10042, "type": chat_type}
+                }
+            }
+        });
+
+        let event = TelegramChannel::callback_event(&update).unwrap();
+        assert_eq!(event.event_id, "telegram:callback:query");
+        assert_eq!(event.source_event_id, None);
+        assert_eq!(event.conversation.as_ref().unwrap().kind, expected_kind);
+        assert_eq!(event.conversation.as_ref().unwrap().topic_id, None);
+        match event.event {
+            tinychannels_bus::ChannelEventKind::ButtonCallback { actor, .. } => {
+                assert_eq!(actor.name.as_deref(), Some("Display"));
+                assert!(!actor.is_bot);
+            }
+            other => panic!("unexpected callback event {other:?}"),
+        }
+    }
+
+    let mut update = serde_json::json!({
+        "update_id": 9002,
+        "callback_query": {
+            "id": "query",
+            "data": "action",
+            "from": {"id": 77, "username": "operator", "is_bot": true},
+            "message": {
+                "message_id": 81,
+                "message_thread_id": 18,
+                "chat": {"id": -10042, "type": "private"}
+            }
+        }
+    });
+    let event = TelegramChannel::callback_event(&update).unwrap();
+    assert_eq!(event.event_id, "telegram:update:9002:callback:query");
+    assert_eq!(event.source_event_id.as_deref(), Some("9002"));
+    match event.event {
+        tinychannels_bus::ChannelEventKind::ButtonCallback { actor, .. } => {
+            assert_eq!(actor.name.as_deref(), Some("operator"));
+            assert!(actor.is_bot);
+        }
+        other => panic!("unexpected callback event {other:?}"),
+    }
+
+    for missing in [
+        serde_json::json!({"callback_query": {"id": "q"}}),
+        serde_json::json!({"callback_query": {"id": "q", "data": "a"}}),
+    ] {
+        assert!(TelegramChannel::callback_event(&missing).is_none());
+    }
+    update["callback_query"]["from"]["id"] = serde_json::json!("77");
+    assert!(TelegramChannel::callback_event(&update).is_none());
+}
+
+#[test]
+fn typed_send_errors_preserve_dispatch_certainty_and_provider_classification() {
+    let forbidden = typed_send_error(anyhow::Error::new(TelegramPreDispatchError));
+    assert_eq!(forbidden.kind, crate::channel::SendErrorKind::Forbidden);
+    assert!(!forbidden.sent_before_error);
+    assert!(!forbidden.retryable);
+
+    let bad_format = typed_send_error(anyhow::Error::new(TelegramBadFormatError));
+    assert_eq!(bad_format.kind, crate::channel::SendErrorKind::BadFormat);
+    assert!(!bad_format.sent_before_error);
+
+    let unsupported = typed_send_error(anyhow::Error::new(TelegramUnsupportedError));
+    assert_eq!(unsupported.kind, crate::channel::SendErrorKind::BadFormat);
+    assert!(unsupported.unsupported);
+    assert!(!unsupported.sent_before_error);
+
+    let partial_error = crate::channel::ChannelSendError {
+        kind: crate::channel::SendErrorKind::RateLimited,
+        message: "second chunk rejected".into(),
+        retryable: true,
+        sent_before_error: true,
+        ..Default::default()
+    };
+    let partial = crate::providers::telegram::channel_send::PartialTextSendError {
+        message_ids: vec!["first".into()],
+        sent_before_error: true,
+        error: partial_error.clone(),
+    };
+    assert_eq!(
+        typed_send_error(anyhow::Error::new(partial)).message,
+        partial_error.message
+    );
+
+    let uncertain = typed_send_error(anyhow::anyhow!("transport failed"));
+    assert_eq!(uncertain.kind, crate::channel::SendErrorKind::Unknown);
+    assert!(uncertain.sent_before_error);
+    assert!(!uncertain.retryable);
+}
+
+#[test]
 fn presentation_projection_renders_nested_text_and_approval_actions() {
     let blocks = serde_json::json!([
         "Opening line",
