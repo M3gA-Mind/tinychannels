@@ -34,7 +34,7 @@ async fn service_web_turn_methods_open_project_and_release_one_scoped_handle() {
         .await
         .unwrap();
     assert_eq!(output.events.len(), 1);
-    assert_eq!(output.events[0].context.thread_id, "thread-2");
+    assert_eq!(output.events[0].context().thread_id, "thread-2");
 
     channels
         .end_web_turn(tinychannels_bus::EndWebTurn {
