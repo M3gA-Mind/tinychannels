@@ -928,6 +928,26 @@ async fn legacy_adapter_rejects_unsupported_typed_content_before_send() {
     assert_eq!(sends.load(Ordering::SeqCst), 0);
 }
 
+#[tokio::test]
+async fn legacy_adapter_rejects_native_payload_without_a_text_projection() {
+    let sends = Arc::new(AtomicUsize::new(0));
+    let adapter = LegacyChannelAdapter(Arc::new(LegacyTextOnlyChannel(sends.clone())));
+    let intent = tinychannels::channel::ChannelOutboundIntent {
+        idempotency_key: "opaque-native".into(),
+        channel_id: "legacy-text-only".into(),
+        conversation_id: "room".into(),
+        payload: tinychannels_bus::OutboundPayload::NativeChannelData {
+            data: serde_json::json!({"opaque": true}),
+        },
+        ..Default::default()
+    };
+
+    let error = adapter.send(intent).await.unwrap_err();
+
+    assert!(error.is_unsupported());
+    assert_eq!(sends.load(Ordering::SeqCst), 0);
+}
+
 struct CapturingDraftUpsert(
     std::sync::Mutex<
         Option<(
