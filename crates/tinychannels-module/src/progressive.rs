@@ -627,15 +627,13 @@ async fn run(
         timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         timer.tick().await;
     }
-    reply.typing_tick().await;
     let expiry = tokio::time::sleep(TURN_LIFETIME);
     tokio::pin!(expiry);
     loop {
         tokio::select! {
             command = inbox.recv() => match command {
                 Some(Command::Feed(events, response)) => {
-                    sender.set_scope(None).await;
-                    let result = apply(&mut reply, events);
+                    let result = apply_legacy_feed(&mut reply, &sender, events).await;
                     let _ = response.send(result);
                 }
                 Some(Command::FeedOutput(batch, response)) => {
@@ -662,6 +660,11 @@ async fn run(
                         .as_ref()
                         .is_ok_and(|applied| applied.final_message_delivered);
                     let _ = response.send(result);
+                    if !terminal && final_message_delivered {
+                        // A completed output needs no further typing refresh.
+                    } else if !terminal && sender.scope().await.is_some() {
+                        reply.typing_tick().await;
+                    }
                     if terminal {
                         reply
                             .cleanup_after_external_final(final_message_delivered)
@@ -697,6 +700,15 @@ async fn apply_scoped_output(
     Ok(applied)
 }
 
+async fn apply_legacy_feed(
+    reply: &mut ProgressiveReply,
+    sender: &Sender,
+    events: Vec<ProgressiveEvent>,
+) -> Result<()> {
+    sender.set_scope(None).await;
+    apply(reply, events)
+}
+
 async fn apply_output(
     reply: &mut ProgressiveReply,
     sender: &Sender,
@@ -730,11 +742,13 @@ async fn apply_output(
     let text = events
         .iter()
         .filter_map(|event| match event {
-            ChannelOutputEvent::TextDelta { text, .. }
-            | ChannelOutputEvent::FinalMessage { text, .. } => Some(text.len()),
+            ChannelOutputEvent::TextDelta { text, .. } => Some(text.len()),
             _ => None,
         })
         .fold(0usize, usize::saturating_add);
+    let oversized_final = events.iter().any(|event| {
+        matches!(event, ChannelOutputEvent::FinalMessage { text, .. } if text.len() > MAX_CONTENT)
+    });
     let thinking = events
         .iter()
         .filter_map(|event| match event {
@@ -742,7 +756,8 @@ async fn apply_output(
             _ => None,
         })
         .sum::<usize>();
-    if reply.state().content.len().saturating_add(text) > MAX_CONTENT
+    if oversized_final
+        || reply.state().content.len().saturating_add(text) > MAX_CONTENT
         || reply
             .state()
             .thinking_accumulator
