@@ -890,6 +890,58 @@ async fn oversized_voice_transcript_failure_keeps_audio_receipt_nonretryable() {
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
+#[tokio::test]
+async fn oversized_voice_transcript_partial_delivery_keeps_all_receipt_ids() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendVoice",
+        ok_with(serde_json::json!({ "message_id": 914 })),
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .respond_with(ok_with(serde_json::json!({ "message_id": 915 })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ResponseTemplate::new(400).set_body_string("second transcript chunk rejected"),
+    )
+    .await;
+    let store = ReadVoiceFixture {
+        stored: tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(b"voice audio"),
+            mime_type: "audio/ogg".into(),
+            file_name: None,
+        },
+        reads: Arc::default(),
+    };
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(store));
+
+    let outcome = channel
+        .send_v2_with_receipt(&voice_message(
+            "opaque-voice-partial-chunks",
+            Some("spoken detail ".repeat(400)),
+            Some("ogg_opus"),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["914", "915"]);
+    assert_eq!(outcome.receipt.parts.len(), 2);
+    assert_eq!(
+        outcome.receipt.parts[1].kind,
+        tinychannels_bus::channel::MessageReceiptPartKind::Text
+    );
+    let error = outcome.error.expect("second transcript chunk failed");
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+    assert_eq!(error.continuation_message_ids, ["915"]);
+}
+
 #[test]
 fn telegram_image_dimensions_accept_png_and_jpeg_headers_and_reject_invalid_data() {
     assert_eq!(
