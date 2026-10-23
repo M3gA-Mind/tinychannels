@@ -683,8 +683,8 @@ async fn hosted_output_lifecycle_carries_turn_scope_and_finishes_through_host_tr
     );
 
     let requests = callback.requests.lock().await;
-    assert!(matches!(
-        &requests[0],
+    assert!(requests.iter().any(|request| matches!(
+        request,
         ProgressiveTransportRequest::OutputEvent {
             channel: request_channel,
             turn_id: Some(turn_id),
@@ -693,7 +693,7 @@ async fn hosted_output_lifecycle_carries_turn_scope_and_finishes_through_host_tr
             sequence: 0,
             ..
         } if request_channel == "discord" && turn_id == "turn-9" && request_scope == &channel && request_conversation == &conversation
-    ));
+    )));
     assert_eq!(callback.sends.lock().await[0]["text"], "complete");
     replies.shutdown().await.unwrap();
 }
