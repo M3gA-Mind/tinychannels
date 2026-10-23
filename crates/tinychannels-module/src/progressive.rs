@@ -13,8 +13,8 @@ use tinychannels::delivery::progressive::{
     ProgressiveSender, TYPING_REFRESH_INTERVAL,
 };
 use tinychannels_bus::module_progressive::{
-    ProgressiveCommand, ProgressiveEvent, ProgressiveResult, ProgressiveTransportRequest,
-    ProgressiveTransportResult,
+    ChannelOutputEvent, ProgressiveCommand, ProgressiveEvent, ProgressiveResult,
+    ProgressiveTransportRequest, ProgressiveTransportResult,
 };
 use tinychannels_bus::{ChannelBackendRequest, ChannelBackendResult};
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -28,17 +28,192 @@ const MAX_CONTENT: usize = 384 * 1024;
 const MAX_REQUEST: usize = MAX_CONTENT * 12 + 64 * 1024;
 const TURN_LIFETIME: Duration = Duration::from_secs(180);
 
-struct Sender(HostChannels);
+#[derive(Clone)]
+struct Sender {
+    host: HostChannels,
+    scope: Arc<Mutex<Option<OutputScope>>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OutputScope {
+    handle: String,
+    channel: String,
+    turn_id: Option<String>,
+    channel_ref: Option<tinychannels_bus::ChannelRef>,
+    conversation: Option<tinychannels_bus::ConversationRef>,
+}
+
+struct FeedOutput {
+    handle: String,
+    turn_id: Option<String>,
+    channel_ref: Option<tinychannels_bus::ChannelRef>,
+    conversation: Option<tinychannels_bus::ConversationRef>,
+    sequence: u64,
+    events: Vec<ChannelOutputEvent>,
+}
+
+#[derive(Clone)]
+struct AppliedOutput {
+    deliveries: Vec<ProgressiveTransportResult>,
+    output_event_failures: Vec<u64>,
+    final_message_delivered: bool,
+}
+
+#[derive(Clone)]
+struct OutputBatchReplay {
+    scope: OutputScope,
+    sequence: u64,
+    events: Vec<ChannelOutputEvent>,
+    result: AppliedOutput,
+}
 
 impl Sender {
+    fn new(host: HostChannels) -> Self {
+        Self {
+            host,
+            scope: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    async fn set_scope(&self, scope: Option<OutputScope>) {
+        *self.scope.lock().await = scope;
+    }
+
+    async fn has_scope(&self) -> bool {
+        self.scope.lock().await.is_some()
+    }
+
+    async fn apply_scope(
+        &self,
+        request: ProgressiveTransportRequest,
+    ) -> ProgressiveTransportRequest {
+        let Some(scope) = self.scope.lock().await.clone() else {
+            return request;
+        };
+        match request {
+            ProgressiveTransportRequest::Send {
+                channel,
+                sequence,
+                idempotency_key,
+                message,
+                ..
+            } => ProgressiveTransportRequest::Send {
+                channel,
+                turn_id: scope.turn_id,
+                channel_ref: scope.channel_ref,
+                conversation: scope.conversation,
+                sequence,
+                idempotency_key,
+                message,
+            },
+            ProgressiveTransportRequest::Edit {
+                channel,
+                message_id,
+                receipt,
+                text,
+                ..
+            } => ProgressiveTransportRequest::Edit {
+                channel,
+                turn_id: scope.turn_id,
+                channel_ref: scope.channel_ref,
+                conversation: scope.conversation,
+                message_id,
+                receipt,
+                text,
+            },
+            ProgressiveTransportRequest::Delete {
+                channel,
+                message_id,
+                receipt,
+                ..
+            } => ProgressiveTransportRequest::Delete {
+                channel,
+                turn_id: scope.turn_id,
+                channel_ref: scope.channel_ref,
+                conversation: scope.conversation,
+                message_id,
+                receipt,
+            },
+            ProgressiveTransportRequest::Typing { channel, .. } => {
+                ProgressiveTransportRequest::Typing {
+                    channel,
+                    turn_id: scope.turn_id,
+                    channel_ref: scope.channel_ref,
+                    conversation: scope.conversation,
+                }
+            }
+            request => request,
+        }
+    }
+}
+
+impl Sender {
+    async fn output_event(
+        &self,
+        scope: &OutputScope,
+        sequence: u64,
+        event: ChannelOutputEvent,
+    ) -> Result<()> {
+        let result = self
+            .host
+            .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(
+                ProgressiveTransportRequest::OutputEvent {
+                    channel: scope.channel.clone(),
+                    turn_id: scope.turn_id.clone(),
+                    channel_ref: scope.channel_ref.clone(),
+                    conversation: scope.conversation.clone(),
+                    sequence,
+                    event: Box::new(event),
+                },
+            )))
+            .await
+            .map_err(|_| Error::failed("progressive output callback failed"))?;
+        match result {
+            ChannelBackendResult::ProgressiveTransport(
+                ProgressiveTransportResult::Acknowledged | ProgressiveTransportResult::Accepted,
+            ) => Ok(()),
+            _ => Err(Error::failed("progressive output callback failed")),
+        }
+    }
+
+    async fn send_typed(
+        &self,
+        scope: &OutputScope,
+        sequence: u64,
+        parts: Vec<tinychannels_bus::OutboundContentPart>,
+        text: String,
+    ) -> Result<ProgressiveTransportResult> {
+        let result = self
+            .host
+            .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(
+                ProgressiveTransportRequest::SendTyped {
+                    channel: scope.channel.clone(),
+                    turn_id: scope.turn_id.clone(),
+                    channel_ref: scope.channel_ref.clone(),
+                    conversation: scope.conversation.clone(),
+                    sequence: Some(sequence),
+                    segment_index: None,
+                    idempotency_key: Some(format!("progressive:{}:{sequence}", scope.handle)),
+                    parts,
+                    text,
+                },
+            )))
+            .await
+            .map_err(|_| Error::failed("progressive typed delivery failed"))?;
+        match result {
+            ChannelBackendResult::ProgressiveTransport(result) => Ok(result),
+            _ => Err(Error::failed("progressive typed delivery failed")),
+        }
+    }
+
     async fn invoke(
         &self,
         request: ProgressiveTransportRequest,
     ) -> std::result::Result<Value, ProgressiveSendError> {
         let result = self
-            .0
+            .host
             .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(
-                request,
+                self.apply_scope(request).await,
             )))
             .await
             .map_err(|_| ProgressiveSendError::Unavailable)?;
@@ -133,6 +308,7 @@ impl ProgressiveSender for Sender {
 
 enum Command {
     Feed(Vec<ProgressiveEvent>, oneshot::Sender<Result<()>>),
+    FeedOutput(Box<FeedOutput>, oneshot::Sender<Result<AppliedOutput>>),
     Finish(String, oneshot::Sender<()>),
 }
 
@@ -142,9 +318,11 @@ struct Closing {
     outcome: Option<std::result::Result<(), String>>,
 }
 struct Entry {
+    channel: String,
     commands: mpsc::Sender<Command>,
     worker: Mutex<Option<JoinHandle<()>>>,
     closing: Mutex<Option<Closing>>,
+    output_replay: Arc<Mutex<Option<OutputBatchReplay>>>,
 }
 struct State {
     terminal: bool,
@@ -198,6 +376,59 @@ impl Replies {
                 wait.await
                     .map_err(|_| Error::failed("progressive worker stopped"))??;
                 Ok(ProgressiveResult::Updated)
+            }
+            ProgressiveCommand::FeedOutput {
+                handle,
+                turn_id,
+                channel_ref,
+                conversation,
+                sequence,
+                events,
+            } => {
+                if events.len() > 32 {
+                    return Err(Error::failed("too many progressive events"));
+                }
+                let entry = self.entry(&handle).await?;
+                let closing = entry.closing.lock().await;
+                if closing.is_some() {
+                    return Err(Error::failed("progressive reply is closed"));
+                }
+                let scope = OutputScope {
+                    handle: handle.clone(),
+                    channel: entry.channel.clone(),
+                    turn_id,
+                    channel_ref: channel_ref.map(|value| *value),
+                    conversation: conversation.map(|value| *value),
+                };
+                if let Some(applied) = replay_output(
+                    entry.output_replay.lock().await.as_ref(),
+                    &scope,
+                    sequence,
+                    &events,
+                ) {
+                    return output_result(applied?);
+                }
+                let (response, wait) = oneshot::channel();
+                entry
+                    .commands
+                    .send(Command::FeedOutput(
+                        Box::new(FeedOutput {
+                            handle: handle.clone(),
+                            turn_id: scope.turn_id.clone(),
+                            channel_ref: scope.channel_ref.clone(),
+                            conversation: scope.conversation.clone(),
+                            sequence,
+                            events,
+                        }),
+                        response,
+                    ))
+                    .await
+                    .map_err(|_| Error::failed("progressive reply is closed"))?;
+                drop(closing);
+                let applied = wait
+                    .await
+                    .map_err(|_| Error::failed("progressive worker stopped"))??;
+                output_result(applied)
             }
             ProgressiveCommand::Finish { handle, text } => {
                 if text.len() > MAX_CONTENT {
@@ -280,13 +511,22 @@ impl Replies {
         let handle = uuid::Uuid::new_v4().simple().to_string();
         let (commands, inbox) = mpsc::channel(16);
         let host = self.host.clone();
-        let worker = tokio::spawn(run(host, channel, capabilities, inbox));
+        let output_replay = Arc::new(Mutex::new(None));
+        let worker = tokio::spawn(run(
+            host,
+            channel.clone(),
+            capabilities,
+            inbox,
+            output_replay.clone(),
+        ));
         state.entries.insert(
             handle.clone(),
             Arc::new(Entry {
+                channel,
                 commands,
                 worker: Mutex::new(Some(worker)),
                 closing: Mutex::new(None),
+                output_replay,
             }),
         );
         Ok(ProgressiveResult::Opened { handle })
@@ -380,8 +620,10 @@ async fn run(
     channel: String,
     capabilities: tinychannels_bus::ChannelCapabilities,
     mut inbox: mpsc::Receiver<Command>,
+    output_replay: Arc<Mutex<Option<OutputBatchReplay>>>,
 ) {
-    let mut reply = ProgressiveReply::new(Arc::new(Sender(host)), channel, capabilities);
+    let sender = Sender::new(host);
+    let mut reply = ProgressiveReply::new(Arc::new(sender.clone()), channel.clone(), capabilities);
     let mut edits = tokio::time::interval(EDIT_FLUSH_INTERVAL);
     let mut typing = tokio::time::interval(TYPING_REFRESH_INTERVAL);
     let mut fillers = tokio::time::interval(FILLER_INTERVAL);
@@ -389,15 +631,49 @@ async fn run(
         timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         timer.tick().await;
     }
-    reply.typing_tick().await;
     let expiry = tokio::time::sleep(TURN_LIFETIME);
     tokio::pin!(expiry);
     loop {
         tokio::select! {
             command = inbox.recv() => match command {
                 Some(Command::Feed(events, response)) => {
-                    let result = apply(&mut reply, events);
+                    let result = apply_legacy_feed(&mut reply, &sender, events).await;
                     let _ = response.send(result);
+                }
+                Some(Command::FeedOutput(batch, response)) => {
+                    let scope = OutputScope {
+                        handle: batch.handle,
+                        channel: channel.clone(),
+                        turn_id: batch.turn_id,
+                        channel_ref: batch.channel_ref,
+                        conversation: batch.conversation,
+                    };
+                    let is_final = batch.events.iter().any(|event| {
+                        matches!(event, ChannelOutputEvent::FinalMessage { .. })
+                    });
+                    let result = apply_scoped_output(
+                        &mut reply,
+                        &sender,
+                        &scope,
+                        batch.sequence,
+                        batch.events,
+                        &output_replay,
+                    ).await;
+                    let terminal = is_final && result.is_ok();
+                    let final_message_delivered = result
+                        .as_ref()
+                        .is_ok_and(|applied| applied.final_message_delivered);
+                    let successful = result.is_ok();
+                    let _ = response.send(result);
+                    if successful && !terminal && !final_message_delivered {
+                        reply.typing_tick().await;
+                    }
+                    if terminal {
+                        reply
+                            .cleanup_after_external_final(final_message_delivered)
+                            .await;
+                        break;
+                    }
                 }
                 Some(Command::Finish(text, response)) => {
                     reply.finalize(&text).await;
@@ -407,10 +683,205 @@ async fn run(
                 None => { reply.finalize("Cancelled.").await; break; }
             },
             _ = edits.tick() => reply.edit_tick().await,
-            _ = typing.tick() => reply.typing_tick().await,
+            _ = typing.tick() => {
+                if sender.has_scope().await {
+                    reply.typing_tick().await;
+                }
+            },
             _ = fillers.tick() => reply.filler_tick().await,
             _ = &mut expiry => { reply.finalize("Sorry, the request timed out.").await; break; }
         }
+    }
+}
+
+async fn apply_scoped_output(
+    reply: &mut ProgressiveReply,
+    sender: &Sender,
+    scope: &OutputScope,
+    sequence: u64,
+    events: Vec<ChannelOutputEvent>,
+    output_replay: &Mutex<Option<OutputBatchReplay>>,
+) -> Result<AppliedOutput> {
+    let applied = apply_output(reply, sender, scope, sequence, events, output_replay).await?;
+    sender.set_scope(Some(scope.clone())).await;
+    Ok(applied)
+}
+
+async fn apply_legacy_feed(
+    reply: &mut ProgressiveReply,
+    sender: &Sender,
+    events: Vec<ProgressiveEvent>,
+) -> Result<()> {
+    apply(reply, events)?;
+    sender.set_scope(None).await;
+    Ok(())
+}
+
+async fn apply_output(
+    reply: &mut ProgressiveReply,
+    sender: &Sender,
+    scope: &OutputScope,
+    sequence: u64,
+    events: Vec<ChannelOutputEvent>,
+    output_replay: &Mutex<Option<OutputBatchReplay>>,
+) -> Result<AppliedOutput> {
+    let event_count =
+        u64::try_from(events.len()).map_err(|_| Error::failed("progressive sequence overflow"))?;
+    if event_count > 0 {
+        sequence
+            .checked_add(event_count - 1)
+            .ok_or_else(|| Error::failed("progressive sequence overflow"))?;
+    }
+    if events.iter().enumerate().any(|(index, event)| {
+        matches!(event, ChannelOutputEvent::FinalMessage { .. }) && index + 1 != events.len()
+    }) {
+        return Err(Error::failed(
+            "progressive final message must be the last event in its batch",
+        ));
+    }
+    if let Some(applied) = replay_output(
+        output_replay.lock().await.as_ref(),
+        scope,
+        sequence,
+        &events,
+    ) {
+        return applied;
+    }
+    let text = events
+        .iter()
+        .filter_map(|event| match event {
+            ChannelOutputEvent::TextDelta { text, .. } => Some(text.len()),
+            _ => None,
+        })
+        .fold(0usize, usize::saturating_add);
+    let oversized_final = events.iter().any(|event| {
+        matches!(event, ChannelOutputEvent::FinalMessage { text, .. } if text.len() > MAX_CONTENT)
+    });
+    let thinking = events
+        .iter()
+        .filter_map(|event| match event {
+            ChannelOutputEvent::ThinkingDelta { text, .. } => Some(text.len()),
+            _ => None,
+        })
+        .sum::<usize>();
+    if oversized_final
+        || reply.state().content.len().saturating_add(text) > MAX_CONTENT
+        || reply
+            .state()
+            .thinking_accumulator
+            .len()
+            .saturating_add(thinking)
+            > MAX_CONTENT
+    {
+        return Err(Error::failed("progressive content exceeds its limit"));
+    }
+    let replay_events = events.clone();
+    let mut deliveries = Vec::new();
+    let mut output_event_failures = Vec::new();
+    let mut final_message_delivered = false;
+    for (offset, event) in events.into_iter().enumerate() {
+        let sequence = sequence
+            .checked_add(
+                u64::try_from(offset)
+                    .map_err(|_| Error::failed("progressive sequence overflow"))?,
+            )
+            .ok_or_else(|| Error::failed("progressive sequence overflow"))?;
+        let event = match event {
+            ChannelOutputEvent::FinalMessage {
+                text,
+                parts,
+                receipt: original_receipt,
+            } => {
+                let delivery = sender
+                    .send_typed(scope, sequence, parts.clone(), text.clone())
+                    .await
+                    .unwrap_or(ProgressiveTransportResult::Failed);
+                final_message_delivered =
+                    matches!(&delivery, ProgressiveTransportResult::Success(_))
+                        || matches!(
+                            &delivery,
+                            ProgressiveTransportResult::Outcome(outcome)
+                                if outcome.error.is_none()
+                                    || outcome.receipt.primary_platform_message_id.is_some()
+                                    || !outcome.receipt.platform_message_ids.is_empty()
+                                    || !outcome.receipt.parts.is_empty()
+                        );
+                let receipt = match &delivery {
+                    ProgressiveTransportResult::Outcome(outcome) => Some(outcome.receipt.clone()),
+                    _ => original_receipt,
+                };
+                deliveries.push(delivery);
+                ChannelOutputEvent::FinalMessage {
+                    text,
+                    parts,
+                    receipt,
+                }
+            }
+            event => event,
+        };
+        if sender
+            .output_event(scope, sequence, event.clone())
+            .await
+            .is_err()
+        {
+            output_event_failures.push(sequence);
+        }
+        match event {
+            ChannelOutputEvent::TextDelta { text, .. } => reply.on_text_delta(&text),
+            ChannelOutputEvent::ThinkingDelta { text, .. } => reply.on_thinking_delta(&text),
+            ChannelOutputEvent::ToolCallStarted { tool_name, .. } => reply.on_tool_call(&tool_name),
+            ChannelOutputEvent::ToolCallCompleted {
+                tool_name, success, ..
+            } => reply.on_tool_result(&tool_name, success),
+            _ => {}
+        }
+    }
+    let applied = AppliedOutput {
+        deliveries,
+        output_event_failures,
+        final_message_delivered,
+    };
+    if !replay_events.is_empty() {
+        *output_replay.lock().await = Some(OutputBatchReplay {
+            scope: scope.clone(),
+            sequence,
+            events: replay_events,
+            result: applied.clone(),
+        });
+    }
+    Ok(applied)
+}
+
+fn replay_output(
+    previous: Option<&OutputBatchReplay>,
+    scope: &OutputScope,
+    sequence: u64,
+    events: &[ChannelOutputEvent],
+) -> Option<Result<AppliedOutput>> {
+    let previous = previous?;
+    let previous_end = previous
+        .sequence
+        .saturating_add(previous.events.len().saturating_sub(1) as u64);
+    if sequence == previous.sequence {
+        return Some(if previous.scope == *scope && previous.events == events {
+            Ok(previous.result.clone())
+        } else {
+            Err(Error::failed(
+                "progressive output sequence was reused with different content",
+            ))
+        });
+    }
+    (sequence <= previous_end).then(|| Err(Error::failed("progressive output sequence is stale")))
+}
+
+fn output_result(applied: AppliedOutput) -> Result<ProgressiveResult> {
+    if applied.deliveries.is_empty() && applied.output_event_failures.is_empty() {
+        Ok(ProgressiveResult::Updated)
+    } else {
+        Ok(ProgressiveResult::OutputUpdated {
+            deliveries: applied.deliveries,
+            output_event_failures: applied.output_event_failures,
+        })
     }
 }
 
