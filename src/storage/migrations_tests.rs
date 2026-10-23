@@ -8,6 +8,22 @@ use tinystoragedrivers_types::{
     Version, Versioned, WriteOptions,
 };
 
+#[test]
+fn every_migration_step_source_is_declared_for_host_storage_grants() {
+    let declared: std::collections::HashSet<_> = crate::storage::collections()
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect();
+
+    for step in steps() {
+        assert!(
+            declared.contains(step.source),
+            "migration step source not declared: {}",
+            step.source
+        );
+    }
+}
+
 // Hand-seeded underscore-collection rows below exercise historical schema
 // transforms. The released v0.1.38 public-writer fixture is tested separately.
 
