@@ -3262,7 +3262,15 @@ async fn listener_projects_reaction_removal_without_provider_update_id() {
     .await;
     Mock::given(method("POST"))
         .and(path(api_path("getUpdates")))
-        .respond_with(updates(serde_json::json!([])))
+        .respond_with(updates(serde_json::json!([{
+            "update_id": 11,
+            "message": {
+                "message_id": 7,
+                "chat": { "id": 100, "type": "private" },
+                "from": { "id": 7, "username": "alice" },
+                "text": "finish"
+            }
+        }])))
         .with_priority(10)
         .mount(&server)
         .await;
