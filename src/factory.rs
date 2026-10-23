@@ -802,6 +802,7 @@ pub enum BuiltChannel {
         adapter: Arc<dyn ChannelAdapter>,
         edit: Option<Arc<dyn crate::channel::ChannelEdit>>,
         drafts: Option<Arc<dyn crate::channel::ChannelStreamingDraft>>,
+        reactions: Option<Arc<dyn crate::channel::LegacyChannelReaction>>,
     },
 }
 
@@ -812,6 +813,7 @@ impl BuiltChannel {
             adapter,
             edit: None,
             drafts: None,
+            reactions: None,
         }
     }
 
@@ -826,7 +828,22 @@ impl BuiltChannel {
             adapter,
             edit,
             drafts,
+            reactions: None,
         }
+    }
+
+    /// Retain the provider's scoped reaction extension before its concrete
+    /// type is erased.
+    pub fn with_reaction_port(
+        mut self,
+        reactions: Arc<dyn crate::channel::LegacyChannelReaction>,
+    ) -> Self {
+        match &mut self {
+            Self::Adapter {
+                reactions: port, ..
+            } => *port = Some(reactions),
+        }
+        self
     }
 
     /// Stable provider identifier for this configured instance.
@@ -868,6 +885,13 @@ impl BuiltChannel {
     pub fn drafts(&self) -> Option<&Arc<dyn crate::channel::ChannelStreamingDraft>> {
         match self {
             Self::Adapter { drafts, .. } => drafts.as_ref(),
+        }
+    }
+
+    /// Provider reaction port, when the configured adapter implements it.
+    pub fn reactions(&self) -> Option<&Arc<dyn crate::channel::LegacyChannelReaction>> {
+        match self {
+            Self::Adapter { reactions, .. } => reactions.as_ref(),
         }
     }
 }
@@ -946,8 +970,8 @@ pub fn build_channels(
                     channels.push(BuiltChannel::with_output_ports(
                         channel.clone(),
                         Some(channel.clone()),
-                        Some(channel),
-                    ));
+                        Some(channel.clone()),
+                    ).with_reaction_port(channel));
                 }
             }
             "cloud" => tracing::warn!(

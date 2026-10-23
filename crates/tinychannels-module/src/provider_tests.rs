@@ -421,6 +421,20 @@ impl ChannelAdapter for WebhookVerificationAdapter {
     }
 }
 
+#[async_trait::async_trait]
+impl tinychannels::channel::LegacyChannelReaction for WebhookVerificationAdapter {
+    async fn send_reaction(
+        &self,
+        _channel: &tinychannels_bus::ChannelRef,
+        _conversation: &tinychannels_bus::ConversationRef,
+        _provider_message_id: &str,
+        _reaction: &tinychannels_bus::ChannelReaction,
+        _remove: bool,
+    ) -> std::result::Result<(), ChannelSendError> {
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn outbound_only_provider_routes_webhook_verification_to_native_adapter() {
     let running = Running::start_built_outbound(
@@ -443,6 +457,40 @@ async fn outbound_only_provider_routes_webhook_verification_to_native_adapter() 
         tinychannels_bus::ChannelInteractionResult::WebhookChallenge(value)
             if value == "challenge-42"
     ));
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn outbound_only_provider_routes_scoped_reactions_to_native_extension() {
+    let adapter = Arc::new(WebhookVerificationAdapter);
+    let running = Running::start_built_outbound(
+        BuiltChannel::from_adapter(adapter.clone()).with_reaction_port(adapter),
+        Arc::new(Hooks::default()),
+        memory_host().await,
+    );
+
+    let result = running
+        .interact(tinychannels_bus::ChannelInteraction::SendReaction {
+            channel: tinychannels_bus::ChannelRef {
+                id: "whatsapp".into(),
+                account_id: Some("whatsapp".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "+15550001111".into(),
+                ..Default::default()
+            },
+            provider_message_id: "wamid.fixture".into(),
+            reaction: tinychannels_bus::ChannelReaction {
+                value: "👍".into(),
+                custom_emoji_id: None,
+            },
+            remove: false,
+        })
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    assert!(matches!(result, tinychannels_bus::ChannelInteractionResult::Completed));
     running.stop().await.unwrap();
 }
 
