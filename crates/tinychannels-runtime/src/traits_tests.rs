@@ -2,7 +2,7 @@
 #![allow(deprecated)]
 
 use crate::channel;
-use crate::traits::{Channel, ChannelMessage, SendMessage};
+use crate::traits::{Channel, ChannelMessage, ChannelSendExt, SendMessage};
 use async_trait::async_trait;
 
 struct LegacyChannel;
