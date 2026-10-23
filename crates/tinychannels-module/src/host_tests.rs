@@ -38,6 +38,7 @@ struct Callback {
     controller_gate: Arc<tokio::sync::Notify>,
     persist_failures: Arc<std::sync::atomic::AtomicUsize>,
     event_failures: Arc<AtomicUsize>,
+    empty_speech_result: Arc<AtomicBool>,
     storage: Arc<crate::storage_fixture::StorageHost>,
 }
 
@@ -95,6 +96,9 @@ impl Callback {
     ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
         assert_eq!(request.scope.turn_id, "turn-voice");
         self.events.lock().await.push("speech_synthesis".into());
+        if self.empty_speech_result.load(Ordering::SeqCst) {
+            return Ok(tinychannels_bus::HostSpeechSynthesisResult::default());
+        }
         Ok(tinychannels_bus::HostSpeechSynthesisResult {
             audio_base64: "AQID".into(),
             mime_type: "audio/ogg".into(),
@@ -298,6 +302,7 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
         controller_gate: Arc::new(tokio::sync::Notify::new()),
         persist_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         event_failures: Arc::new(AtomicUsize::new(0)),
+        empty_speech_result: Arc::new(AtomicBool::new(false)),
         storage,
     };
     server
@@ -309,6 +314,34 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
         .await
         .unwrap();
     (HostChannels::new(client), callback, server)
+}
+
+#[tokio::test]
+async fn module_host_rejects_empty_speech_results() {
+    let (host, callback, _server) = connected_host().await;
+    callback
+        .empty_speech_result
+        .store(true, Ordering::SeqCst);
+    let error = host
+        .synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
+            scope: tinychannels_bus::HostVoiceScope {
+                agent_id: "agent-voice".into(),
+                channel_id: "telegram".into(),
+                account_id: Some("account-1".into()),
+                conversation: tinychannels_bus::ConversationRef {
+                    id: "chat-7".into(),
+                    ..Default::default()
+                },
+                turn_id: "turn-voice".into(),
+            },
+            text: "hello".into(),
+            voice: None,
+            format: None,
+        })
+        .await
+        .expect_err("empty speech must not be reported as success");
+    assert!(error.to_string().contains("unusable speech audio"));
+    host.shutdown().await.unwrap();
 }
 
 fn inbound_envelope(text: &str) -> tinychannels_bus::ChannelInboundEnvelope {
