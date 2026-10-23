@@ -2,6 +2,107 @@ use super::*;
 use std::sync::Mutex;
 use tinychannels::SendMessage;
 
+struct LegacyInteractionChannel;
+
+#[async_trait::async_trait]
+impl tinychannels::channel::Channel for LegacyInteractionChannel {
+    fn name(&self) -> &str {
+        "legacy-fixture"
+    }
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn legacy_interaction_boundary_handles_only_v21_operations() {
+    let channel = LegacyInteractionChannel;
+    for interaction in [
+        ChannelInteraction::StartTyping {
+            recipient: "room".into(),
+        },
+        ChannelInteraction::StopTyping {
+            recipient: "room".into(),
+        },
+    ] {
+        assert!(matches!(
+            dispatch(&channel, interaction).await.unwrap(),
+            ChannelInteractionResult::Completed
+        ));
+    }
+    assert!(matches!(
+        dispatch(
+            &channel,
+            ChannelInteraction::SendDraft {
+                message: SendMessage::new("partial", "room"),
+            },
+        )
+        .await
+        .unwrap(),
+        ChannelInteractionResult::Draft(None)
+    ));
+    assert!(matches!(
+        dispatch(&channel, ChannelInteraction::Describe)
+            .await
+            .unwrap(),
+        ChannelInteractionResult::Info(_)
+    ));
+    assert!(matches!(
+        dispatch(&channel, ChannelInteraction::DescribeV2)
+            .await
+            .unwrap(),
+        ChannelInteractionResult::InfoV2(_)
+    ));
+    assert!(
+        dispatch(
+            &channel,
+            ChannelInteraction::UpdateDraft {
+                recipient: "room".into(),
+                message_id: "draft-1".into(),
+                text: "updated".into(),
+            },
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[test]
+#[allow(deprecated)]
+fn compatibility_text_and_telegram_address_preserve_legacy_conventions() {
+    let email = SendMessage::new("body", "recipient").with_subject("  first\nsecond\rline  ");
+    assert_eq!(
+        compatibility_text("email:account", &email),
+        "Subject: first secondline\nbody"
+    );
+    assert_eq!(compatibility_text("slack", &email), "body");
+
+    let message = SendMessage::new("body", "-100:topic-9").in_thread(Some("reply-4".into()));
+    let mut intent = tinychannels::outbound_intent_from_send_message("telegram", &message);
+    normalize_telegram_v1_address(&mut intent, &message);
+    assert_eq!(intent.conversation_id, "-100");
+    assert_eq!(
+        intent
+            .conversation_ref
+            .as_ref()
+            .unwrap()
+            .topic_id
+            .as_deref(),
+        Some("topic-9")
+    );
+    assert_eq!(intent.reply_to_id.as_deref(), Some("reply-4"));
+    assert_eq!(intent.thread_id, None);
+}
+
 struct NativeDescribeAdapter;
 
 #[async_trait::async_trait]
