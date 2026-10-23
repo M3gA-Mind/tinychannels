@@ -508,3 +508,121 @@ async fn transport_failures_preserve_recovery_classification() {
         }
     }
 }
+
+#[tokio::test]
+async fn scoped_output_preserves_acknowledgement_receipt_and_unsupported_content_results() {
+    use tinychannels_bus::module_progressive::{ChannelOutputEvent, ProgressiveOutputFailure};
+
+    let (replies, callback) = fixture(false).await;
+    let scope = OutputScope {
+        channel: tinychannels_bus::ChannelRef {
+            id: "discord".into(),
+            account_id: Some("discord:fixture".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            id: "room-1".into(),
+            ..Default::default()
+        },
+        turn_id: "turn-1".into(),
+        lifetime: TURN_LIFETIME,
+    };
+    let sequence = AtomicU64::new(0);
+    let text_delta = || ChannelOutputEvent::TextDelta {
+        text: "partial".into(),
+        iteration: Some(1),
+    };
+
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Acknowledged);
+    assert_eq!(
+        feed_output(
+            &replies.host,
+            "discord:fixture",
+            Some(&scope),
+            &sequence,
+            vec![text_delta()]
+        )
+        .await
+        .unwrap(),
+        ProgressiveResult::Updated
+    );
+
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Accepted);
+    assert!(matches!(
+        feed_output(
+            &replies.host,
+            "discord:fixture",
+            Some(&scope),
+            &sequence,
+            vec![text_delta()]
+        )
+        .await
+        .unwrap(),
+        ProgressiveResult::DeliveryBatch {
+            hosted_accepted: true,
+            failure: None,
+            ..
+        }
+    ));
+
+    let outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Outcome(Box::new(
+        outcome.clone(),
+    )));
+    assert_eq!(
+        feed_output(
+            &replies.host,
+            "discord:fixture",
+            Some(&scope),
+            &sequence,
+            vec![text_delta()]
+        )
+        .await
+        .unwrap(),
+        ProgressiveResult::DeliveryOutcome {
+            outcome: Box::new(outcome.clone())
+        }
+    );
+
+    *callback.result.lock().await = Some(ProgressiveTransportResult::UnsupportedContent);
+    let part = tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: Default::default(),
+            caption: None,
+            alt_text: Some("chart".into()),
+        },
+    };
+    assert_eq!(
+        feed_output(
+            &replies.host,
+            "discord:fixture",
+            Some(&scope),
+            &sequence,
+            vec![ChannelOutputEvent::FinalMessage {
+                text: "summary".into(),
+                parts: vec![part.clone()],
+                receipt: None,
+            }],
+        )
+        .await
+        .unwrap(),
+        ProgressiveResult::DeliveryUnsupported { parts: vec![part] }
+    );
+
+    assert!(matches!(
+        feed_output(
+            &replies.host,
+            "discord:fixture",
+            Some(&scope),
+            &sequence,
+            vec![text_delta()]
+        )
+        .await
+        .unwrap(),
+        ProgressiveResult::DeliveryBatch {
+            failure: Some(ProgressiveOutputFailure::ProviderTransport),
+            hosted_accepted: false,
+            ..
+        }
+    ));
+    replies.shutdown().await.unwrap();
+}
