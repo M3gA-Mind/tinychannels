@@ -1,5 +1,7 @@
 use super::*;
+use crate::media::MediaPersistence;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tinychannels::host::MediaRepository;
 
 async fn memory_host() -> HostChannels {
     let bus = tinybus::transport::memory::MemoryBus::new();
