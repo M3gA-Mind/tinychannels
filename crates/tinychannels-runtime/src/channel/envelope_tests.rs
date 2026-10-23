@@ -37,16 +37,16 @@ fn media_projection_aligns_partial_metadata_and_transcription_indexes() {
     assert_eq!(projected.media_url.as_deref(), Some("/tmp/one"));
     assert_eq!(projected.media_type.as_deref(), Some("image/png"));
     assert_eq!(
-        projected.media_paths.as_deref(),
-        Some(["/tmp/one", ""].as_slice())
+        projected.media_paths,
+        Some(vec!["/tmp/one".into(), "".into()])
     );
     assert_eq!(
-        projected.media_urls.as_deref(),
-        Some(["/tmp/one", "https://example.test/two"].as_slice())
+        projected.media_urls,
+        Some(vec!["/tmp/one".into(), "https://example.test/two".into()])
     );
     assert_eq!(
-        projected.media_types.as_deref(),
-        Some(["image/png", "audio"].as_slice())
+        projected.media_types,
+        Some(vec!["image/png".into(), "audio".into()])
     );
     assert_eq!(projected.media_transcribed_indexes, Some(vec![0]));
     assert!(InboundMediaPayload::from_media(&[]).media_paths.is_none());
