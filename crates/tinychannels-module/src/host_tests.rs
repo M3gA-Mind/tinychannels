@@ -248,6 +248,42 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
     (HostChannels::new(client), callback, server)
 }
 
+#[derive(Clone)]
+struct CodecCallback;
+
+#[tinybus::interface(name = "ai.tinyhumans.tinyvoice.Voice")]
+impl CodecCallback {
+    async fn codec_transcode(
+        &self,
+        _request: tinyvoice_bus::codec::CodecTranscodeRequest,
+    ) -> Result<tinyvoice_bus::codec::CodecOutput> {
+        Ok(tinyvoice_bus::codec::CodecOutput {
+            audio_base64: "dHJhbnNjb2RlZA==".into(),
+        })
+    }
+
+    async fn codec_probe(
+        &self,
+        _request: tinyvoice_bus::codec::CodecInput,
+    ) -> Result<tinyvoice_bus::codec::CodecInfo> {
+        Ok(tinyvoice_bus::codec::CodecInfo {
+            codec: tinyvoice_bus::codec::AudioCodec::OggOpus,
+            duration_ms: 1_250,
+            sample_rate: 48_000,
+            channels: 2,
+        })
+    }
+
+    async fn codec_waveform(
+        &self,
+        _request: tinyvoice_bus::codec::WaveformRequest,
+    ) -> Result<tinyvoice_bus::codec::WaveformResult> {
+        Ok(tinyvoice_bus::codec::WaveformResult {
+            peaks: vec![0, 127, 255],
+        })
+    }
+}
+
 fn inbound_envelope(text: &str) -> tinychannels_bus::ChannelInboundEnvelope {
     tinychannels_bus::ChannelInboundEnvelope {
         text: text.into(),
@@ -540,6 +576,48 @@ async fn scoped_voice_callbacks_roundtrip_and_enforce_read_byte_limits() {
     );
     host.shutdown().await.unwrap();
     assert!(host.voice_reply_policy(Default::default()).await.is_err());
+}
+
+#[tokio::test]
+async fn host_voice_codec_calls_use_the_loaded_codec_bus_contract() {
+    let (host, _callback, server) = connected_host().await;
+    server
+        .serve_at(
+            tinyvoice_bus::OBJECT_PATH.try_into().unwrap(),
+            CodecCallback,
+        )
+        .await
+        .unwrap();
+    server.request_name(tinyvoice_bus::BUS_NAME).await.unwrap();
+
+    let output = host
+        .transcode_voice(tinyvoice_bus::codec::CodecTranscodeRequest {
+            audio_base64: "c291cmNl".into(),
+            from: tinyvoice_bus::codec::AudioCodec::Mp3,
+            target: tinyvoice_bus::codec::AudioCodec::OggOpus,
+        })
+        .await
+        .unwrap();
+    assert_eq!(output.audio_base64, "dHJhbnNjb2RlZA==");
+
+    let info = host
+        .probe_voice(tinyvoice_bus::codec::CodecInput {
+            audio_base64: "c291cmNl".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(info.codec, tinyvoice_bus::codec::AudioCodec::OggOpus);
+    assert_eq!(info.duration_ms, 1_250);
+
+    let waveform = host
+        .waveform_voice(tinyvoice_bus::codec::WaveformRequest {
+            audio_base64: "c291cmNl".into(),
+            buckets: 3,
+        })
+        .await
+        .unwrap();
+    assert_eq!(waveform.peaks, [0, 127, 255]);
+    host.shutdown().await.unwrap();
 }
 
 #[tokio::test]
