@@ -4,7 +4,8 @@ use std::sync::Mutex as StdMutex;
 
 use async_trait::async_trait;
 use tinychannels_bus::channel::ChannelOutboundIntent;
-use tinychannels_bus::{Channel, ChannelMessage, SendMessage};
+use tinychannels_bus::{ChannelMessage, SendMessage};
+use tinychannels_runtime::Channel;
 
 use super::*;
 
