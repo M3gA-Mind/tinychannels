@@ -842,6 +842,87 @@ fn telegram_image_dimensions_accept_png_and_jpeg_headers_and_reject_invalid_data
 }
 
 #[tokio::test]
+async fn typed_voice_rejects_unprepared_or_unscoped_voice_before_provider_io() {
+    use tinychannels_bus::{OutboundContentPart, OutboundVoice};
+
+    let server = mock_api().await;
+    let store = Arc::new(ReadVoiceFixture {
+        stored: tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: "%%%".into(),
+            mime_type: "audio/ogg".into(),
+            file_name: None,
+        },
+        reads: Arc::default(),
+    });
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(store);
+    assert!(
+        channel_for(&server, &["*"])
+            .send_v2_with_receipt(&voice_message("voice", None, None))
+            .await
+            .is_err()
+    );
+
+    let synthesized = tinychannels_bus::ChannelOutboundMessage {
+        parts: vec![OutboundContentPart::Voice {
+            voice: OutboundVoice::Synthesize {
+                text: "hello".into(),
+                voice: None,
+            },
+        }],
+        ..voice_message("voice", None, None)
+    };
+    assert!(channel.send_v2_with_receipt(&synthesized).await.is_err());
+
+    let mut unsupported_caption_part = voice_message("voice", None, None);
+    unsupported_caption_part
+        .parts
+        .push(OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: Default::default(),
+                caption: None,
+                alt_text: None,
+            },
+        });
+    assert!(
+        channel
+            .send_v2_with_receipt(&unsupported_caption_part)
+            .await
+            .is_err()
+    );
+
+    let mut missing_opaque_id = voice_message("voice", None, None);
+    if let OutboundContentPart::Voice {
+        voice: OutboundVoice::Media { media, .. },
+    } = &mut missing_opaque_id.parts[0]
+    {
+        media.opaque_id = Some("  ".into());
+    }
+    assert!(
+        channel
+            .send_v2_with_receipt(&missing_opaque_id)
+            .await
+            .is_err()
+    );
+
+    let mut missing_turn_id = voice_message("voice", None, None);
+    missing_turn_id.turn_id = None;
+    assert!(
+        channel
+            .send_v2_with_receipt(&missing_turn_id)
+            .await
+            .is_err()
+    );
+    assert!(
+        channel
+            .send_v2_with_receipt(&voice_message("voice", None, None))
+            .await
+            .is_err()
+    );
+
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn typed_media_selects_native_telegram_upload_methods_by_kind_and_format() {
     use tinychannels_bus::{ContentPart, MediaKind, MediaReference};
 
