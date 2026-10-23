@@ -72,6 +72,90 @@ async fn receipt_only_adapters_get_safe_capability_and_outcome_defaults() {
 }
 
 #[tokio::test]
+async fn legacy_adapter_defaults_decline_optional_provider_operations() {
+    let adapter = ReceiptOnlyAdapter;
+    assert_eq!(adapter.media_account_identity(), None);
+    assert_eq!(
+        adapter.receive_ack_policy(),
+        ChannelReceiveAckPolicy::AfterReceiveRecord
+    );
+    assert_eq!(adapter.proactive_target(), None);
+    assert!(!adapter.supports_webhook_delivery());
+    assert!(!adapter.supports_webhook_verification());
+    assert_eq!(
+        adapter.verify_webhook("mode", "token", "challenge"),
+        None
+    );
+
+    let delivery_error = adapter
+        .deliver_webhook(None, b"payload")
+        .await
+        .expect_err("webhook ingress is opt-in");
+    assert!(delivery_error
+        .to_string()
+        .contains("no typed webhook ingress"));
+
+    let read_error = adapter
+        .mark_read(&Default::default(), "provider-message")
+        .await
+        .expect_err("read receipts are opt-in");
+    assert!(read_error.is_unsupported());
+
+    let text = tinychannels_bus::ChannelOutboundMessage {
+        parts: vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "hello".into(),
+                markdown_dialect: None,
+            },
+        }],
+        ..Default::default()
+    };
+    assert!(adapter.validate_typed_send(&text).is_ok());
+
+    let rich = tinychannels_bus::ChannelOutboundMessage {
+        parts: vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: Default::default(),
+                caption: None,
+                alt_text: None,
+            },
+        }],
+        ..text
+    };
+    assert!(adapter.validate_typed_send(&rich).is_err());
+}
+
+struct LegacyDraftAdapter;
+
+#[async_trait]
+impl ChannelStreamingDraft for LegacyDraftAdapter {}
+
+#[tokio::test]
+async fn legacy_streaming_draft_defaults_return_unsupported() {
+    let adapter = LegacyDraftAdapter;
+    assert!(adapter
+        .start_draft(ChannelOutboundIntent::default())
+        .await
+        .expect_err("draft start is opt-in")
+        .is_unsupported());
+    assert!(adapter
+        .update_draft("draft-1", ChannelOutboundIntent::default())
+        .await
+        .expect_err("draft updates are opt-in")
+        .is_unsupported());
+    assert!(adapter
+        .finalize_draft("draft-1", ChannelOutboundIntent::default())
+        .await
+        .expect_err("draft finalization is opt-in")
+        .is_unsupported());
+    assert!(adapter
+        .upsert_draft(None, ChannelOutboundIntent::default())
+        .await
+        .expect_err("draft upsert is opt-in")
+        .is_unsupported());
+}
+
+#[tokio::test]
 async fn receipt_only_adapters_project_text_but_reject_rich_typed_content() {
     let adapter = ReceiptOnlyAdapter;
     let text = tinychannels_bus::ChannelOutboundMessage {
