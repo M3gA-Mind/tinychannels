@@ -4,11 +4,11 @@ use crate::channel::{
     LegacyChannelReaction,
 };
 use crate::providers::telegram::fixtures::*;
+use base64::Engine as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-use base64::Engine as _;
 
 /// Hang guard for loops that must terminate on their own.
 const GUARD: Duration = Duration::from_secs(20);
@@ -555,6 +555,118 @@ async fn typed_image_upload_reads_host_scope_and_returns_provider_receipt() {
             .windows(image.len())
             .any(|window| window == image)
     );
+}
+
+#[tokio::test]
+async fn typed_voice_uses_scoped_host_audio_and_selects_voice_or_audio_endpoint() {
+    for (codec, mime_type, method_name, field) in [
+        (Some("ogg_opus"), "audio/ogg", "sendVoice", "voice"),
+        (Some("mp3"), "audio/mpeg", "sendAudio", "audio"),
+    ] {
+        let server = mock_api().await;
+        mount_post(
+            &server,
+            method_name,
+            ok_with(serde_json::json!({ "message_id": 911 })),
+        )
+        .await;
+        let reads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let store = ReadVoiceFixture {
+            stored: tinychannels_bus::HostReadVoiceMediaResult {
+                audio_base64: base64::engine::general_purpose::STANDARD.encode(b"voice audio"),
+                mime_type: mime_type.into(),
+                file_name: Some("recording.ogg".into()),
+            },
+            reads: reads.clone(),
+        };
+        let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(store));
+
+        let outcome = channel
+            .send_v2_with_receipt(&voice_message(
+                "opaque-voice-1",
+                Some("speech".into()),
+                codec,
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.error, None, "{method_name}");
+        assert_eq!(outcome.receipt.platform_message_ids, ["911"]);
+        assert_eq!(
+            outcome.receipt.parts[0].kind,
+            tinychannels_bus::channel::MessageReceiptPartKind::Voice
+        );
+        let reads = reads.lock().unwrap();
+        assert_eq!(reads.len(), 1);
+        assert_eq!(reads[0].1, "opaque-voice-1");
+        assert_eq!(reads[0].0.configured_instance, "telegram-main");
+        assert_eq!(reads[0].0.turn_id, "turn-image-1");
+        let body = raw_bodies(&server, method_name).await;
+        assert_eq!(body.len(), 1);
+        assert!(body[0].contains(&format!("name=\"{field}\"; filename=\"recording.ogg\"")));
+        assert!(body[0].contains("name=\"caption\"\r\n\r\nspeech"));
+        assert!(body[0].contains("name=\"reply_parameters\"\r\n\r\n{\"message_id\":27}"));
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests[0]
+                .body
+                .windows(11)
+                .any(|window| window == b"voice audio")
+        );
+    }
+}
+
+#[tokio::test]
+async fn oversized_voice_transcript_is_sent_as_a_follow_up_with_combined_receipt() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendVoice",
+        ok_with(serde_json::json!({ "message_id": 911 })),
+    )
+    .await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 912 })),
+    )
+    .await;
+    let store = ReadVoiceFixture {
+        stored: tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(b"voice audio"),
+            mime_type: "audio/ogg".into(),
+            file_name: None,
+        },
+        reads: Arc::default(),
+    };
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(store));
+    let transcript = "spoken detail ".repeat(100);
+
+    let outcome = channel
+        .send_v2_with_receipt(&voice_message(
+            "opaque-voice-2",
+            Some(transcript.clone()),
+            Some("ogg_opus"),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.error, None);
+    assert_eq!(outcome.receipt.platform_message_ids, ["911", "912"]);
+    assert_eq!(outcome.receipt.parts.len(), 2);
+    assert_eq!(
+        outcome.receipt.parts[0].kind,
+        tinychannels_bus::channel::MessageReceiptPartKind::Voice
+    );
+    assert_eq!(
+        outcome.receipt.parts[1].kind,
+        tinychannels_bus::channel::MessageReceiptPartKind::Text
+    );
+    assert_eq!(outcome.receipt.parts[1].index, 1);
+    let voice = raw_bodies(&server, "sendVoice").await;
+    assert_eq!(voice.len(), 1);
+    assert!(!voice[0].contains("name=\"caption\""));
+    assert_eq!(sent_texts(&server), [transcript]);
 }
 
 #[test]
