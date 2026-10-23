@@ -498,8 +498,9 @@ async fn streaming_draft_rejects_non_text_payloads_and_mismatched_scope() {
     let server = mock_api().await;
     let channel = streaming(&server);
     let mut non_text = edit_intent("-10042");
-    non_text.payload = OutboundPayload::Structured {
-        content: serde_json::json!({"kind": "approval"}),
+    non_text.payload = OutboundPayload::Poll {
+        question: "Approval?".into(),
+        options: vec!["Yes".into(), "No".into()],
     };
     let error = crate::channel::ChannelStreamingDraft::start_draft(&channel, non_text)
         .await
