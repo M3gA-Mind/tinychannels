@@ -3307,6 +3307,85 @@ async fn listener_projects_reaction_removal_without_provider_update_id() {
     assert_eq!(recorded[0].2["conversation"]["topicId"], "88");
 }
 
+#[tokio::test]
+async fn listener_projects_authorized_callback_without_provider_update_id() {
+    let server = mock_api().await;
+    mount_get_updates_once(
+        &server,
+        1,
+        updates(serde_json::json!([{
+            "callback_query": {
+                "id": "callback-7",
+                "from": { "id": 7, "username": "alice", "is_bot": true },
+                "message": {
+                    "message_id": 5,
+                    "message_thread_id": 88,
+                    "chat": { "id": 100, "type": "supergroup" }
+                },
+                "data": "approve-once"
+            }
+        }])),
+    )
+    .await;
+    mount_get_updates_once(
+        &server,
+        2,
+        updates(serde_json::json!([{
+            "update_id": 10,
+            "message": {
+                "message_id": 6,
+                "chat": { "id": 100, "type": "private" },
+                "from": { "id": 7, "username": "alice" },
+                "text": "stop"
+            }
+        }])),
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path(api_path("getUpdates")))
+        .respond_with(updates(serde_json::json!([{
+            "update_id": 11,
+            "message": {
+                "message_id": 7,
+                "chat": { "id": 100, "type": "private" },
+                "from": { "id": 7, "username": "alice" },
+                "text": "finish"
+            }
+        }])))
+        .with_priority(10)
+        .mount(&server)
+        .await;
+
+    let events = Arc::new(RecordingEvents::default());
+    let channel = Arc::new(fast_backoff(
+        channel_for(&server, &["alice"]).with_events(events.clone()),
+    ));
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let listener = tokio::spawn({
+        let channel = channel.clone();
+        async move { listen_loop(&channel, tx).await }
+    });
+    let _ = tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("later message dispatched")
+        .expect("listener channel remains open");
+    drop(rx);
+    tokio::time::timeout(GUARD, listener)
+        .await
+        .expect("listener exits after the receiver closes")
+        .unwrap()
+        .unwrap();
+
+    let recorded = events.events.lock().unwrap().clone();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].1, "button_callback");
+    assert_eq!(recorded[0].2["eventId"], "telegram:callback:callback-7");
+    assert_eq!(recorded[0].2["sourceEventId"], serde_json::Value::Null);
+    assert_eq!(recorded[0].2["conversation"]["topicId"], "88");
+    assert_eq!(recorded[0].2["actor"]["isBot"], true);
+    assert_eq!(server.received_requests().await.unwrap().len(), 3);
+}
+
 #[derive(Default)]
 struct RejectingInboundEvents(AtomicUsize);
 
