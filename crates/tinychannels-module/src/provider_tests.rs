@@ -31,6 +31,35 @@ async fn module_media_scope_is_validated_and_bound_to_the_configured_account() {
 
     let unbound = ModuleMediaRepository(memory_host().await, "telegram:main".into(), None);
     assert!(unbound.bind_scope(&mut scope).is_err());
+
+    let request = || tinychannels::host::MediaStoreRequest {
+        metadata: tinychannels::host::MediaMetadata {
+            scope: scope.clone(),
+            kind: tinychannels_bus::MediaKind::Image,
+            content_type: "image/png".into(),
+            file_name: Some("image.png".into()),
+            duration_ms: None,
+            codec: None,
+            voice_direction: None,
+            dedupe_key: None,
+            max_bytes: 1024,
+        },
+        bytes: vec![1, 2, 3],
+    };
+    assert!(repository.store_media(request()).await.is_err());
+    assert!(repository.store_public_media(request()).await.is_err());
+    assert!(
+        repository
+            .read_media(scope.clone(), "opaque-id".into(), 1024)
+            .await
+            .is_err()
+    );
+    assert!(
+        repository
+            .delete_media(scope, "opaque-id".into())
+            .await
+            .is_err()
+    );
 }
 
 #[test]
