@@ -21,8 +21,8 @@ use tinychannels_bus::module_progressive::ChannelOutputEvent;
 use tinychannels_bus::web::WebChatStart;
 use tinychannels_bus::web::{WebChannelEvent, WebEventContext};
 use tinychannels_bus::{
-    ActionCapabilities, ChannelCapabilities, ContentCapabilities, ContentCapability,
-    EventCapabilities, VoiceCapabilities, VoiceTranscriptSource,
+    ActionCapabilities, AddressingCapabilities, ChannelCapabilities, ContentCapabilities,
+    ContentCapability, EventCapabilities, VoiceCapabilities, VoiceTranscriptSource,
 };
 
 /// `client_id` stamped on events that no browser client originated.
@@ -130,6 +130,11 @@ impl WebChannelAdapter {
             },
             voice_in: voice.clone(),
             voice_out: voice,
+            addressing: AddressingCapabilities {
+                conversation_types: vec!["dm".into()],
+                thread_id: true,
+                ..Default::default()
+            },
             events: EventCapabilities {
                 supported: ["message", "cancel"].map(String::from).into(),
             },
@@ -394,6 +399,13 @@ impl ChannelAdapter for WebChannelAdapter {
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> Result<ChannelSendOutcome, ChannelSendError> {
+        if message.parts.is_empty() {
+            return Err(err(
+                SendErrorKind::BadFormat,
+                "typed outbound message must contain at least one content part",
+                false,
+            ));
+        }
         self.send_outcome(ChannelOutboundIntent {
             idempotency_key: message.idempotency_key.clone(),
             channel_id: message.channel_id.clone(),

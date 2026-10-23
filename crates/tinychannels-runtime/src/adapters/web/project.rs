@@ -497,7 +497,11 @@ fn subagent_detail(out: &SubagentOutput) -> WebSubagentProgressDetail {
         changed_files: (!out.changed_files.is_empty()).then(|| out.changed_files.clone()),
         dirty_status: out.dirty_status,
         parent_call_id: out.parent_call_id.clone(),
-        output: None,
+        output: if out.state == "completed" {
+            out.output.clone().map(cap_web_output)
+        } else {
+            None
+        },
     }
 }
 
