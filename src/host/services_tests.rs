@@ -179,7 +179,7 @@ async fn media_repository_defaults_reject_streaming_and_deletion() {
     let repository = UnsupportedMediaRepository;
     let stream_error = repository
         .store_media_stream(MediaStreamRequest {
-            metadata: MediaMetadata {
+            metadata: crate::host::MediaMetadata {
                 scope: MediaScope::default(),
                 kind: tinychannels_bus::MediaKind::Unknown,
                 content_type: "application/octet-stream".into(),
