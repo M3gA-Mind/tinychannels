@@ -79,6 +79,10 @@ impl Sender {
         *self.scope.lock().await = scope;
     }
 
+    async fn has_scope(&self) -> bool {
+        self.scope.lock().await.is_some()
+    }
+
     async fn apply_scope(
         &self,
         request: ProgressiveTransportRequest,
@@ -634,11 +638,7 @@ async fn run(
             command = inbox.recv() => match command {
                 Some(Command::Feed(events, response)) => {
                     let result = apply_legacy_feed(&mut reply, &sender, events).await;
-                    let successful = result.is_ok();
                     let _ = response.send(result);
-                    if successful {
-                        reply.typing_tick().await;
-                    }
                 }
                 Some(Command::FeedOutput(batch, response)) => {
                     let scope = OutputScope {
@@ -683,7 +683,11 @@ async fn run(
                 None => { reply.finalize("Cancelled.").await; break; }
             },
             _ = edits.tick() => reply.edit_tick().await,
-            _ = typing.tick() => reply.typing_tick().await,
+            _ = typing.tick() => {
+                if sender.has_scope().await {
+                    reply.typing_tick().await;
+                }
+            },
             _ = fillers.tick() => reply.filler_tick().await,
             _ = &mut expiry => { reply.finalize("Sorry, the request timed out.").await; break; }
         }

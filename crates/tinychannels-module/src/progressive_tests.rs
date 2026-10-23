@@ -322,7 +322,10 @@ async fn first_scoped_output_typing_uses_the_output_batch_scope() {
         .expect("the first scoped batch should start typing");
     assert_eq!(first_typing.0.as_deref(), Some("turn-scoped"));
     assert_eq!(
-        first_typing.1.as_ref().map(|channel| channel.account_id.as_deref()),
+        first_typing
+            .1
+            .as_ref()
+            .map(|channel| channel.account_id.as_deref()),
         Some(Some("account-1"))
     );
     assert_eq!(
