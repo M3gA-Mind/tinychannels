@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 pub use tinychannels_bus::context::ChannelRouteSelection;
 pub use tinychannels_bus::module_runtime::{
     CHANNEL_MESSAGE_TIMEOUT_SECS, CHANNEL_TYPING_REFRESH_INTERVAL_SECS,
-    DEFAULT_CHANNEL_INITIAL_BACKOFF_SECS, DEFAULT_CHANNEL_MAX_BACKOFF_SECS,
-    MAX_CHANNEL_HISTORY, MIN_CHANNEL_MESSAGE_TIMEOUT_SECS,
+    DEFAULT_CHANNEL_INITIAL_BACKOFF_SECS, DEFAULT_CHANNEL_MAX_BACKOFF_SECS, MAX_CHANNEL_HISTORY,
+    MIN_CHANNEL_MESSAGE_TIMEOUT_SECS,
 };
 
 /// Number of provider workers available per configured channel.

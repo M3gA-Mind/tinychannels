@@ -240,7 +240,6 @@ pub trait ChannelSendExt: Channel {
 
 impl<T: Channel + ?Sized> ChannelSendExt for T {}
 
-
 /// A webhook delivery refused before ingestion because its signature, body,
 /// or configured account scope is invalid.
 #[derive(Debug, Clone, PartialEq, Eq)]
