@@ -37,22 +37,35 @@ async fn module_media_scope_is_validated_and_bound_to_the_configured_account() {
 fn channel_event_scoping_preserves_each_event_kind_and_overwrites_provider_identity() {
     use tinychannels_bus::ChannelEventKind as Kind;
     let kinds = [
-        (Kind::Typing { active: true }, "typing"),
+        (
+            Kind::Typing {
+                actor: Default::default(),
+                active: true,
+                expires_at: None,
+            },
+            "typing",
+        ),
         (
             Kind::ReadReceipt {
                 message_id: "m".into(),
+                actor: None,
+                timestamp: None,
             },
             "read_receipt",
         ),
         (
             Kind::DeliveredReceipt {
                 message_id: "m".into(),
+                actor: None,
+                timestamp: None,
             },
             "delivered_receipt",
         ),
         (
             Kind::ReactionAdded {
                 message_id: "m".into(),
+                provider_message_id: None,
+                actor: Default::default(),
                 reaction: Default::default(),
             },
             "reaction_added",
@@ -60,6 +73,8 @@ fn channel_event_scoping_preserves_each_event_kind_and_overwrites_provider_ident
         (
             Kind::ReactionRemoved {
                 message_id: "m".into(),
+                provider_message_id: None,
+                actor: Default::default(),
                 reaction: Default::default(),
             },
             "reaction_removed",
@@ -76,19 +91,23 @@ fn channel_event_scoping_preserves_each_event_kind_and_overwrites_provider_ident
         (
             Kind::MessageUpdated {
                 message_id: "m".into(),
-                text: None,
+                provider_message_id: None,
+                parts: vec![],
             },
             "message_updated",
         ),
         (
             Kind::MessageDeleted {
                 message_id: "m".into(),
+                provider_message_id: None,
             },
             "message_deleted",
         ),
         (
             Kind::Presence {
+                actor: Default::default(),
                 state: "online".into(),
+                expires_at: None,
             },
             "presence",
         ),
@@ -101,8 +120,10 @@ fn channel_event_scoping_preserves_each_event_kind_and_overwrites_provider_ident
         ),
         (
             Kind::ButtonCallback {
-                callback_id: "cb".into(),
-                data: "go".into(),
+                query_id: "cb".into(),
+                action_id: "go".into(),
+                provider_message_id: None,
+                actor: Default::default(),
             },
             "button_callback",
         ),
