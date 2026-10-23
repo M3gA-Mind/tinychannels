@@ -1005,6 +1005,53 @@ async fn draft_upsert_maps_provider_errors_to_bus_failures() {
     assert!(error.to_string().contains("draft update rejected"));
 }
 
+struct PreScopedDraftUpsert;
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelStreamingDraft for PreScopedDraftUpsert {
+    async fn upsert_draft(
+        &self,
+        _previous: Option<&tinychannels_bus::channel::MessageReceipt>,
+        _intent: tinychannels::channel::ChannelOutboundIntent,
+    ) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, ChannelSendError> {
+        Ok(tinychannels_bus::channel::MessageReceipt {
+            conversation: Some(tinychannels_bus::ConversationRef {
+                id: "provider-room".into(),
+                ..Default::default()
+            }),
+            thread_id: Some("provider-thread".into()),
+            ..Default::default()
+        })
+    }
+}
+
+#[tokio::test]
+async fn draft_upsert_preserves_provider_receipt_conversation_and_thread() {
+    let tinychannels_bus::ChannelInteractionResult::Sent(outcome) = dispatch_draft_upsert(
+        &PreScopedDraftUpsert,
+        "telegram:primary",
+        None,
+        tinychannels::channel::ChannelOutboundIntent {
+            conversation_id: "requested-room".into(),
+            thread_id: Some("requested-thread".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap() else {
+        panic!("draft upsert returns a send outcome");
+    };
+
+    assert_eq!(
+        outcome.receipt.conversation.as_ref().unwrap().id,
+        "provider-room"
+    );
+    assert_eq!(
+        outcome.receipt.thread_id.as_deref(),
+        Some("provider-thread")
+    );
+}
+
 struct EmptyReceiptProvider;
 
 #[async_trait::async_trait]
