@@ -392,6 +392,9 @@ fn subagent_states_map_to_subagent_events_with_detail() {
         assert_eq!(projected["subagent"]["agent_id"], "researcher");
         assert_eq!(projected["subagent"]["cost_usd"], 0.5);
         assert_eq!(projected["subagent"]["changed_files"][0], "a.rs");
+        if state == "completed" {
+            assert_eq!(projected["subagent"]["output"], "Found results");
+        }
     }
     let result = wire(&one(ChannelOutputEvent::Subagent(Box::new(subagent(
         "tool_result",
@@ -422,6 +425,16 @@ fn oversized_subagent_output_is_capped() {
     big.output = Some("x".repeat(tinychannels_bus::web::MAX_WEB_TOOL_PAYLOAD_BYTES + 10));
     let projected = wire(&one(ChannelOutputEvent::Subagent(Box::new(big))));
     let output = projected["output"].as_str().unwrap();
+    assert!(output.len() <= tinychannels_bus::web::MAX_WEB_TOOL_PAYLOAD_BYTES);
+    assert!(output.contains("truncated"));
+}
+
+#[test]
+fn completed_subagent_output_in_detail_is_capped() {
+    let mut completed = subagent("completed");
+    completed.output = Some("x".repeat(tinychannels_bus::web::MAX_WEB_TOOL_PAYLOAD_BYTES + 10));
+    let projected = wire(&one(ChannelOutputEvent::Subagent(Box::new(completed))));
+    let output = projected["subagent"]["output"].as_str().unwrap();
     assert!(output.len() <= tinychannels_bus::web::MAX_WEB_TOOL_PAYLOAD_BYTES);
     assert!(output.contains("truncated"));
 }

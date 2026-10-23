@@ -469,6 +469,22 @@ async fn send_typed_preserves_parts_through_the_current_adapter_contract() {
 }
 
 #[tokio::test]
+async fn send_typed_rejects_empty_parts_without_publishing() {
+    let (adapter, sink) = adapter();
+    let message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "web".into(),
+        conversation_id: "thread-9".into(),
+        idempotency_key: "typed-empty".into(),
+        parts: vec![],
+        ..Default::default()
+    };
+
+    let error = adapter.send_typed(&message).await.unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::BadFormat);
+    assert!(sink.events.lock().is_empty());
+}
+
+#[tokio::test]
 async fn send_typed_rejects_parts_the_web_adapter_does_not_declare() {
     let (adapter, sink) = adapter();
     for part in [
@@ -594,6 +610,8 @@ async fn status_and_capabilities_reflect_lifecycle_and_declared_content() {
     assert!(capabilities.voice_in.supported && capabilities.voice_out.supported);
     assert!(capabilities.content.image.inbound && capabilities.content.file.outbound);
     assert!(capabilities.chat_approvals);
+    assert!(capabilities.addressing.thread_id);
+    assert_eq!(capabilities.addressing.conversation_types, ["dm"]);
 }
 
 #[test]
