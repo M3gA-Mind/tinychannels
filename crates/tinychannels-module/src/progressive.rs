@@ -32,6 +32,7 @@ const TURN_LIFETIME: Duration = Duration::from_secs(180);
 struct Sender {
     host: HostChannels,
     scope: Arc<Mutex<Option<OutputScope>>>,
+    output_scope: Arc<Mutex<Option<OutputScope>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,6 +73,7 @@ impl Sender {
         Self {
             host,
             scope: Arc::new(Mutex::new(None)),
+            output_scope: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -81,6 +83,26 @@ impl Sender {
 
     async fn has_scope(&self) -> bool {
         self.scope.lock().await.is_some()
+    }
+
+    async fn check_output_scope(&self, scope: &OutputScope) -> Result<()> {
+        if self
+            .output_scope
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|bound| bound != scope)
+        {
+            return Err(Error::failed("progressive reply scope cannot change"));
+        }
+        Ok(())
+    }
+
+    async fn bind_output_scope(&self, scope: OutputScope) {
+        let mut bound = self.output_scope.lock().await;
+        if bound.is_none() {
+            *bound = Some(scope);
+        }
     }
 
     async fn apply_scope(
@@ -400,14 +422,6 @@ impl Replies {
                     channel_ref: channel_ref.map(|value| *value),
                     conversation: conversation.map(|value| *value),
                 };
-                if let Some(applied) = replay_output(
-                    entry.output_replay.lock().await.as_ref(),
-                    &scope,
-                    sequence,
-                    &events,
-                ) {
-                    return output_result(applied?);
-                }
                 let (response, wait) = oneshot::channel();
                 entry
                     .commands
@@ -702,7 +716,9 @@ async fn apply_scoped_output(
     events: Vec<ChannelOutputEvent>,
     output_replay: &Mutex<Option<OutputBatchReplay>>,
 ) -> Result<AppliedOutput> {
+    sender.check_output_scope(scope).await?;
     let applied = apply_output(reply, sender, scope, sequence, events, output_replay).await?;
+    sender.bind_output_scope(scope.clone()).await;
     sender.set_scope(Some(scope.clone())).await;
     Ok(applied)
 }
@@ -739,13 +755,38 @@ async fn apply_output(
             "progressive final message must be the last event in its batch",
         ));
     }
-    if let Some(applied) = replay_output(
-        output_replay.lock().await.as_ref(),
-        scope,
-        sequence,
-        &events,
-    ) {
-        return applied;
+    let previous = output_replay.lock().await.clone();
+    if let Some(applied) = replay_output(previous.as_ref(), scope, sequence, &events) {
+        let mut applied = applied?;
+        let failures = std::mem::take(&mut applied.output_event_failures);
+        for failed_sequence in failures {
+            let Some(offset) = failed_sequence
+                .checked_sub(sequence)
+                .and_then(|offset| usize::try_from(offset).ok())
+            else {
+                applied.output_event_failures.push(failed_sequence);
+                continue;
+            };
+            let Some(event) = events.get(offset) else {
+                applied.output_event_failures.push(failed_sequence);
+                continue;
+            };
+            if sender
+                .output_event(scope, failed_sequence, event.clone())
+                .await
+                .is_err()
+            {
+                applied.output_event_failures.push(failed_sequence);
+            }
+        }
+        if let Some(previous) = output_replay.lock().await.as_mut()
+            && previous.scope == *scope
+            && previous.sequence == sequence
+            && previous.events == events
+        {
+            previous.result = applied.clone();
+        }
+        return Ok(applied);
     }
     let text = events
         .iter()

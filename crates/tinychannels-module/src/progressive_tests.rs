@@ -903,9 +903,16 @@ async fn feed_output_retries_failed_callbacks_without_repeating_typed_delivery()
     }];
     *callback.failed_output_sequences.lock().await = vec![41];
 
-    let first = apply_output(&mut reply, &sender, &scope, 41, events.clone(), &output_replay)
-        .await
-        .unwrap();
+    let first = apply_output(
+        &mut reply,
+        &sender,
+        &scope,
+        41,
+        events.clone(),
+        &output_replay,
+    )
+    .await
+    .unwrap();
     assert_eq!(first.output_event_failures, vec![41]);
     *callback.failed_output_sequences.lock().await = vec![];
 
@@ -1218,20 +1225,32 @@ async fn feed_output_rejects_scope_changes_after_first_accepted_batch() {
             events: vec![event()],
         })
         .await;
-    assert!(changed.is_err(), "a reply handle must retain its first scope");
-    assert!(callback.requests.lock().await.iter().all(|request| match request {
-        ProgressiveTransportRequest::OutputEvent {
-            turn_id,
-            channel_ref,
-            conversation,
-            ..
-        } => {
-            turn_id.as_deref() == Some("turn-1")
-                && channel_ref.is_none()
-                && conversation.as_ref().is_some_and(|value| value.id == "conversation-1")
-        }
-        _ => true,
-    }));
+    assert!(
+        changed.is_err(),
+        "a reply handle must retain its first scope"
+    );
+    assert!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .all(|request| match request {
+                ProgressiveTransportRequest::OutputEvent {
+                    turn_id,
+                    channel_ref,
+                    conversation,
+                    ..
+                } => {
+                    turn_id.as_deref() == Some("turn-1")
+                        && channel_ref.is_none()
+                        && conversation
+                            .as_ref()
+                            .is_some_and(|value| value.id == "conversation-1")
+                }
+                _ => true,
+            })
+    );
     replies
         .execute(ProgressiveCommand::Close { handle })
         .await
