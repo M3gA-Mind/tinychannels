@@ -474,9 +474,13 @@ async fn send_typed_rejects_empty_parts_without_publishing() {
     let message = tinychannels_bus::ChannelOutboundMessage {
         channel_id: "web".into(),
         conversation_id: "thread-9".into(),
+        channel_ref: None,
+        conversation_ref: None,
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: None,
         idempotency_key: "typed-empty".into(),
         parts: vec![],
-        ..Default::default()
     };
 
     let error = adapter.send_typed(&message).await.unwrap_err();
