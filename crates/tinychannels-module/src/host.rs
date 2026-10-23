@@ -415,13 +415,20 @@ impl HostChannels {
         &self,
         request: HostSpeechSynthesisRequest,
     ) -> Result<HostSpeechSynthesisResult> {
-        self.call_host_voice(
+        let result = self
+            .call_host_voice(
             host_methods::SYNTHESIZE_SPEECH,
             request,
             MAX_CALLBACK_BYTES,
             MAX_VOICE_CALLBACK_BYTES,
         )
-        .await
+            .await?;
+        if result.audio_base64.trim().is_empty() || result.mime_type.trim().is_empty() {
+            return Err(Error::failed(
+                "voice callback returned unusable speech audio",
+            ));
+        }
+        Ok(result)
     }
 
     /// Store host-produced or provider-received audio under its scoped identity.
