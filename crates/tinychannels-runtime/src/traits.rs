@@ -2,7 +2,8 @@
 // V21 DTO use is confined to the compatibility traits in this module.
 #![allow(deprecated)]
 
-use tinychannels_bus::{ChannelIngress, ChannelMessage, SendMessage};
+use tinychannels_bus::ChannelOutboundMessage;
+pub use tinychannels_bus::{ChannelMessage, SendMessage};
 
 use async_trait::async_trait;
 
@@ -34,21 +35,15 @@ pub trait Channel: Send + Sync {
 
     /// Deliver canonical typed content. Migrated providers override this; the
     /// default is the explicit text-only one-release compatibility projection.
-    async fn send_typed(
-        &self,
-        message: &crate::channel::ChannelOutboundMessage,
-    ) -> anyhow::Result<()> {
+    async fn send_typed(&self, message: &ChannelOutboundMessage) -> anyhow::Result<()> {
         self.send(&message.to_legacy_message()?).await
     }
 
     /// Validate a typed send before it enters the provider actor. The default
     /// validates the one-release text-only projection; native typed providers
     /// should override this with their own content and addressing checks.
-    fn validate_typed_send(
-        &self,
-        message: &crate::channel::ChannelOutboundMessage,
-    ) -> anyhow::Result<()> {
-        message.to_legacy_message().map(|_| ())
+    fn validate_typed_send(&self, message: &ChannelOutboundMessage) -> anyhow::Result<()> {
+        Ok(message.to_legacy_message().map(|_| ())?)
     }
 
     /// Send canonical content and return the provider receipt when the actual
@@ -56,7 +51,7 @@ pub trait Channel: Send + Sync {
     /// they return an empty receipt rather than guessing an ID.
     async fn send_typed_with_receipt(
         &self,
-        message: &crate::channel::ChannelOutboundMessage,
+        message: &ChannelOutboundMessage,
     ) -> anyhow::Result<crate::channel::ChannelSendOutcome> {
         self.send_typed(message).await?;
         Ok(crate::channel::ChannelSendOutcome::default())
