@@ -17,8 +17,9 @@ markers. `normalize_chat_start` produces the envelope:
   the request id, sender = host-authenticated user or the socket `client_id`;
 - the host sets `sender_id` after authenticating its session; client JSON cannot
   supply it. The host also sets `command_authorized`; anonymous submissions are
-  never command-authorized. Anonymous requests require a nonempty `client_id`
-  to establish sender identity and reply routing;
+  never command-authorized. Every request requires a nonempty `client_id`,
+  `thread_id` and `request_id`. For anonymous requests, `client_id` is also the
+  sender identity;
 - `parts` are ordered (typed text first, then attachments); `media` is the
   compatibility projection;
 - a voice note with no typed text contributes its **completed** transcript as
