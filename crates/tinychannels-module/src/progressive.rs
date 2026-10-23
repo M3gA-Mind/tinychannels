@@ -319,6 +319,7 @@ struct Closing {
 }
 struct Entry {
     channel: String,
+    bound_scope: Option<OutputScope>,
     commands: mpsc::Sender<Command>,
     worker: Mutex<Option<JoinHandle<()>>>,
     closing: Mutex<Option<Closing>>,
@@ -356,7 +357,23 @@ impl Replies {
             return Err(Error::failed("progressive request exceeds its limit"));
         }
         match request {
-            ProgressiveCommand::Open { channel } => self.open(channel).await,
+            ProgressiveCommand::Open { channel } => self.open(channel, None).await,
+            ProgressiveCommand::OpenScoped {
+                channel,
+                turn_id,
+                channel_ref,
+                conversation,
+            } => {
+                self.open(
+                    channel,
+                    Some((
+                        turn_id,
+                        channel_ref.map(|value| *value),
+                        conversation.map(|value| *value),
+                    )),
+                )
+                .await
+            }
             ProgressiveCommand::Feed { handle, events } => {
                 if events.len() > 32 {
                     return Err(Error::failed("too many progressive events"));
@@ -400,6 +417,13 @@ impl Replies {
                     channel_ref: channel_ref.map(|value| *value),
                     conversation: conversation.map(|value| *value),
                 };
+                if entry
+                    .bound_scope
+                    .as_ref()
+                    .is_some_and(|bound| bound != &scope)
+                {
+                    return Err(Error::failed("progressive output scope changed"));
+                }
                 if let Some(applied) = replay_output(
                     entry.output_replay.lock().await.as_ref(),
                     &scope,
@@ -460,7 +484,15 @@ impl Replies {
             .ok_or_else(|| Error::failed("unknown progressive handle"))
     }
 
-    async fn open(&self, channel: String) -> Result<ProgressiveResult> {
+    async fn open(
+        &self,
+        channel: String,
+        scope: Option<(
+            Option<String>,
+            Option<tinychannels_bus::ChannelRef>,
+            Option<tinychannels_bus::ConversationRef>,
+        )>,
+    ) -> Result<ProgressiveResult> {
         if channel.is_empty() || channel.len() > 4096 {
             return Err(Error::failed("invalid progressive target"));
         }
@@ -509,6 +541,13 @@ impl Replies {
             }
         }
         let handle = uuid::Uuid::new_v4().simple().to_string();
+        let bound_scope = scope.map(|(turn_id, channel_ref, conversation)| OutputScope {
+            handle: handle.clone(),
+            channel: channel.clone(),
+            turn_id,
+            channel_ref,
+            conversation,
+        });
         let (commands, inbox) = mpsc::channel(16);
         let host = self.host.clone();
         let output_replay = Arc::new(Mutex::new(None));
@@ -523,6 +562,7 @@ impl Replies {
             handle.clone(),
             Arc::new(Entry {
                 channel,
+                bound_scope,
                 commands,
                 worker: Mutex::new(Some(worker)),
                 closing: Mutex::new(None),
