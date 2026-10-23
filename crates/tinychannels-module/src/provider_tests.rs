@@ -1,6 +1,138 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+async fn memory_host() -> HostChannels {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    HostChannels::new(connection)
+}
+
+#[tokio::test]
+async fn module_media_scope_is_validated_and_bound_to_the_configured_account() {
+    let repository = ModuleMediaRepository(
+        memory_host().await,
+        "telegram:main".into(),
+        Some("acct-7".into()),
+    );
+    let mut scope = tinychannels::host::MediaScope::default();
+    assert!(repository.bind_scope(&mut scope).is_err());
+
+    scope.conversation.id = "room".into();
+    assert!(repository.bind_scope(&mut scope).is_err());
+
+    scope.turn_id = "turn-1".into();
+    repository.bind_scope(&mut scope).unwrap();
+    assert_eq!(scope.configured_instance, "telegram:main");
+    assert_eq!(scope.channel.id, "telegram");
+    assert_eq!(scope.channel.account_id.as_deref(), Some("acct-7"));
+
+    let unbound = ModuleMediaRepository(memory_host().await, "telegram:main".into(), None);
+    assert!(unbound.bind_scope(&mut scope).is_err());
+}
+
+#[test]
+fn channel_event_scoping_preserves_each_event_kind_and_overwrites_provider_identity() {
+    use tinychannels_bus::ChannelEventKind as Kind;
+    let kinds = [
+        (Kind::Typing { active: true }, "typing"),
+        (
+            Kind::ReadReceipt {
+                message_id: "m".into(),
+            },
+            "read_receipt",
+        ),
+        (
+            Kind::DeliveredReceipt {
+                message_id: "m".into(),
+            },
+            "delivered_receipt",
+        ),
+        (
+            Kind::ReactionAdded {
+                message_id: "m".into(),
+                reaction: Default::default(),
+            },
+            "reaction_added",
+        ),
+        (
+            Kind::ReactionRemoved {
+                message_id: "m".into(),
+                reaction: Default::default(),
+            },
+            "reaction_removed",
+        ),
+        (
+            Kind::OutboundReaction {
+                message_id: "m".into(),
+                provider_message_id: None,
+                reaction: Default::default(),
+                success: true,
+            },
+            "outbound_reaction",
+        ),
+        (
+            Kind::MessageUpdated {
+                message_id: "m".into(),
+                text: None,
+            },
+            "message_updated",
+        ),
+        (
+            Kind::MessageDeleted {
+                message_id: "m".into(),
+            },
+            "message_deleted",
+        ),
+        (
+            Kind::Presence {
+                state: "online".into(),
+            },
+            "presence",
+        ),
+        (
+            Kind::Lifecycle {
+                state: "ready".into(),
+                reason: None,
+            },
+            "lifecycle",
+        ),
+        (
+            Kind::ButtonCallback {
+                callback_id: "cb".into(),
+                data: "go".into(),
+            },
+            "button_callback",
+        ),
+    ];
+
+    for (kind, expected_kind) in kinds {
+        let scoped = scope_channel_event(
+            "telegram:main",
+            tinychannels_bus::ChannelEvent {
+                version: 2,
+                event_id: "event-1".into(),
+                source_event_id: None,
+                source_timestamp: None,
+                channel: tinychannels_bus::ChannelRef {
+                    id: "attacker".into(),
+                    account_id: Some("spoofed".into()),
+                },
+                conversation: None,
+                event: kind,
+            },
+        );
+        assert_eq!(scoped.channel.id, "telegram");
+        assert_eq!(scoped.channel.account_id.as_deref(), Some("telegram:main"));
+        assert_eq!(
+            scoped.event_id,
+            format!("telegram:main:event-1:{expected_kind}")
+        );
+    }
+}
+
 struct SlowChannel {
     started: StdMutex<Option<oneshot::Sender<()>>>,
     release: tokio::sync::Mutex<Option<oneshot::Receiver<()>>>,
