@@ -104,6 +104,53 @@ async fn dispatch_interaction(
     }
 }
 
+async fn dispatch_draft_upsert(
+    drafts: &dyn tinychannels::channel::ChannelStreamingDraft,
+    configured_instance: &str,
+    previous: Option<tinychannels_bus::channel::MessageReceipt>,
+    intent: tinychannels_bus::ChannelOutboundIntent,
+) -> Result<tinychannels_bus::ChannelInteractionResult> {
+    let channel = intent
+        .channel_ref
+        .clone()
+        .unwrap_or_else(|| tinychannels_bus::ChannelRef {
+            id: tinychannels_bus::provider_id(configured_instance).to_owned(),
+            account_id: Some(configured_instance.to_owned()),
+        });
+    let conversation =
+        intent
+            .conversation_ref
+            .clone()
+            .unwrap_or_else(|| tinychannels_bus::ConversationRef {
+                id: intent.conversation_id.clone(),
+                thread_id: intent.thread_id.clone(),
+                ..Default::default()
+            });
+    let thread_id = intent
+        .thread_id
+        .clone()
+        .or_else(|| conversation.thread_id.clone());
+    let idempotency_key = intent.idempotency_key.clone();
+    let mut receipt = drafts
+        .upsert_draft(previous.as_ref(), intent)
+        .await
+        .map_err(|error| Error::failed(error.message))?;
+    receipt.idempotency_key = Some(idempotency_key);
+    receipt.channel = Some(channel);
+    if receipt.conversation.is_none() {
+        receipt.conversation = Some(conversation);
+    }
+    if receipt.thread_id.is_none() {
+        receipt.thread_id = thread_id;
+    }
+    Ok(tinychannels_bus::ChannelInteractionResult::Sent(Box::new(
+        tinychannels_bus::channel::ChannelSendOutcome {
+            receipt,
+            error: None,
+        },
+    )))
+}
+
 async fn stop_typing_refresh(handle: &str, typing: &mut TypingRefreshes) {
     if let Some(refresh) = typing.remove(handle) {
         refresh.cancel.send_replace(true);
@@ -780,6 +827,7 @@ impl Running {
         let finished = Arc::new(AtomicBool::new(false));
         let task_finished = finished.clone();
         let adapter = channel.adapter().clone();
+        let send_drafts = channel.drafts().cloned();
         let listen_adapter = adapter.clone();
         let send_adapter = adapter.clone();
         let stop_adapter = adapter.clone();
@@ -893,14 +941,33 @@ impl Running {
                                 tinychannels_bus::ChannelInteractionResult::Sent(Box::new(outcome))
                             })
                             .map_err(|error| Error::failed(error.message)),
-                        ProviderOperation::Interaction(interaction) => match send_legacy.as_ref() {
-                            Some(legacy) => {
-                                dispatch_interaction(legacy.clone(), *interaction, &mut typing)
+                        ProviderOperation::Interaction(interaction) => match *interaction {
+                            tinychannels_bus::ChannelInteraction::UpsertDraft {
+                                previous,
+                                intent,
+                            } => match send_drafts.as_ref() {
+                                Some(drafts) => {
+                                    dispatch_draft_upsert(
+                                        drafts.as_ref(),
+                                        &configured_instance,
+                                        previous,
+                                        intent,
+                                    )
                                     .await
-                            }
-                            None => Err(Error::failed(
-                                "provider interaction is not supported by this adapter",
-                            )),
+                                }
+                                None => Err(Error::failed(
+                                    "provider draft upsert is not supported by this adapter",
+                                )),
+                            },
+                            interaction => match send_legacy.as_ref() {
+                                Some(legacy) => {
+                                    dispatch_interaction(legacy.clone(), interaction, &mut typing)
+                                        .await
+                                }
+                                None => Err(Error::failed(
+                                    "provider interaction is not supported by this adapter",
+                                )),
+                            },
                         },
                     };
                     let _ = command.reply.send(result);
