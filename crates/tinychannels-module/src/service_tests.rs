@@ -680,7 +680,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                         conversation_id: "room".into(),
                         channel_ref: Some(tinychannels_bus::channel::ChannelRef {
                             id: "fixture".into(),
-                            account_id: Some("account-a".into()),
+                            account_id: Some("fixture".into()),
                         }),
                         conversation_ref: Some(tinychannels_bus::channel::ConversationRef {
                             kind: tinychannels_bus::channel::ConversationKind::Thread,
@@ -708,7 +708,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                 .channel_ref
                 .as_ref()
                 .and_then(|channel| channel.account_id.as_deref()),
-            Some("account-a")
+            Some("fixture")
         );
         let address = typed.conversation_ref.as_ref().unwrap();
         assert_eq!(address.scope_id.as_deref(), Some("workspace-a"));
@@ -3399,25 +3399,28 @@ async fn service_send_failures_preserve_named_error_and_durable_queue_busy_refus
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (service, _callbacks, _server) =
         channels_with_store(Arc::new(FailingChannel(calls.clone()))).await;
-    for error in [
-        service
-            .send_message("fixture".into(), SendMessage::new("hello", "room"))
-            .await
-            .expect_err("provider fails"),
-        service
-            .send_channel_intent(
-                "fixture".into(),
-                ChannelOutboundIntent {
-                    durability: tinychannels::DeliveryDurability::BestEffort,
-                    ..required_intent("best-effort", "hello")
-                },
-            )
-            .await
-            .map(|_| ())
-            .expect_err("provider fails"),
-    ] {
-        assert!(matches!(error, BusError::MethodFailed { name, .. } if name == SEND_FAILED_ERROR));
-    }
+    let legacy_error = service
+        .send_message("fixture".into(), SendMessage::new("hello", "room"))
+        .await
+        .expect_err("legacy provider send fails");
+    assert!(matches!(
+        legacy_error,
+        BusError::MethodFailed { name, .. } if name == SEND_FAILED_ERROR
+    ));
+
+    let typed_result = service
+        .send_channel_intent(
+            "fixture".into(),
+            ChannelOutboundIntent {
+                durability: tinychannels::DeliveryDurability::BestEffort,
+                ..required_intent("best-effort", "hello")
+            },
+        )
+        .await
+        .expect("typed send failure is returned in its outcome");
+    let typed_error = typed_result.error.expect("typed provider error is preserved");
+    assert_eq!(typed_error.message, "fixture provider failure");
+    assert!(!typed_error.retryable);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     let admission = service.delivery_admission.lock().await;
     let error = service
