@@ -201,3 +201,7 @@ pub fn typed_message_from_inbound_envelope(
         sender_name: envelope.sender.name.clone(),
     }
 }
+
+#[cfg(test)]
+#[path = "envelope_tests.rs"]
+mod tests;
