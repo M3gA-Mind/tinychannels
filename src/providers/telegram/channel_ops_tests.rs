@@ -1,5 +1,5 @@
 use super::*;
-use crate::channel::{ChannelAdapter, ChannelTyping};
+use crate::channel::{ChannelAdapter, ChannelDelete, ChannelInboundSink, ChannelTyping};
 use crate::providers::telegram::fixtures::*;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -411,6 +411,18 @@ fn media_message(part: tinychannels_bus::ContentPart) -> tinychannels_bus::Chann
     message
 }
 
+struct NoopInboundSink;
+
+#[async_trait::async_trait]
+impl ChannelInboundSink for NoopInboundSink {
+    async fn push(
+        &self,
+        _envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn typed_image_upload_reads_host_scope_and_returns_provider_receipt() {
     let server = mock_api().await;
@@ -613,6 +625,76 @@ async fn typed_media_selects_native_telegram_upload_methods_by_kind_and_format()
         assert_eq!(body.len(), 1, "{method}");
         assert!(body[0].contains(&format!("name=\"{field}\"")), "{method}");
     }
+}
+
+#[tokio::test]
+async fn adapter_start_rejects_duplicate_listener_and_stop_cancels_active_poll() {
+    let server = mock_api().await;
+    mount_post(&server, "deleteWebhook", ok()).await;
+    mount_post(
+        &server,
+        "getUpdates",
+        ok_with(serde_json::Value::Array(Vec::new())),
+    )
+    .await;
+    let channel = Arc::new(channel_for(&server, &["*"]));
+    let sink = NoopInboundSink;
+    let listener_channel = Arc::clone(&channel);
+    let listener = tokio::spawn(async move { listener_channel.start(&sink).await });
+
+    for _ in 0..1_000 {
+        if channel.listener_running.load(Ordering::Acquire) {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(channel.listener_running.load(Ordering::Acquire));
+    let duplicate = channel.start(&NoopInboundSink).await.unwrap_err();
+    assert_eq!(duplicate.kind, crate::channel::SendErrorKind::Forbidden);
+    channel.stop().await.unwrap();
+    listener.await.unwrap().unwrap();
+    assert!(!channel.listener_running.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn adapter_status_reports_health_and_send_returns_typed_receipt() {
+    let server = mock_api().await;
+    Mock::given(method("GET"))
+        .and(path(api_path("getMe")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {"id": 7}
+        })))
+        .mount(&server)
+        .await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({"message_id": 94})),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"]);
+
+    let descriptor = ChannelAdapter::descriptor(&channel);
+    assert_eq!(descriptor.id, "telegram");
+    assert_eq!(descriptor.metadata["adapterMode"], "native-v2");
+    assert_eq!(ChannelAdapter::proactive_target(&channel), None);
+    let status = ChannelAdapter::status(&channel).await.unwrap();
+    assert_eq!(status.channel_id, "telegram");
+    assert_eq!(status.health_state.as_deref(), Some("healthy"));
+
+    let intent = tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "adapter-send".into(),
+        channel_id: "telegram".into(),
+        conversation_id: "-10042".into(),
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: "adapter text".into(),
+        },
+        ..Default::default()
+    };
+    let receipt = ChannelAdapter::send(&channel, intent).await.unwrap();
+    assert_eq!(receipt.platform_message_ids, ["94"]);
+    assert_eq!(receipt.idempotency_key.as_deref(), Some("adapter-send"));
 }
 
 #[tokio::test]
