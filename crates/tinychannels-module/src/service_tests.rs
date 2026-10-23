@@ -1987,7 +1987,7 @@ async fn provider_failure_stays_pending_then_recovery_fails_closed_once() {
     recover_delivery_channel(&channels.host, &channels.running, "fixture")
         .await
         .unwrap();
-    assert_eq!(calls.load(Ordering::SeqCst), 2, "recovery retries provider once");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "ambiguous delivery is not retried blindly");
     let scopes = callbacks.storage.snapshot().await;
     let scope = scopes.get("scope-a").unwrap();
     assert!(scope.pending.is_empty());
@@ -3432,6 +3432,7 @@ async fn service_send_failures_preserve_named_error_and_durable_queue_busy_refus
     let typed_error = typed_result.error.expect("typed provider error is preserved");
     assert_eq!(typed_error.message, "fixture provider failure");
     assert!(!typed_error.retryable);
+    assert!(typed_error.sent_before_error);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     let admission = service.delivery_admission.lock().await;
     let error = service
