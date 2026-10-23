@@ -1459,7 +1459,8 @@ impl Channels {
             .opaque_id
             .clone()
             .ok_or_else(|| BusError::failed("media resolution request is invalid"))?;
-        let scope = request.scope.clone();
+        let mut scope = request.scope.clone();
+        scope.configured_instance = instance.clone();
         let max_bytes = request.max_bytes;
         self.media_reads
             .resolve(
