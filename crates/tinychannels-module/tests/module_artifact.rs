@@ -2543,7 +2543,10 @@ async fn compiled_artifact_authenticates_whatsapp_cloud_webhooks_and_runs_native
         )
         .await
         .expect_err("the module must not claim host-owned webhook ingress");
-    assert_eq!(configured_start.wire_name(), "ai.tinyhumans.tinychannels.Error.NoWebhookIngress");
+    assert_eq!(
+        configured_start.wire_name(),
+        "ai.tinyhumans.tinychannels.Error.NoWebhookIngress"
+    );
     runtime
         .call_confidential::<()>(
             "StartOutboundChannel",
