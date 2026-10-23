@@ -405,6 +405,12 @@ fn png_with_dimensions(width: u32, height: u32) -> Vec<u8> {
     bytes
 }
 
+fn media_message(part: tinychannels_bus::ContentPart) -> tinychannels_bus::ChannelOutboundMessage {
+    let mut message = image_message("opaque-media");
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content { part }];
+    message
+}
+
 #[tokio::test]
 async fn typed_image_upload_reads_host_scope_and_returns_provider_receipt() {
     let server = mock_api().await;
@@ -486,6 +492,127 @@ fn telegram_image_dimensions_accept_png_and_jpeg_headers_and_reject_invalid_data
         telegram_image_dimensions("image/jpeg", &[0xff, 0xd8, 0xff]),
         None
     );
+}
+
+#[tokio::test]
+async fn typed_media_selects_native_telegram_upload_methods_by_kind_and_format() {
+    use tinychannels_bus::{ContentPart, MediaKind, MediaReference};
+
+    let cases = [
+        (
+            ContentPart::Video {
+                media: MediaReference {
+                    opaque_id: Some("video".into()),
+                    kind: MediaKind::Video,
+                    ..Default::default()
+                },
+                caption: Some("clip".into()),
+                duration_ms: Some(1_500),
+                thumbnail: None,
+            },
+            MediaKind::Video,
+            "video/mp4",
+            "sendVideo",
+            "video",
+        ),
+        (
+            ContentPart::Audio {
+                media: MediaReference {
+                    opaque_id: Some("audio".into()),
+                    kind: MediaKind::Audio,
+                    ..Default::default()
+                },
+                codec: Some("mp3".into()),
+                duration_ms: Some(999),
+                title: Some("song".into()),
+                transcript: Some("lyrics".into()),
+            },
+            MediaKind::Audio,
+            "audio/mpeg",
+            "sendAudio",
+            "audio",
+        ),
+        (
+            ContentPart::File {
+                media: MediaReference {
+                    opaque_id: Some("document".into()),
+                    kind: MediaKind::Document,
+                    ..Default::default()
+                },
+                file_name: Some("report.pdf".into()),
+                caption: Some("report".into()),
+            },
+            MediaKind::Document,
+            "application/pdf",
+            "sendDocument",
+            "document",
+        ),
+        (
+            ContentPart::Sticker {
+                media: MediaReference {
+                    opaque_id: Some("sticker".into()),
+                    kind: MediaKind::Image,
+                    ..Default::default()
+                },
+                pack_id: None,
+                sticker_id: None,
+                emoji: Some("🙂".into()),
+                alt_text: None,
+            },
+            MediaKind::Image,
+            "image/webp",
+            "sendSticker",
+            "sticker",
+        ),
+        (
+            ContentPart::Image {
+                media: MediaReference {
+                    opaque_id: Some("gif".into()),
+                    kind: MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+            MediaKind::Image,
+            "image/gif",
+            "sendDocument",
+            "document",
+        ),
+    ];
+
+    for (index, (part, media_kind, content_type, method, field)) in cases.into_iter().enumerate() {
+        let server = mock_api().await;
+        mount_post(
+            &server,
+            method,
+            ok_with(serde_json::json!({ "message_id": index as i64 + 1 })),
+        )
+        .await;
+        let ch = channel_for(&server, &["*"]).with_media_repository(Arc::new(ReadMediaFixture {
+            stored: crate::host::StoredMedia {
+                media: MediaReference {
+                    kind: media_kind,
+                    ..Default::default()
+                },
+                content_type: content_type.into(),
+                file_name: Some("upload.bin".into()),
+                bytes: vec![1, 2, 3, 4],
+            },
+            reads: Arc::default(),
+        }));
+
+        let outcome = ch.send_v2_with_receipt(&media_message(part)).await.unwrap();
+
+        assert_eq!(outcome.error, None, "{method}");
+        assert_eq!(
+            outcome.receipt.platform_message_ids,
+            [(index + 1).to_string()]
+        );
+        let body = raw_bodies(&server, method).await;
+        assert_eq!(body.len(), 1, "{method}");
+        assert!(body[0].contains(&format!("name=\"{field}\"")), "{method}");
+    }
 }
 
 #[tokio::test]
