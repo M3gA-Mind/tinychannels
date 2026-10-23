@@ -82,18 +82,17 @@ async fn legacy_adapter_defaults_decline_optional_provider_operations() {
     assert_eq!(adapter.proactive_target(), None);
     assert!(!adapter.supports_webhook_delivery());
     assert!(!adapter.supports_webhook_verification());
-    assert_eq!(
-        adapter.verify_webhook("mode", "token", "challenge"),
-        None
-    );
+    assert_eq!(adapter.verify_webhook("mode", "token", "challenge"), None);
 
     let delivery_error = adapter
         .deliver_webhook(None, b"payload")
         .await
         .expect_err("webhook ingress is opt-in");
-    assert!(delivery_error
-        .to_string()
-        .contains("no typed webhook ingress"));
+    assert!(
+        delivery_error
+            .to_string()
+            .contains("no typed webhook ingress")
+    );
 
     let read_error = adapter
         .mark_read(&Default::default(), "provider-message")
@@ -140,26 +139,34 @@ impl ChannelStreamingDraft for LegacyDraftAdapter {}
 #[tokio::test]
 async fn legacy_streaming_draft_defaults_return_unsupported() {
     let adapter = LegacyDraftAdapter;
-    assert!(adapter
-        .start_draft(ChannelOutboundIntent::default())
-        .await
-        .expect_err("draft start is opt-in")
-        .is_unsupported());
-    assert!(adapter
-        .update_draft("draft-1", ChannelOutboundIntent::default())
-        .await
-        .expect_err("draft updates are opt-in")
-        .is_unsupported());
-    assert!(adapter
-        .finalize_draft("draft-1", ChannelOutboundIntent::default())
-        .await
-        .expect_err("draft finalization is opt-in")
-        .is_unsupported());
-    assert!(adapter
-        .upsert_draft(None, ChannelOutboundIntent::default())
-        .await
-        .expect_err("draft upsert is opt-in")
-        .is_unsupported());
+    assert!(
+        adapter
+            .start_draft(ChannelOutboundIntent::default())
+            .await
+            .expect_err("draft start is opt-in")
+            .is_unsupported()
+    );
+    assert!(
+        adapter
+            .update_draft("draft-1", ChannelOutboundIntent::default())
+            .await
+            .expect_err("draft updates are opt-in")
+            .is_unsupported()
+    );
+    assert!(
+        adapter
+            .finalize_draft("draft-1", ChannelOutboundIntent::default())
+            .await
+            .expect_err("draft finalization is opt-in")
+            .is_unsupported()
+    );
+    assert!(
+        adapter
+            .upsert_draft(None, ChannelOutboundIntent::default())
+            .await
+            .expect_err("draft upsert is opt-in")
+            .is_unsupported()
+    );
 }
 
 #[tokio::test]
