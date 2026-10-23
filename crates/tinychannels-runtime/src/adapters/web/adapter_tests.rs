@@ -156,6 +156,84 @@ async fn publish_output_stamps_seq_per_turn_and_resets_after_a_terminal_event() 
     assert_eq!(serde_json::to_value(&events[0].1).unwrap()["ts"], 42);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn publish_output_serializes_same_turn_sequence_and_sink_delivery() {
+    use tokio::sync::Notify;
+
+    struct OrderedSink {
+        events: Mutex<Vec<u64>>,
+        first_entered: Notify,
+        release_first: Notify,
+    }
+
+    #[async_trait]
+    impl WebEventSink for OrderedSink {
+        async fn publish(
+            &self,
+            _scope: &WebScope,
+            event: WebChannelEvent,
+        ) -> Result<(), ChannelSendError> {
+            let seq = serde_json::to_value(event).unwrap()["seq"]
+                .as_u64()
+                .unwrap_or_default();
+            if seq == 1 {
+                self.first_entered.notify_one();
+                self.release_first.notified().await;
+            }
+            self.events.lock().push(seq);
+            Ok(())
+        }
+    }
+
+    let sink = Arc::new(OrderedSink {
+        events: Mutex::new(Vec::new()),
+        first_entered: Notify::new(),
+        release_first: Notify::new(),
+    });
+    let adapter = Arc::new(WebChannelAdapter::new(
+        Some("acct".into()),
+        WebScope::for_agent("agent-1"),
+        sink.clone(),
+    ));
+
+    let first_adapter = adapter.clone();
+    let first = tokio::spawn(async move {
+        first_adapter.publish_output("c", "t", "r", delta("one")).await
+    });
+    sink.first_entered.notified().await;
+
+    let second_adapter = adapter.clone();
+    let second = tokio::spawn(async move {
+        second_adapter.publish_output("c", "t", "r", delta("two")).await
+    });
+    tokio::task::yield_now().await;
+    sink.release_first.notify_one();
+
+    first.await.unwrap().unwrap();
+    second.await.unwrap().unwrap();
+    assert_eq!(*sink.events.lock(), [1, 2]);
+}
+
+#[tokio::test]
+async fn failed_terminal_publication_keeps_projector_state() {
+    let (adapter, sink) = adapter();
+    sink.fail.store(true, Ordering::SeqCst);
+    assert!(adapter
+        .publish_output(
+            "c",
+            "t",
+            "r",
+            ChannelOutputEvent::FinalMessage {
+                text: "done".into(),
+                parts: Vec::new(),
+                receipt: None,
+            },
+        )
+        .await
+        .is_err());
+    assert_eq!(adapter.turns.lock().len(), 1);
+}
+
 #[tokio::test]
 async fn failed_terminal_output_keeps_its_sequence_until_delivery_succeeds() {
     let (adapter, sink) = adapter();
@@ -382,6 +460,75 @@ async fn send_typed_preserves_parts_through_the_current_adapter_contract() {
     let wire = serde_json::to_value(&sink.events.lock()[0].1).unwrap();
     assert_eq!(wire["parts"][0]["part"]["kind"], "image");
     assert_eq!(wire["parts"][0]["part"]["media"]["opaqueId"], "image-1");
+}
+
+#[tokio::test]
+async fn send_typed_rejects_parts_the_web_adapter_does_not_declare() {
+    let (adapter, sink) = adapter();
+    for part in [
+        ContentPart::Poll {
+            question: "q".into(),
+            options: vec!["a".into()],
+            multiple_choice: false,
+            closes_at_unix_ms: None,
+            provider_poll_id: None,
+        },
+        ContentPart::Location {
+            latitude: 1.0,
+            longitude: 2.0,
+            label: None,
+            address: None,
+            accuracy_meters: None,
+            live_until_unix_ms: None,
+        },
+        ContentPart::Native {
+            provider: "web".into(),
+            data: serde_json::json!({}),
+        },
+    ] {
+        let message = tinychannels_bus::ChannelOutboundMessage {
+            channel_id: "web".into(),
+            conversation_id: "thread-9".into(),
+            channel_ref: None,
+            conversation_ref: None,
+            reply_to_id: None,
+            thread_id: None,
+            turn_id: None,
+            idempotency_key: "typed-unsupported".into(),
+            parts: vec![OutboundContentPart::Content { part }],
+        };
+        assert!(adapter.send_typed(&message).await.unwrap_err().is_unsupported());
+    }
+    assert!(sink.events.lock().is_empty());
+}
+
+#[tokio::test]
+async fn proactive_typed_send_uses_conversation_reference_thread_id() {
+    let (adapter, sink) = adapter();
+    let message = tinyhumans_bus::ChannelOutboundMessage {
+        channel_id: "web".into(),
+        conversation_id: "parent-conversation".into(),
+        channel_ref: None,
+        conversation_ref: Some(tinyhumans_bus::channel::ConversationRef {
+            id: "parent-conversation".into(),
+            thread_id: Some("reply-thread".into()),
+            ..Default::default()
+        }),
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: None,
+        idempotency_key: "typed-thread".into(),
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::Text {
+                text: "reply".into(),
+                markdown_dialect: None,
+            },
+        }],
+    };
+
+    adapter.send_typed(&message).await.unwrap();
+    let wire = serde_json::to_value(&sink.events.lock()[0].1).unwrap();
+    assert_eq!(wire["thread_id"], "reply-thread");
 }
 
 #[tokio::test]

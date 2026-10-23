@@ -209,6 +209,8 @@ fn malformed_submissions_are_rejected_as_bad_format() {
     no_thread.thread_id = " ".into();
     let mut no_request = start();
     no_request.request_id.clear();
+    let mut no_client = start();
+    no_client.client_id.clear();
     let mut empty = start();
     empty.text = "  ".into();
     let mut non_media = start();
@@ -220,11 +222,24 @@ fn malformed_submissions_are_rejected_as_bad_format() {
         accuracy_meters: None,
         live_until_unix_ms: None,
     }];
-    for bad in [no_thread, no_request, empty, non_media] {
+    for bad in [no_thread, no_request, no_client, empty, non_media] {
         let error = normalize_chat_start(&bad, None).unwrap_err();
         assert_eq!(error.kind, SendErrorKind::BadFormat);
         assert!(!error.retryable);
     }
+}
+
+#[test]
+fn sender_identity_is_host_assigned_after_wire_deserialization() {
+    let parsed: WebChatStart = serde_json::from_str(
+        r#"{"clientId":"client-7","threadId":"thread-9","requestId":"request-2","text":"hello","senderId":"attacker"}"#,
+    )
+    .unwrap();
+    assert_eq!(parsed.sender_id, None);
+
+    let mut authenticated = parsed;
+    authenticated.sender_id = Some("user-1".into());
+    assert_eq!(normalize_chat_start(&authenticated, None).unwrap().sender.id, "user-1");
 }
 
 #[test]
