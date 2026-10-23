@@ -380,6 +380,7 @@ fn image_message(opaque_id: &str) -> tinychannels_bus::ChannelOutboundMessage {
             ..Default::default()
         }),
         reply_to_id: Some("27".into()),
+        thread_id: Some("18".into()),
         turn_id: Some("turn-image-1".into()),
         idempotency_key: "image-send-1".into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Content {
@@ -457,7 +458,7 @@ async fn typed_image_upload_reads_host_scope_and_returns_provider_receipt() {
     assert!(bodies[0].contains("name=\"caption\"\r\n\r\nphoto "));
     assert!(bodies[0].contains("filename=\"preview.png\""));
     assert!(bodies[0].contains("Content-Type: image/png"));
-    assert!(bodies[0].contains(&String::from_utf8_lossy(&image)));
+    assert!(bodies[0].contains(String::from_utf8_lossy(&image).as_ref()));
 }
 
 #[test]
