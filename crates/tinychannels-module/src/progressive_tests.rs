@@ -626,3 +626,70 @@ async fn scoped_output_preserves_acknowledgement_receipt_and_unsupported_content
     ));
     replies.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn hosted_output_lifecycle_carries_turn_scope_and_finishes_through_host_transport() {
+    use tinychannels_bus::module_progressive::ChannelOutputEvent;
+
+    let (replies, callback) = fixture(false).await;
+    let channel = tinychannels_bus::ChannelRef {
+        id: "discord".into(),
+        account_id: Some("discord:fixture".into()),
+    };
+    let conversation = tinychannels_bus::ConversationRef {
+        id: "room-1".into(),
+        thread_id: Some("thread-2".into()),
+        ..Default::default()
+    };
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenHostedOutput {
+            channel: channel.clone(),
+            conversation: conversation.clone(),
+            turn_id: "turn-9".into(),
+            lifetime_ms: 30_000,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("hosted output should open a scoped reply");
+    };
+
+    assert_eq!(
+        replies
+            .execute(ProgressiveCommand::FeedOutput {
+                handle: handle.clone(),
+                events: vec![ChannelOutputEvent::TextDelta {
+                    text: "partial".into(),
+                    iteration: Some(1),
+                }],
+            })
+            .await
+            .unwrap(),
+        ProgressiveResult::Updated
+    );
+    assert_eq!(
+        replies
+            .execute(ProgressiveCommand::Finish {
+                handle,
+                text: "complete".into(),
+            })
+            .await
+            .unwrap(),
+        ProgressiveResult::Closed
+    );
+
+    let requests = callback.requests.lock().await;
+    assert!(matches!(
+        &requests[0],
+        ProgressiveTransportRequest::OutputEvent {
+            channel: request_channel,
+            turn_id: Some(turn_id),
+            channel_ref: Some(request_scope),
+            conversation: Some(request_conversation),
+            sequence: 0,
+            ..
+        } if request_channel == "discord" && turn_id == "turn-9" && request_scope == &channel && request_conversation == &conversation
+    ));
+    assert_eq!(callback.sends.lock().await[0]["text"], "complete");
+    replies.shutdown().await.unwrap();
+}
