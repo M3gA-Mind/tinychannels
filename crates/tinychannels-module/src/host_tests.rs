@@ -76,6 +76,62 @@ impl Callback {
         })
     }
 
+    async fn transcribe_voice(
+        &self,
+        request: tinychannels_bus::HostVoiceTranscriptionRequest,
+    ) -> Result<tinychannels_bus::HostTranscriptionResult> {
+        Ok(tinychannels_bus::HostTranscriptionResult {
+            text: "scoped words".into(),
+            language: request.language,
+            duration_secs: Some(2.0),
+        })
+    }
+
+    async fn synthesize_speech(
+        &self,
+        _request: tinychannels_bus::HostSpeechSynthesisRequest,
+    ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
+        Ok(tinychannels_bus::HostSpeechSynthesisResult {
+            audio_base64: "YQ==".into(),
+            mime_type: "audio/wav".into(),
+            duration_ms: Some(250),
+            visemes: None,
+        })
+    }
+
+    async fn store_voice_media(
+        &self,
+        _request: tinychannels_bus::HostStoreVoiceMediaRequest,
+    ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("media-1".into()),
+                ..Default::default()
+            },
+            accessible_url: None,
+        })
+    }
+
+    async fn read_voice_media(
+        &self,
+        _request: tinychannels_bus::HostReadVoiceMediaRequest,
+    ) -> Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: "YQ==".into(),
+            mime_type: "audio/wav".into(),
+            file_name: Some("voice.wav".into()),
+        })
+    }
+
+    async fn get_voice_reply_policy(
+        &self,
+        _request: tinychannels_bus::HostVoiceReplyPolicyRequest,
+    ) -> Result<tinychannels_bus::HostVoiceReplyPolicy> {
+        Ok(tinychannels_bus::HostVoiceReplyPolicy {
+            mode: tinychannels_bus::HostVoiceReplyMode::Always,
+        })
+    }
+
     async fn publish_event(
         &self,
         publication: tinychannels_bus::HostEventPublication,
@@ -399,6 +455,91 @@ async fn module_host_exposes_typed_transcription_and_event_capabilities() {
         ["transcription:complete", "event:channel:reaction_sent"]
     );
     host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn scoped_voice_callbacks_roundtrip_and_enforce_read_byte_limits() {
+    let (host, _callback, _server) = connected_host().await;
+    let scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: "telegram:bot-7".into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("bot-7".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            id: "room-1".into(),
+            ..Default::default()
+        },
+        turn_id: "turn-1".into(),
+    };
+
+    let transcript = host
+        .transcribe_voice(tinychannels_bus::HostVoiceTranscriptionRequest {
+            scope: scope.clone(),
+            audio_base64: "YQ==".into(),
+            language: Some("en".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(transcript.text, "scoped words");
+    assert_eq!(transcript.language.as_deref(), Some("en"));
+
+    let speech = host
+        .synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
+            scope: scope.clone(),
+            text: "hello".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(speech.mime_type, "audio/wav");
+    assert_eq!(speech.duration_ms, Some(250));
+
+    let stored = host
+        .store_voice_media(tinychannels_bus::HostStoreVoiceMediaRequest {
+            scope: scope.clone(),
+            audio_base64: "YQ==".into(),
+            mime_type: "audio/wav".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(stored.media.opaque_id.as_deref(), Some("media-1"));
+
+    let read = tinychannels_bus::HostReadVoiceMediaRequest {
+        scope: scope.clone(),
+        media: stored.media,
+        max_bytes: 1,
+    };
+    assert_eq!(
+        host.read_voice_media(read.clone())
+            .await
+            .unwrap()
+            .audio_base64,
+        "YQ=="
+    );
+    assert!(
+        host.read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
+            max_bytes: 0,
+            ..read
+        })
+        .await
+        .is_err()
+    );
+
+    assert_eq!(
+        host.voice_reply_policy(tinychannels_bus::HostVoiceReplyPolicyRequest {
+            scope,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .mode,
+        tinychannels_bus::HostVoiceReplyMode::Always
+    );
+    host.shutdown().await.unwrap();
+    assert!(host.voice_reply_policy(Default::default()).await.is_err());
 }
 
 #[tokio::test]
