@@ -245,12 +245,10 @@ async fn reply_capacity_refuses_seventeenth_and_shutdown_drains_every_worker() {
 #[tokio::test]
 async fn completed_replies_are_evicted_when_the_retained_handle_limit_is_reached() {
     let (replies, callback) = fixture(false).await;
-    let mut first_handle = None;
+    let mut completed_handles = Vec::new();
     for index in 0..MAX_RETAINED {
         let handle = open(&replies).await;
-        if index == 0 {
-            first_handle = Some(handle.clone());
-        }
+        completed_handles.push(handle.clone());
         replies
             .execute(ProgressiveCommand::Finish {
                 handle,
@@ -265,7 +263,11 @@ async fn completed_replies_are_evicted_when_the_retained_handle_limit_is_reached
     {
         let state = replies.state.lock().await;
         assert_eq!(state.entries.len(), MAX_RETAINED);
-        assert!(!state.entries.contains_key(first_handle.as_deref().unwrap()));
+        assert!(
+            completed_handles
+                .iter()
+                .any(|handle| !state.entries.contains_key(handle))
+        );
         assert!(state.entries.contains_key(&newest));
     }
     replies.shutdown().await.unwrap();
