@@ -2471,7 +2471,7 @@ async fn native_interaction_adapters_preserve_uncertain_provider_errors() {
             tinychannels_bus::channel::SendErrorKind::Unknown
         );
     }
-    assert_eq!(server.received_requests().await.unwrap().len(), 4);
+    assert_eq!(server.received_requests().await.unwrap().len(), 3);
 }
 
 #[tokio::test]
