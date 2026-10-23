@@ -428,10 +428,14 @@ impl tinychannels::channel::LegacyChannelReaction for WebhookVerificationAdapter
         _channel: &tinychannels_bus::ChannelRef,
         _conversation: &tinychannels_bus::ConversationRef,
         _provider_message_id: &str,
-        _reaction: &tinychannels_bus::ChannelReaction,
+        reaction: &tinychannels_bus::ChannelReaction,
         _remove: bool,
     ) -> std::result::Result<(), ChannelSendError> {
-        Ok(())
+        if reaction.value == "reject" {
+            Err(ChannelSendError::new("reaction rejected"))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -498,6 +502,69 @@ async fn outbound_only_provider_routes_scoped_reactions_to_native_extension() {
 }
 
 #[tokio::test]
+async fn outbound_only_provider_preserves_native_reaction_failures() {
+    let adapter = Arc::new(WebhookVerificationAdapter);
+    let running = Running::start_built_outbound(
+        BuiltChannel::from_adapter(adapter.clone()).with_reaction_port(adapter),
+        Arc::new(Hooks::default()),
+        memory_host().await,
+    );
+
+    let error = running
+        .interact(tinychannels_bus::ChannelInteraction::SendReaction {
+            channel: tinychannels_bus::ChannelRef {
+                id: "whatsapp".into(),
+                account_id: Some("whatsapp".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                id: "room".into(),
+                ..Default::default()
+            },
+            provider_message_id: "message".into(),
+            reaction: tinychannels_bus::ChannelReaction {
+                value: "reject".into(),
+                custom_emoji_id: None,
+            },
+            remove: false,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("reaction rejected"));
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn outbound_only_provider_rejects_reactions_without_a_native_extension() {
+    let running = Running::start_built_outbound(
+        BuiltChannel::from_adapter(Arc::new(WebhookVerificationAdapter)),
+        Arc::new(Hooks::default()),
+        memory_host().await,
+    );
+
+    let error = running
+        .interact(tinychannels_bus::ChannelInteraction::SendReaction {
+            channel: tinychannels_bus::ChannelRef::default(),
+            conversation: tinychannels_bus::ConversationRef::default(),
+            provider_message_id: "message".into(),
+            reaction: tinychannels_bus::ChannelReaction {
+                value: "👍".into(),
+                custom_emoji_id: None,
+            },
+            remove: false,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("provider reaction is not supported")
+    );
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn outbound_only_provider_describes_native_adapter_capabilities() {
     let running = Running::start_built_outbound(
         BuiltChannel::from_adapter(Arc::new(WebhookVerificationAdapter)),
@@ -515,6 +582,110 @@ async fn outbound_only_provider_describes_native_adapter_capabilities() {
     };
     assert_eq!(info.capabilities.account.configured, Some(true));
     assert_eq!(info.capabilities.account.enabled, Some(true));
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn outbound_only_provider_returns_legacy_description_from_native_adapter() {
+    let running = Running::start_built_outbound(
+        BuiltChannel::from_adapter(Arc::new(WebhookVerificationAdapter)),
+        Arc::new(Hooks::default()),
+        memory_host().await,
+    );
+
+    let result = running
+        .interact(tinychannels_bus::ChannelInteraction::Describe)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    assert!(matches!(
+        result,
+        tinychannels_bus::ChannelInteractionResult::Info(info)
+            if info.capabilities.account.configured == Some(true)
+                && info.capabilities.account.enabled == Some(true)
+    ));
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn legacy_provider_keeps_v2_description_dispatch() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let running = Running::start(
+        Arc::new(InteractionChannel::default()),
+        Arc::new(Hooks::default()),
+        HostChannels::new(connection),
+    );
+
+    let result = running
+        .interact(tinychannels_bus::ChannelInteraction::DescribeV2)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    assert!(matches!(
+        result,
+        tinychannels_bus::ChannelInteractionResult::InfoV2(_)
+    ));
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn outbound_only_provider_dispatches_draft_upsert_through_retained_draft_port() {
+    let adapter = Arc::new(WebhookVerificationAdapter);
+    let drafts = Arc::new(CapturingDraftUpsert(std::sync::Mutex::new(None)));
+    let running = Running::start_built_outbound(
+        BuiltChannel::with_output_ports(adapter, None, Some(drafts.clone())),
+        Arc::new(Hooks::default()),
+        memory_host().await,
+    );
+
+    let result = running
+        .interact(tinychannels_bus::ChannelInteraction::UpsertDraft {
+            previous: None,
+            intent: tinychannels_bus::ChannelOutboundIntent {
+                idempotency_key: "draft-worker".into(),
+                conversation_id: "room".into(),
+                payload: tinychannels_bus::OutboundPayload::Text {
+                    text: "draft".into(),
+                },
+                ..Default::default()
+            },
+        })
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    assert!(matches!(
+        result,
+        tinychannels_bus::ChannelInteractionResult::Sent(_)
+    ));
+    assert!(drafts.0.lock().unwrap().is_some());
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn outbound_only_provider_rejects_draft_upsert_without_a_draft_port() {
+    let running = Running::start_built_outbound(
+        BuiltChannel::from_adapter(Arc::new(WebhookVerificationAdapter)),
+        Arc::new(Hooks::default()),
+        memory_host().await,
+    );
+
+    let error = running
+        .interact(tinychannels_bus::ChannelInteraction::UpsertDraft {
+            previous: None,
+            intent: tinychannels_bus::ChannelOutboundIntent::default(),
+        })
+        .await
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("provider draft upsert is not supported")
+    );
     running.stop().await.unwrap();
 }
 
