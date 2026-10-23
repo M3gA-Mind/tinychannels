@@ -913,3 +913,92 @@ async fn provider_fills_missing_receipt_scope_from_the_submitted_message() {
     assert_eq!(receipt.thread_id.as_deref(), Some("thread-3"));
     running.stop().await.unwrap();
 }
+
+struct FailingStartAdapter;
+
+#[async_trait::async_trait]
+impl ChannelAdapter for FailingStartAdapter {
+    fn descriptor(&self) -> tinychannels::channel::ChannelDescriptor {
+        tinychannels::channel::ChannelDescriptor {
+            id: "fixture".into(),
+            display_name: "fixture".into(),
+            ..Default::default()
+        }
+    }
+
+    async fn start(
+        &self,
+        _sink: &(dyn ChannelInboundSink + Send + Sync),
+    ) -> std::result::Result<(), ChannelSendError> {
+        Err(ChannelSendError::new("listener unavailable"))
+    }
+
+    async fn stop(&self) -> std::result::Result<(), ChannelSendError> {
+        Ok(())
+    }
+}
+
+struct FailedIngressSink(Arc<tokio::sync::Notify>);
+
+#[async_trait::async_trait]
+impl ChannelInboundSink for FailedIngressSink {
+    async fn push(
+        &self,
+        _envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> std::result::Result<(), ChannelSendError> {
+        self.0.notify_one();
+        Err(ChannelSendError::new("host callback unavailable"))
+    }
+}
+
+struct LegacyIngressChannel(Arc<tokio::sync::Notify>);
+
+#[async_trait::async_trait]
+impl Channel for LegacyIngressChannel {
+    fn name(&self) -> &str {
+        "legacy-ingress"
+    }
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn listen(&self, tx: mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
+        tx.send(tinychannels::ChannelMessage {
+            id: "message-1".into(),
+            sender: "sender-1".into(),
+            reply_target: "room-1".into(),
+            content: "hello".into(),
+            channel: "legacy-ingress".into(),
+            ..Default::default()
+        })
+        .await?;
+        self.0.notified().await;
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn adapter_listener_preserves_start_failure_for_supervision() {
+    let adapter: Arc<dyn ChannelAdapter> = Arc::new(FailingStartAdapter);
+    let sink: Arc<dyn ChannelInboundSink> =
+        Arc::new(FailedIngressSink(Arc::new(tokio::sync::Notify::new())));
+
+    let error = start_adapter_listener(&adapter, None, sink)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.to_string(), "listener unavailable");
+}
+
+#[tokio::test]
+async fn legacy_listener_logs_host_ingress_failure_and_keeps_provider_result() {
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let channel: Arc<dyn Channel> = Arc::new(LegacyIngressChannel(notify.clone()));
+    let adapter: Arc<dyn ChannelAdapter> = Arc::new(LegacyChannelAdapter(channel.clone()));
+    let sink: Arc<dyn ChannelInboundSink> = Arc::new(FailedIngressSink(notify));
+
+    let result = start_adapter_listener(&adapter, Some(&channel), sink).await;
+
+    assert!(result.is_ok());
+}
