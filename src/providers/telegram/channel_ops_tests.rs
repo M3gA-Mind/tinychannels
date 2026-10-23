@@ -414,6 +414,20 @@ fn media_message(part: tinychannels_bus::ContentPart) -> tinychannels_bus::Chann
     message
 }
 
+fn structured_message(
+    parts: Vec<tinychannels_bus::OutboundContentPart>,
+) -> tinychannels_bus::ChannelOutboundMessage {
+    let mut message = typed_text("structured-1", String::new());
+    message.parts = parts;
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        kind: tinychannels_bus::ConversationKind::Group,
+        topic_id: Some("18".into()),
+        ..Default::default()
+    });
+    message
+}
+
 struct NoopInboundSink;
 
 #[async_trait::async_trait]
@@ -759,6 +773,178 @@ async fn adapter_status_reports_health_and_send_returns_typed_receipt() {
 }
 
 #[tokio::test]
+async fn structured_sends_map_location_venue_contact_buttons_poll_and_presentation() {
+    use tinychannels_bus::ContentPart;
+    use tinychannels_bus::OutboundContentPart;
+
+    let cases = vec![
+        (
+            vec![OutboundContentPart::Content {
+                part: ContentPart::Location {
+                    latitude: 51.5,
+                    longitude: -0.1,
+                    label: None,
+                    address: None,
+                    accuracy_meters: Some(12.5),
+                    live_until_unix_ms: None,
+                },
+            }],
+            "sendLocation",
+            serde_json::json!({
+                "chat_id": "-10042",
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "horizontal_accuracy": 12.5,
+                "message_thread_id": "18",
+                "reply_parameters": {"message_id": 5}
+            }),
+            tinychannels_bus::channel::MessageReceiptPartKind::Card,
+        ),
+        (
+            vec![OutboundContentPart::Content {
+                part: ContentPart::Location {
+                    latitude: 40.7,
+                    longitude: -74.0,
+                    label: Some("Office".into()),
+                    address: Some("1 Main St".into()),
+                    accuracy_meters: None,
+                    live_until_unix_ms: None,
+                },
+            }],
+            "sendVenue",
+            serde_json::json!({
+                "chat_id": "-10042",
+                "latitude": 40.7,
+                "longitude": -74.0,
+                "title": "Office",
+                "address": "1 Main St",
+                "message_thread_id": "18",
+                "reply_parameters": {"message_id": 5}
+            }),
+            tinychannels_bus::channel::MessageReceiptPartKind::Card,
+        ),
+        (
+            vec![OutboundContentPart::Content {
+                part: ContentPart::Contact {
+                    display_name: "Ada Lovelace".into(),
+                    phone_numbers: vec![tinychannels_bus::ContactMethod {
+                        value: "+1 555 0100".into(),
+                        label: Some("WORK".into()),
+                    }],
+                    emails: vec![tinychannels_bus::ContactMethod {
+                        value: "ada@example.test".into(),
+                        label: Some("INTERNET".into()),
+                    }],
+                    organization: Some("Analytical Engines".into()),
+                },
+            }],
+            "sendContact",
+            serde_json::json!({
+                "chat_id": "-10042",
+                "phone_number": "+1 555 0100",
+                "first_name": "Ada",
+                "last_name": "Lovelace",
+                "vcard": "BEGIN:VCARD\nVERSION:3.0\nFN:Ada Lovelace\nTEL;TYPE=WORK:+1 555 0100\nEMAIL;TYPE=INTERNET:ada@example.test\nORG:Analytical Engines\nEND:VCARD",
+                "message_thread_id": "18",
+                "reply_parameters": {"message_id": 5}
+            }),
+            tinychannels_bus::channel::MessageReceiptPartKind::Card,
+        ),
+        (
+            vec![
+                OutboundContentPart::Content {
+                    part: ContentPart::Text {
+                        text: "Choose one".into(),
+                        markdown_dialect: None,
+                    },
+                },
+                OutboundContentPart::Content {
+                    part: ContentPart::Buttons {
+                        rows: vec![vec![tinychannels_bus::ButtonAction {
+                            id: "choose-a".into(),
+                            label: "Option A".into(),
+                            style: None,
+                            disabled: false,
+                        }]],
+                    },
+                },
+            ],
+            "sendMessage",
+            serde_json::json!({
+                "chat_id": "-10042",
+                "text": "Choose one",
+                "parse_mode": "MarkdownV2",
+                "reply_markup": {"inline_keyboard": [[{"text": "Option A", "callback_data": "choose-a"}]]},
+                "message_thread_id": "18",
+                "reply_parameters": {"message_id": 5}
+            }),
+            tinychannels_bus::channel::MessageReceiptPartKind::Text,
+        ),
+        (
+            vec![OutboundContentPart::Content {
+                part: ContentPart::Poll {
+                    question: "Lunch?".into(),
+                    options: vec!["Soup".into(), "Salad".into()],
+                    multiple_choice: true,
+                    closes_at_unix_ms: None,
+                    provider_poll_id: None,
+                },
+            }],
+            "sendPoll",
+            serde_json::json!({
+                "chat_id": "-10042",
+                "question": "Lunch?",
+                "options": [{"text": "Soup"}, {"text": "Salad"}],
+                "is_anonymous": true,
+                "type": "regular",
+                "allows_multiple_answers": true,
+                "message_thread_id": "18",
+                "reply_parameters": {"message_id": 5}
+            }),
+            tinychannels_bus::channel::MessageReceiptPartKind::Poll,
+        ),
+        (
+            vec![OutboundContentPart::Content {
+                part: ContentPart::Presentation {
+                    blocks: serde_json::json!([{"type": "heading", "text": "Status"}, "Ready"]),
+                },
+            }],
+            "sendMessage",
+            serde_json::json!({
+                "chat_id": "-10042",
+                "text": "Status\nReady",
+                "parse_mode": "MarkdownV2",
+                "message_thread_id": "18",
+                "reply_parameters": {"message_id": 5}
+            }),
+            tinychannels_bus::channel::MessageReceiptPartKind::Text,
+        ),
+    ];
+
+    for (index, (parts, method_name, expected, part_kind)) in cases.into_iter().enumerate() {
+        let server = mock_api().await;
+        mount_post(
+            &server,
+            method_name,
+            ok_with(serde_json::json!({ "message_id": index as i64 + 301 })),
+        )
+        .await;
+        let outcome = channel_for(&server, &["*"])
+            .send_v2_with_receipt(&structured_message(parts))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.error, None, "{method_name}");
+        assert_eq!(
+            outcome.receipt.parts[0].kind, part_kind,
+            "{method_name} receipt kind"
+        );
+        let bodies = json_bodies(&server, method_name).await;
+        assert_eq!(bodies, vec![expected], "{method_name} request");
+    }
+}
+
+#[tokio::test]
 async fn callback_ingress_preserves_actor_scope_and_authorizes_only_numeric_id_or_username() {
     let update = serde_json::json!({
         "update_id": 9001,
@@ -831,6 +1017,75 @@ async fn callback_ingress_preserves_actor_scope_and_authorizes_only_numeric_id_o
         json_bodies(&server, "answerCallbackQuery").await,
         vec![serde_json::json!({"callback_query_id": "query-4"})]
     );
+}
+
+#[test]
+fn presentation_projection_renders_nested_text_and_approval_actions() {
+    let blocks = serde_json::json!([
+        "Opening line",
+        {
+            "type": "heading",
+            "title": "Title",
+            "heading": "Heading",
+            "text": "Body",
+            "caption": "Caption",
+            "description": "Description"
+        },
+        {"type": "paragraph", "text": "  "},
+        ["Nested line", {"text": "Last line"}]
+    ]);
+    let (text, keyboard) = presentation_content(&blocks).unwrap();
+    assert_eq!(
+        text,
+        "Opening line\nTitle\nHeading\nBody\nCaption\nDescription\nNested line\nLast line"
+    );
+    assert_eq!(keyboard, None);
+
+    let approval = serde_json::json!({
+        "kind": "approval",
+        "id": "approval-42",
+        "prompt": "Run this command?",
+        "choices": ["Allow once", "Deny"]
+    });
+    let (prompt, keyboard) = presentation_content(&approval).unwrap();
+    assert_eq!(prompt, "Run this command?");
+    assert_eq!(
+        keyboard.unwrap(),
+        serde_json::json!({
+            "inline_keyboard": [
+                [{"text": "Allow once", "callback_data": tinychannels_bus::channel::approval_action_id("approval-42", 0).unwrap()}],
+                [{"text": "Deny", "callback_data": tinychannels_bus::channel::approval_action_id("approval-42", 1).unwrap()}]
+            ]
+        })
+    );
+}
+
+#[test]
+fn presentation_projection_rejects_unsupported_fields_types_and_empty_content() {
+    for value in [
+        serde_json::json!({"kind": "approval", "id": "x", "prompt": "p", "choices": ["yes"], "extra": true}),
+        serde_json::json!({"kind": "approval", "id": "", "prompt": "p", "choices": ["yes"]}),
+        serde_json::json!({"kind": "approval", "id": "x", "prompt": "  ", "choices": ["yes"]}),
+        serde_json::json!({"kind": "approval", "id": "x", "prompt": "p", "choices": []}),
+        serde_json::json!({"kind": "approval", "id": "x", "prompt": "p", "choices": [""]}),
+        serde_json::json!({"type": "image", "text": "not text"}),
+        serde_json::json!({"type": 1, "text": "wrong type"}),
+        serde_json::json!({"unknown": "field"}),
+        serde_json::json!(["", {"text": 1}]),
+        serde_json::json!([false]),
+        serde_json::json!("   "),
+    ] {
+        assert!(presentation_content(&value).is_err(), "accepted {value}");
+    }
+}
+
+#[test]
+fn vcard_projection_escapes_content_and_only_accepts_safe_type_labels() {
+    assert_eq!(vcard_escape("A,B;C\\D\nE\rF"), "A\\,B\\;C\\\\D\\nEF");
+    assert_eq!(safe_vcard_type(Some(" work "), "CELL"), "work");
+    assert_eq!(safe_vcard_type(Some("INTERNET"), "CELL"), "INTERNET");
+    assert_eq!(safe_vcard_type(Some("X-INJECT:EVIL"), "CELL"), "CELL");
+    assert_eq!(safe_vcard_type(None, "INTERNET"), "INTERNET");
 }
 
 #[tokio::test]
