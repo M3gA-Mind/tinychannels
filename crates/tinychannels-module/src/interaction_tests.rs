@@ -82,7 +82,7 @@ fn compatibility_text_and_telegram_address_preserve_legacy_conventions() {
     let email = SendMessage::with_subject("body", "recipient", "  first\nsecond\rline  ");
     assert_eq!(
         compatibility_text("email:account", &email),
-        "Subject: first secondline\nbody"
+        "Subject: first second line\nbody"
     );
     assert_eq!(compatibility_text("slack", &email), "body");
 
