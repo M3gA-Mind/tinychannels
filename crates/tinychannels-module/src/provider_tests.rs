@@ -889,7 +889,9 @@ async fn provider_fills_missing_receipt_scope_from_the_submitted_message() {
     let mut message = SendMessage::new("hello", "chat-7");
     message.thread_ts = Some("thread-3".into());
     message.idempotency_key = Some("send-42".into());
-    let receipt = running.send(message).await.unwrap();
+    let intent = tinychannels::outbound_intent_from_send_message("telegram:primary", &message);
+    let outbound = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
+    let receipt = running.send_typed(outbound).await.unwrap().receipt;
 
     assert_eq!(receipt.idempotency_key.as_deref(), Some("send-42"));
     assert_eq!(
