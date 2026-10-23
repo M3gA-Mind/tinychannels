@@ -833,6 +833,151 @@ async fn typed_media_selects_native_telegram_upload_methods_by_kind_and_format()
 }
 
 #[tokio::test]
+async fn typed_media_rejects_invalid_scoped_uploads_before_provider_io() {
+    use tinychannels_bus::{ContentPart, MediaKind, MediaReference};
+
+    let stored = |kind, content_type: &str, bytes| crate::host::StoredMedia {
+        media: MediaReference {
+            kind,
+            ..Default::default()
+        },
+        content_type: content_type.into(),
+        file_name: None,
+        bytes,
+    };
+    let mut cases = vec![
+        (
+            "image reference without host opaque id",
+            ContentPart::Image {
+                media: MediaReference {
+                    kind: MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+            stored(MediaKind::Image, "image/png", png_with_dimensions(1, 1)),
+        ),
+        (
+            "stored media kind mismatch",
+            ContentPart::Image {
+                media: MediaReference {
+                    opaque_id: Some("mismatch".into()),
+                    kind: MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+            stored(MediaKind::Document, "image/png", png_with_dimensions(1, 1)),
+        ),
+        (
+            "empty stored bytes",
+            ContentPart::Image {
+                media: MediaReference {
+                    opaque_id: Some("empty".into()),
+                    kind: MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+            stored(MediaKind::Image, "image/png", vec![]),
+        ),
+        (
+            "invalid photo header",
+            ContentPart::Image {
+                media: MediaReference {
+                    opaque_id: Some("bad-header".into()),
+                    kind: MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+            stored(MediaKind::Image, "image/png", vec![1, 2, 3]),
+        ),
+        (
+            "photo dimensions outside provider limits",
+            ContentPart::Image {
+                media: MediaReference {
+                    opaque_id: Some("large-photo".into()),
+                    kind: MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+            stored(
+                MediaKind::Image,
+                "image/png",
+                png_with_dimensions(6000, 6000),
+            ),
+        ),
+        (
+            "caption beyond Bot API limit",
+            ContentPart::Image {
+                media: MediaReference {
+                    opaque_id: Some("long-caption".into()),
+                    kind: MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: Some("x".repeat(1025)),
+                alt_text: None,
+            },
+            stored(MediaKind::Image, "image/png", png_with_dimensions(1, 1)),
+        ),
+        (
+            "sticker format other than webp",
+            ContentPart::Sticker {
+                media: MediaReference {
+                    opaque_id: Some("jpeg-sticker".into()),
+                    kind: MediaKind::Image,
+                    ..Default::default()
+                },
+                pack_id: None,
+                sticker_id: None,
+                emoji: None,
+                alt_text: None,
+            },
+            stored(MediaKind::Image, "image/png", png_with_dimensions(1, 1)),
+        ),
+        (
+            "audio format unsupported by sendAudio",
+            ContentPart::Audio {
+                media: MediaReference {
+                    opaque_id: Some("ogg-audio".into()),
+                    kind: MediaKind::Audio,
+                    ..Default::default()
+                },
+                codec: Some("opus".into()),
+                duration_ms: None,
+                title: None,
+                transcript: None,
+            },
+            stored(MediaKind::Audio, "audio/ogg", vec![1, 2, 3]),
+        ),
+    ];
+
+    let server = mock_api().await;
+    for (label, part, media) in cases.drain(..) {
+        let adapter =
+            channel_for(&server, &["*"]).with_media_repository(Arc::new(ReadMediaFixture {
+                stored: media,
+                reads: Arc::default(),
+            }));
+        assert!(
+            adapter
+                .send_v2_with_receipt(&media_message(part))
+                .await
+                .is_err(),
+            "accepted invalid media: {label}"
+        );
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn adapter_start_rejects_duplicate_listener_and_stop_cancels_active_poll() {
     let server = mock_api().await;
     mount_post(&server, "deleteWebhook", ok()).await;
