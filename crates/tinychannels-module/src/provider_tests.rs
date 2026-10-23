@@ -490,7 +490,10 @@ async fn outbound_only_provider_routes_scoped_reactions_to_native_extension() {
         .await
         .unwrap_or_else(|error| panic!("{error}"));
 
-    assert!(matches!(result, tinychannels_bus::ChannelInteractionResult::Completed));
+    assert!(matches!(
+        result,
+        tinychannels_bus::ChannelInteractionResult::Completed
+    ));
     running.stop().await.unwrap();
 }
 

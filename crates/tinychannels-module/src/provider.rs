@@ -996,21 +996,17 @@ impl Running {
                                 reaction,
                                 remove,
                             } => match send_reactions.as_ref() {
-                                Some(reactions) => {
-                                    reactions
-                                        .send_reaction(
-                                            &channel,
-                                            &conversation,
-                                            &provider_message_id,
-                                            &reaction,
-                                            remove,
-                                        )
-                                        .await
-                                        .map(|()| {
-                                            tinychannels_bus::ChannelInteractionResult::Completed
-                                        })
-                                        .map_err(|error| Error::failed(error.message))
-                                }
+                                Some(reactions) => reactions
+                                    .send_reaction(
+                                        &channel,
+                                        &conversation,
+                                        &provider_message_id,
+                                        &reaction,
+                                        remove,
+                                    )
+                                    .await
+                                    .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
+                                    .map_err(|error| Error::failed(error.message)),
                                 None => Err(Error::failed(
                                     "provider reaction is not supported by this adapter",
                                 )),

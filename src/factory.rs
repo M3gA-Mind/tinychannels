@@ -967,11 +967,14 @@ pub fn build_channels(
         match wa.backend_type() {
             "cloud" if wa.is_cloud_config() => {
                 if let Some(channel) = build_whatsapp_cloud_channel(config, host, http) {
-                    channels.push(BuiltChannel::with_output_ports(
-                        channel.clone(),
-                        Some(channel.clone()),
-                        Some(channel.clone()),
-                    ).with_reaction_port(channel));
+                    channels.push(
+                        BuiltChannel::with_output_ports(
+                            channel.clone(),
+                            Some(channel.clone()),
+                            Some(channel.clone()),
+                        )
+                        .with_reaction_port(channel),
+                    );
                 }
             }
             "cloud" => tracing::warn!(
