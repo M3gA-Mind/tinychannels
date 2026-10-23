@@ -102,13 +102,20 @@ async fn legacy_adapter_defaults_decline_optional_provider_operations() {
     assert!(read_error.is_unsupported());
 
     let text = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "legacy".into(),
+        conversation_id: "room".into(),
+        channel_ref: None,
+        conversation_ref: None,
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: None,
+        idempotency_key: "validate-1".into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Content {
             part: tinychannels_bus::ContentPart::Text {
                 text: "hello".into(),
                 markdown_dialect: None,
             },
         }],
-        ..Default::default()
     };
     assert!(adapter.validate_typed_send(&text).is_ok());
 
