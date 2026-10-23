@@ -1189,6 +1189,47 @@ async fn typed_media_rejects_invalid_scoped_uploads_before_provider_io() {
 }
 
 #[tokio::test]
+async fn typed_media_keeps_successful_receipt_when_a_later_part_is_invalid() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendPhoto",
+        ok_with(serde_json::json!({ "message_id": 921 })),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"]).with_media_repository(Arc::new(ReadMediaFixture {
+        stored: crate::host::StoredMedia {
+            media: tinychannels_bus::MediaReference {
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            content_type: "image/png".into(),
+            file_name: Some("photo.png".into()),
+            bytes: png_with_dimensions(10, 10),
+        },
+        reads: Arc::default(),
+    }));
+    let mut message = image_message("first-image");
+    message
+        .parts
+        .push(tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: Default::default(),
+                caption: None,
+                alt_text: None,
+            },
+        });
+
+    let outcome = channel.send_v2_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["921"]);
+    let error = outcome.error.expect("later invalid media is reported");
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn adapter_start_rejects_duplicate_listener_and_stop_cancels_active_poll() {
     let server = mock_api().await;
     mount_post(&server, "deleteWebhook", ok()).await;
