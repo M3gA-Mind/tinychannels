@@ -654,6 +654,7 @@ async fn hosted_output_lifecycle_carries_turn_scope_and_finishes_through_host_tr
         panic!("hosted output should open a scoped reply");
     };
 
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Acknowledged);
     assert_eq!(
         replies
             .execute(ProgressiveCommand::FeedOutput {
@@ -667,6 +668,9 @@ async fn hosted_output_lifecycle_carries_turn_scope_and_finishes_through_host_tr
             .unwrap(),
         ProgressiveResult::Updated
     );
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Success(
+        serde_json::json!({"id": "fixture-message"}),
+    ));
     assert_eq!(
         replies
             .execute(ProgressiveCommand::Finish {
