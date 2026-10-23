@@ -63,6 +63,53 @@ async fn send_draft_without_message_id_in_result_returns_none() {
 }
 
 #[tokio::test]
+async fn streaming_draft_routes_forum_topic_and_reply_separately() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 322 })),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"]);
+    let intent = tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "draft-topic".into(),
+        channel_id: "telegram".into(),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: None,
+        }),
+        conversation_id: "-10042".into(),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            id: "-10042".into(),
+            kind: tinychannels_bus::ConversationKind::Group,
+            topic_id: Some("18".into()),
+            ..Default::default()
+        }),
+        reply_to_id: Some("81".into()),
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: "Draft reply".into(),
+        },
+        ..Default::default()
+    };
+
+    let draft = ChannelStreamingDraft::start_draft(&channel, intent)
+        .await
+        .unwrap();
+
+    assert_eq!(draft.as_deref(), Some("322"));
+    assert_eq!(
+        json_bodies(&server, "sendMessage").await,
+        vec![serde_json::json!({
+            "chat_id": "-10042",
+            "text": "Draft reply",
+            "message_thread_id": 18,
+            "reply_to_message_id": 81,
+        })]
+    );
+}
+
+#[tokio::test]
 async fn send_draft_surfaces_api_rejection() {
     let server = mock_api().await;
     mount_post(
