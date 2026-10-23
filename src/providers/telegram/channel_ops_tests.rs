@@ -2291,6 +2291,27 @@ fn typed_send_errors_preserve_dispatch_certainty_and_provider_classification() {
 }
 
 #[test]
+fn typed_interaction_errors_distinguish_preflight_from_provider_failure() {
+    let preflight = typed_interaction_error(
+        anyhow::Error::new(TelegramPreDispatchError),
+        "edit",
+    );
+    assert_eq!(preflight.kind, crate::channel::SendErrorKind::Forbidden);
+    assert_eq!(
+        preflight.message,
+        "Telegram edit was rejected before provider dispatch"
+    );
+    assert!(!preflight.sent_before_error);
+    assert!(!preflight.retryable);
+
+    let uncertain = typed_interaction_error(anyhow::anyhow!("transport failed"), "edit");
+    assert_eq!(uncertain.kind, crate::channel::SendErrorKind::Unknown);
+    assert_eq!(uncertain.message, "Telegram edit outcome is uncertain");
+    assert!(uncertain.sent_before_error);
+    assert!(!uncertain.retryable);
+}
+
+#[test]
 fn presentation_projection_renders_nested_text_and_approval_actions() {
     let blocks = serde_json::json!([
         "Opening line",
