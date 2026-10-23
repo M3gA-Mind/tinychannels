@@ -497,6 +497,33 @@ struct ReadMediaFixture {
     reads: Arc<std::sync::Mutex<Vec<(crate::host::MediaScope, String, u64)>>>,
 }
 
+struct FailingReadMediaFixture {
+    stored: crate::host::StoredMedia,
+    fail_id: String,
+}
+
+#[async_trait::async_trait]
+impl crate::host::MediaRepository for FailingReadMediaFixture {
+    async fn store_media(
+        &self,
+        _request: crate::host::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        anyhow::bail!("fixture is read-only")
+    }
+
+    async fn read_media(
+        &self,
+        _scope: crate::host::MediaScope,
+        opaque_id: String,
+        _max_bytes: u64,
+    ) -> anyhow::Result<crate::host::StoredMedia> {
+        if opaque_id == self.fail_id {
+            anyhow::bail!("fixture storage read failed")
+        }
+        Ok(self.stored.clone())
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::host::MediaRepository for ReadMediaFixture {
     async fn store_media(
@@ -1267,6 +1294,54 @@ async fn typed_media_keeps_successful_receipt_when_a_later_part_is_invalid() {
 
     assert_eq!(outcome.receipt.platform_message_ids, ["921"]);
     let error = outcome.error.expect("later invalid media is reported");
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn typed_media_keeps_first_receipt_when_later_scoped_read_fails() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendPhoto",
+        ok_with(serde_json::json!({ "message_id": 922 })),
+    )
+    .await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(FailingReadMediaFixture {
+            stored: crate::host::StoredMedia {
+                media: tinychannels_bus::MediaReference {
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                content_type: "image/png".into(),
+                file_name: Some("photo.png".into()),
+                bytes: png_with_dimensions(10, 10),
+            },
+            fail_id: "second-image".into(),
+        }));
+    let mut message = image_message("first-image");
+    message
+        .parts
+        .push(tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("second-image".into()),
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+        });
+
+    let outcome = channel.send_v2_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["922"]);
+    let error = outcome
+        .error
+        .expect("failed scoped read follows a sent part");
     assert!(error.sent_before_error);
     assert!(!error.retryable);
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
