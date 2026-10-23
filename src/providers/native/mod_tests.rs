@@ -117,38 +117,48 @@ async fn optional_operations_default_to_explicitly_unsupported() {
     assert!(minimal.voice_caption_supported());
     assert_eq!(minimal.health_state().await, "unknown");
     assert!(!minimal.supports_webhook_delivery());
-    assert!(minimal
-        .deliver_webhook(None, b"payload")
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("no typed webhook ingress"));
+    assert!(
+        minimal
+            .deliver_webhook(None, b"payload")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("no typed webhook ingress")
+    );
     minimal
         .start_listener(&NoopInboundSink)
         .await
         .expect("the default listener is a no-op");
     minimal.stop_listener().await.unwrap();
     assert!(!minimal.bundles_steps());
-    assert!(minimal
-        .deliver_bundle(&Target::default(), &[])
-        .await
-        .unwrap_err()
-        .unsupported);
-    assert!(minimal
-        .start_draft(ChannelOutboundIntent::default())
-        .await
-        .unwrap_err()
-        .unsupported);
-    assert!(minimal
-        .update_draft("draft-1", ChannelOutboundIntent::default())
-        .await
-        .unwrap_err()
-        .unsupported);
-    assert!(minimal
-        .finalize_draft("draft-1", ChannelOutboundIntent::default())
-        .await
-        .unwrap_err()
-        .unsupported);
+    assert!(
+        minimal
+            .deliver_bundle(&Target::default(), &[])
+            .await
+            .unwrap_err()
+            .unsupported
+    );
+    assert!(
+        minimal
+            .start_draft(ChannelOutboundIntent::default())
+            .await
+            .unwrap_err()
+            .unsupported
+    );
+    assert!(
+        minimal
+            .update_draft("draft-1", ChannelOutboundIntent::default())
+            .await
+            .unwrap_err()
+            .unsupported
+    );
+    assert!(
+        minimal
+            .finalize_draft("draft-1", ChannelOutboundIntent::default())
+            .await
+            .unwrap_err()
+            .unsupported
+    );
     assert!(minimal.set_typing("c", true).await.unwrap_err().unsupported);
     let reaction = ChannelReaction {
         value: "👍".into(),
