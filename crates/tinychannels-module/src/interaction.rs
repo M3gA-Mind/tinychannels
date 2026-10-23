@@ -53,7 +53,6 @@ pub(crate) async fn dispatch(
 /// Return Describe information from the exact configured native adapter.
 /// V1 keeps its wire projection until the compatibility window ends; all
 /// capability facts come from the same adapter selected for provider launch.
-#[cfg(test)]
 pub(crate) fn describe_adapter(
     adapter: &dyn tinychannels::channel::ChannelAdapter,
     legacy: bool,

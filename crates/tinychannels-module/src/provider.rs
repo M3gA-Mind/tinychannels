@@ -1011,6 +1011,38 @@ impl Running {
                                     "provider reaction is not supported by this adapter",
                                 )),
                             },
+                            tinychannels_bus::ChannelInteraction::Describe => {
+                                match send_legacy.as_ref() {
+                                    Some(legacy) => {
+                                        dispatch_interaction(
+                                            legacy.clone(),
+                                            tinychannels_bus::ChannelInteraction::Describe,
+                                            &mut typing,
+                                        )
+                                        .await
+                                    }
+                                    None => Ok(crate::interaction::describe_adapter(
+                                        send_adapter.as_ref(),
+                                        true,
+                                    )),
+                                }
+                            }
+                            tinychannels_bus::ChannelInteraction::DescribeV2 => {
+                                match send_legacy.as_ref() {
+                                    Some(legacy) => {
+                                        dispatch_interaction(
+                                            legacy.clone(),
+                                            tinychannels_bus::ChannelInteraction::DescribeV2,
+                                            &mut typing,
+                                        )
+                                        .await
+                                    }
+                                    None => Ok(crate::interaction::describe_adapter(
+                                        send_adapter.as_ref(),
+                                        false,
+                                    )),
+                                }
+                            }
                             interaction => {
                                 match crate::interaction::dispatch_native_webhook(
                                     send_adapter.as_ref(),
