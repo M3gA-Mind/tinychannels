@@ -15,10 +15,14 @@ use tinystoragedrivers_types::{
 use super::key;
 use super::records::{ChatBinding, StoredDelivery, StoredResult, to_stored_ms};
 use super::schema::{
-    DELIVERY_FAILED, DELIVERY_PENDING, DELIVERY_RESULTS, MIGRATIONS, REMOTE_BINDINGS, REMOTE_BUSY,
-    REMOTE_META, SCHEMA_VERSION, WHATSAPP_DEVICE, WHATSAPP_IDENTITY, WHATSAPP_LID_MAPPING,
-    WHATSAPP_PREKEY, WHATSAPP_SENDER_KEY, WHATSAPP_SESSION, WHATSAPP_SIGNED_PREKEY,
-    WHATSAPP_SYNC_KEY,
+    DELIVERY_FAILED, DELIVERY_PENDING, DELIVERY_RESULTS, LEGACY_DELIVERY_FAILED,
+    LEGACY_DELIVERY_PENDING, LEGACY_DELIVERY_RESULTS, LEGACY_REMOTE_BINDINGS, LEGACY_REMOTE_BUSY,
+    LEGACY_REMOTE_META, LEGACY_WHATSAPP_DEVICE, LEGACY_WHATSAPP_IDENTITY,
+    LEGACY_WHATSAPP_LID_MAPPING, LEGACY_WHATSAPP_PREKEY, LEGACY_WHATSAPP_SENDER_KEY,
+    LEGACY_WHATSAPP_SESSION, LEGACY_WHATSAPP_SIGNED_PREKEY, LEGACY_WHATSAPP_SYNC_KEY, MIGRATIONS,
+    REMOTE_BINDINGS, REMOTE_BUSY, REMOTE_META, SCHEMA_VERSION, WHATSAPP_DEVICE, WHATSAPP_IDENTITY,
+    WHATSAPP_LID_MAPPING, WHATSAPP_PREKEY, WHATSAPP_SENDER_KEY, WHATSAPP_SESSION,
+    WHATSAPP_SIGNED_PREKEY, WHATSAPP_SYNC_KEY,
 };
 use crate::delivery::QueuedDelivery;
 use tinychannels_bus::DeliveryTerminalResult;
@@ -53,43 +57,43 @@ fn steps() -> [Step; 14] {
     [
         Step {
             name: "delivery-pending-v2",
-            source: "channels_delivery_pending",
+            source: LEGACY_DELIVERY_PENDING,
             target: DELIVERY_PENDING,
             transform: Transform::Delivery,
         },
         Step {
             name: "delivery-failed-v2",
-            source: "channels_delivery_failed",
+            source: LEGACY_DELIVERY_FAILED,
             target: DELIVERY_FAILED,
             transform: Transform::Delivery,
         },
         Step {
             name: "delivery-results-v2",
-            source: "channels_delivery_results",
+            source: LEGACY_DELIVERY_RESULTS,
             target: DELIVERY_RESULTS,
             transform: Transform::Result,
         },
         Step {
             name: "remote-bindings-v2",
-            source: "channel_remote_bindings",
+            source: LEGACY_REMOTE_BINDINGS,
             target: REMOTE_BINDINGS,
             transform: Transform::Binding,
         },
         Step {
             name: "remote-busy-v2",
-            source: "channel_remote_busy",
+            source: LEGACY_REMOTE_BUSY,
             target: REMOTE_BUSY,
             transform: Transform::Busy,
         },
         Step {
             name: "remote-meta-v2",
-            source: "channel_remote_meta",
+            source: LEGACY_REMOTE_META,
             target: REMOTE_META,
             transform: Transform::Marker,
         },
         Step {
             name: "whatsapp-device-v2",
-            source: "whatsapp_device",
+            source: LEGACY_WHATSAPP_DEVICE,
             target: WHATSAPP_DEVICE,
             transform: Transform::WhatsApp {
                 unwrap_value: false,
@@ -97,37 +101,37 @@ fn steps() -> [Step; 14] {
         },
         Step {
             name: "whatsapp-identity-v2",
-            source: "whatsapp_identity",
+            source: LEGACY_WHATSAPP_IDENTITY,
             target: WHATSAPP_IDENTITY,
             transform: Transform::WhatsApp { unwrap_value: true },
         },
         Step {
             name: "whatsapp-session-v2",
-            source: "whatsapp_session",
+            source: LEGACY_WHATSAPP_SESSION,
             target: WHATSAPP_SESSION,
             transform: Transform::WhatsApp { unwrap_value: true },
         },
         Step {
             name: "whatsapp-prekey-v2",
-            source: "whatsapp_prekey",
+            source: LEGACY_WHATSAPP_PREKEY,
             target: WHATSAPP_PREKEY,
             transform: Transform::WhatsApp { unwrap_value: true },
         },
         Step {
             name: "whatsapp-signed-prekey-v2",
-            source: "whatsapp_signed_prekey",
+            source: LEGACY_WHATSAPP_SIGNED_PREKEY,
             target: WHATSAPP_SIGNED_PREKEY,
             transform: Transform::WhatsApp { unwrap_value: true },
         },
         Step {
             name: "whatsapp-sender-key-v2",
-            source: "whatsapp_sender_key",
+            source: LEGACY_WHATSAPP_SENDER_KEY,
             target: WHATSAPP_SENDER_KEY,
             transform: Transform::WhatsApp { unwrap_value: true },
         },
         Step {
             name: "whatsapp-sync-key-v2",
-            source: "whatsapp_sync_key",
+            source: LEGACY_WHATSAPP_SYNC_KEY,
             target: WHATSAPP_SYNC_KEY,
             transform: Transform::WhatsApp {
                 unwrap_value: false,
@@ -135,7 +139,7 @@ fn steps() -> [Step; 14] {
         },
         Step {
             name: "whatsapp-lid-mapping-v2",
-            source: "whatsapp_lid_mapping",
+            source: LEGACY_WHATSAPP_LID_MAPPING,
             target: WHATSAPP_LID_MAPPING,
             transform: Transform::WhatsApp {
                 unwrap_value: false,
