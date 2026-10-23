@@ -839,6 +839,7 @@ impl Running {
         let task_finished = finished.clone();
         let adapter = channel.adapter().clone();
         let send_drafts = channel.drafts().cloned();
+        let send_reactions = channel.reactions().cloned();
         let listen_adapter = adapter.clone();
         let send_adapter = adapter.clone();
         let stop_adapter = adapter.clone();
@@ -986,6 +987,32 @@ impl Running {
                                 }
                                 None => Err(Error::failed(
                                     "provider draft upsert is not supported by this adapter",
+                                )),
+                            },
+                            tinychannels_bus::ChannelInteraction::SendReaction {
+                                channel,
+                                conversation,
+                                provider_message_id,
+                                reaction,
+                                remove,
+                            } => match send_reactions.as_ref() {
+                                Some(reactions) => {
+                                    reactions
+                                        .send_reaction(
+                                            &channel,
+                                            &conversation,
+                                            &provider_message_id,
+                                            &reaction,
+                                            remove,
+                                        )
+                                        .await
+                                        .map(|()| {
+                                            tinychannels_bus::ChannelInteractionResult::Completed
+                                        })
+                                        .map_err(|error| Error::failed(error.message))
+                                }
+                                None => Err(Error::failed(
+                                    "provider reaction is not supported by this adapter",
                                 )),
                             },
                             interaction => {
