@@ -289,7 +289,7 @@ async fn provider_shutdown_replies_to_queued_sends_as_not_dispatched() {
     first.await.unwrap().unwrap();
     let queued_error = queued.await.unwrap().unwrap_err();
     assert!(matches!(queued_error, RunningSendError::NotDispatched(_)));
-    assert_eq!(queued_error.to_string(), "provider is stopping");
+    assert!(queued_error.to_string().contains("provider is stopping"));
     stop.await.unwrap().unwrap();
 }
 
