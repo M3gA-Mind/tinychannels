@@ -256,6 +256,43 @@ async fn canceled_send_waiter_does_not_cancel_owned_send_or_shutdown_join() {
     stop.await.unwrap().unwrap();
 }
 
+#[tokio::test]
+async fn provider_shutdown_replies_to_queued_sends_as_not_dispatched() {
+    let (started, started_rx) = oneshot::channel();
+    let (release, release_rx) = oneshot::channel();
+    let channel = Arc::new(SlowChannel {
+        started: StdMutex::new(Some(started)),
+        release: tokio::sync::Mutex::new(Some(release_rx)),
+    });
+    let host = memory_host().await;
+    let running = Running::start(channel, Arc::new(Hooks::default()), host);
+    let first = tokio::spawn({
+        let running = running.clone();
+        async move { running.send(SendMessage::new("in flight", "room")).await }
+    });
+    started_rx.await.unwrap();
+
+    let queued = tokio::spawn({
+        let running = running.clone();
+        async move { running.send(SendMessage::new("queued", "room")).await }
+    });
+    while running.send.len() != 1 {
+        tokio::task::yield_now().await;
+    }
+
+    let stop = tokio::spawn({
+        let running = running.clone();
+        async move { running.stop().await }
+    });
+    release.send(()).unwrap();
+
+    first.await.unwrap().unwrap();
+    let queued_error = queued.await.unwrap().unwrap_err();
+    assert!(matches!(queued_error, RunningSendError::NotDispatched(_)));
+    assert_eq!(queued_error.to_string(), "provider is stopping");
+    stop.await.unwrap().unwrap();
+}
+
 #[derive(Default)]
 struct InteractionChannel(StdMutex<Vec<String>>);
 #[async_trait::async_trait]
