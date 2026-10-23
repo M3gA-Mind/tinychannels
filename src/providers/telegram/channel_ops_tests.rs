@@ -455,7 +455,7 @@ async fn typed_image_upload_reads_host_scope_and_returns_provider_receipt() {
     assert_eq!(bodies.len(), 1);
     assert!(bodies[0].contains("name=\"reply_parameters\"\r\n\r\n{\"message_id\":27}"));
     assert!(bodies[0].contains("name=\"message_thread_id\"\r\n\r\n18"));
-    assert!(bodies[0].contains("name=\"caption\"\r\n\r\nphoto "));
+    assert!(bodies[0].contains("name=\"caption\"\r\n\r\nphoto "), "{}", bodies[0]);
     assert!(bodies[0].contains("filename=\"preview.png\""));
     assert!(bodies[0].contains("Content-Type: image/png"));
     assert!(bodies[0].contains(String::from_utf8_lossy(&image).as_ref()));
