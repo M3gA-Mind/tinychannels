@@ -313,6 +313,9 @@ impl tinychannels::host::MediaRepository for ModuleMediaRepository {
         opaque_id: String,
         max_bytes: u64,
     ) -> anyhow::Result<tinychannels::host::StoredMedia> {
+        if scope.configured_instance != self.1 {
+            anyhow::bail!("media scope does not match the configured provider instance");
+        }
         self.bind_scope(&mut scope)?;
         self.scoped_store()
             .await?
