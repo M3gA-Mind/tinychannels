@@ -909,41 +909,45 @@ impl Running {
                                 })
                                 .map_err(|error| Error::failed(error.message))
                         }
-                        ProviderOperation::SendTyped(message) => send_adapter
-                            .send_typed(&message)
-                            .await
-                            .map(|mut outcome| {
-                                outcome.receipt.idempotency_key =
-                                    Some(message.idempotency_key.clone());
-                                outcome.receipt.channel =
-                                    Some(message.channel_ref.clone().unwrap_or_else(|| {
-                                        tinychannels_bus::ChannelRef {
-                                            id: tinychannels_bus::provider_id(&configured_instance)
-                                                .to_owned(),
-                                            account_id: Some(configured_instance.clone()),
+                        ProviderOperation::SendTyped(message) => {
+                            let mut outcome = match send_adapter.send_typed(&message).await {
+                                Ok(outcome) => outcome,
+                                Err(error) => tinychannels_bus::channel::ChannelSendOutcome {
+                                    error: Some(error),
+                                    ..Default::default()
+                                },
+                            };
+                            outcome.receipt.idempotency_key = Some(message.idempotency_key.clone());
+                            outcome.receipt.channel =
+                                Some(message.channel_ref.clone().unwrap_or_else(|| {
+                                    tinychannels_bus::ChannelRef {
+                                        id: tinychannels_bus::provider_id(&configured_instance)
+                                            .to_owned(),
+                                        account_id: Some(configured_instance.clone()),
+                                    }
+                                }));
+                            if outcome.receipt.conversation.is_none() {
+                                outcome.receipt.conversation =
+                                    Some(message.conversation_ref.clone().unwrap_or_else(|| {
+                                        tinychannels_bus::ConversationRef {
+                                            id: message.conversation_id.clone(),
+                                            ..Default::default()
                                         }
                                     }));
-                                if outcome.receipt.conversation.is_none() {
-                                    outcome.receipt.conversation =
-                                        Some(message.conversation_ref.clone().unwrap_or_else(
-                                            || tinychannels_bus::ConversationRef {
-                                                id: message.conversation_id.clone(),
-                                                ..Default::default()
-                                            },
-                                        ));
-                                }
-                                if outcome.receipt.thread_id.is_none() {
-                                    outcome.receipt.thread_id =
-                                        message.thread_id.clone().or_else(|| {
-                                            message
-                                                .conversation_ref
-                                                .as_ref()
-                                                .and_then(|r| r.thread_id.clone())
-                                        });
-                                }
-                                tinychannels_bus::ChannelInteractionResult::Sent(Box::new(outcome))
-                            })
-                            .map_err(|error| Error::failed(error.message)),
+                            }
+                            if outcome.receipt.thread_id.is_none() {
+                                outcome.receipt.thread_id =
+                                    message.thread_id.clone().or_else(|| {
+                                        message
+                                            .conversation_ref
+                                            .as_ref()
+                                            .and_then(|r| r.thread_id.clone())
+                                    });
+                            }
+                            Ok(tinychannels_bus::ChannelInteractionResult::Sent(Box::new(
+                                outcome,
+                            )))
+                        }
                         ProviderOperation::Interaction(interaction) => match *interaction {
                             tinychannels_bus::ChannelInteraction::UpsertDraft {
                                 previous,
