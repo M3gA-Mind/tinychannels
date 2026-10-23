@@ -910,6 +910,20 @@ impl Running {
                                 .map_err(|error| Error::failed(error.message))
                         }
                         ProviderOperation::SendTyped(message) => {
+                            let expected_channel_id =
+                                tinychannels_bus::provider_id(&configured_instance);
+                            if message.channel_ref.as_ref().is_some_and(|channel| {
+                                channel.id != expected_channel_id
+                                    || channel
+                                        .account_id
+                                        .as_deref()
+                                        .is_some_and(|account| account != configured_instance)
+                            }) {
+                                let _ = command.reply.send(Err(Error::failed(
+                                    "typed send channel does not match configured provider",
+                                )));
+                                continue;
+                            }
                             let mut outcome = match send_adapter.send_typed(&message).await {
                                 Ok(outcome) => outcome,
                                 Err(error) => tinychannels_bus::channel::ChannelSendOutcome {
