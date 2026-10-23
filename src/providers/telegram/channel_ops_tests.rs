@@ -2045,6 +2045,60 @@ async fn edit_and_delete_reject_mismatched_or_incomplete_receipts_before_io() {
 }
 
 #[tokio::test]
+async fn native_interaction_adapters_preserve_uncertain_provider_errors() {
+    let server = mock_api().await;
+    for method_name in ["setMessageReaction", "editMessageText", "deleteMessage"] {
+        mount_post(
+            &server,
+            method_name,
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": false,
+                "description": "provider rejected the operation"
+            })),
+        )
+        .await;
+    }
+    let channel = channel_for(&server, &["*"]);
+    let conversation = tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        ..Default::default()
+    };
+    let channel_ref = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: None,
+    };
+
+    let reaction = channel
+        .send_reaction(
+            &channel_ref,
+            &conversation,
+            "81",
+            &tinychannels_bus::ChannelReaction::default(),
+            true,
+        )
+        .await
+        .unwrap_err();
+    let edit = channel
+        .edit(&telegram_receipt(Some("81")), edit_intent("-10042"))
+        .await
+        .unwrap_err();
+    let delete = channel
+        .delete(&telegram_receipt(Some("81")))
+        .await
+        .unwrap_err();
+
+    for error in [reaction, edit, delete] {
+        assert!(error.sent_before_error);
+        assert!(!error.retryable);
+        assert_eq!(
+            error.kind,
+            tinychannels_bus::channel::SendErrorKind::Unknown
+        );
+    }
+    assert_eq!(server.received_requests().await.unwrap().len(), 3);
+}
+
+#[tokio::test]
 async fn delete_message_requires_telegram_success_and_true_result() {
     let rejected = mock_api().await;
     mount_post(
