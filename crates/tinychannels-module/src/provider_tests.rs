@@ -949,8 +949,7 @@ async fn draft_upsert_fills_missing_receipt_scope_and_preserves_previous_receipt
         intent.clone(),
     )
     .await
-    .unwrap()
-    else {
+    .unwrap() else {
         panic!("draft upsert returns a send outcome");
     };
 
@@ -958,11 +957,20 @@ async fn draft_upsert_fills_missing_receipt_scope_and_preserves_previous_receipt
         drafts.0.lock().unwrap().as_ref().unwrap(),
         &(Some(previous), intent)
     );
-    assert_eq!(outcome.receipt.primary_platform_message_id.as_deref(), Some("draft-message-4"));
+    assert_eq!(
+        outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("draft-message-4")
+    );
     assert_eq!(outcome.receipt.idempotency_key.as_deref(), Some("draft-4"));
     assert_eq!(outcome.receipt.channel.as_ref().unwrap().id, "telegram");
     assert_eq!(
-        outcome.receipt.channel.as_ref().unwrap().account_id.as_deref(),
+        outcome
+            .receipt
+            .channel
+            .as_ref()
+            .unwrap()
+            .account_id
+            .as_deref(),
         Some("telegram:primary")
     );
     assert_eq!(outcome.receipt.conversation.as_ref().unwrap().id, "chat-8");
@@ -1045,6 +1053,59 @@ async fn provider_fills_missing_receipt_scope_from_the_submitted_message() {
         Some("chat-7")
     );
     assert_eq!(receipt.thread_id.as_deref(), Some("thread-3"));
+    running.stop().await.unwrap();
+}
+
+struct CountingTypedProvider(Arc<AtomicUsize>);
+
+#[async_trait::async_trait]
+impl TestProviderBehavior for CountingTypedProvider {
+    fn test_provider_id(&self) -> &'static str {
+        "telegram"
+    }
+
+    async fn test_send(
+        &self,
+        _message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ChannelSendError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(Default::default())
+    }
+}
+
+#[tokio::test]
+async fn typed_send_rejects_a_foreign_account_before_provider_io() {
+    let sends = Arc::new(AtomicUsize::new(0));
+    let host = memory_host().await;
+    let hooks = Arc::new(Hooks::default());
+    let _provider_host = hooks.host(host.clone(), "telegram:primary".into(), None);
+    let running =
+        Running::start_test_outbound(Arc::new(CountingTypedProvider(sends.clone())), hooks, host);
+    let message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram:primary".into(),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:other".into()),
+        }),
+        conversation_id: "chat-7".into(),
+        idempotency_key: "foreign-account".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "hello".into(),
+                markdown_dialect: None,
+            },
+        }],
+        ..Default::default()
+    };
+
+    let error = running.send_typed(message).await.unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("does not match configured provider")
+    );
+    assert_eq!(sends.load(Ordering::SeqCst), 0);
     running.stop().await.unwrap();
 }
 
