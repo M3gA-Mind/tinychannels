@@ -634,7 +634,11 @@ async fn run(
             command = inbox.recv() => match command {
                 Some(Command::Feed(events, response)) => {
                     let result = apply_legacy_feed(&mut reply, &sender, events).await;
+                    let successful = result.is_ok();
                     let _ = response.send(result);
+                    if successful {
+                        reply.typing_tick().await;
+                    }
                 }
                 Some(Command::FeedOutput(batch, response)) => {
                     let scope = OutputScope {
@@ -659,10 +663,9 @@ async fn run(
                     let final_message_delivered = result
                         .as_ref()
                         .is_ok_and(|applied| applied.final_message_delivered);
+                    let successful = result.is_ok();
                     let _ = response.send(result);
-                    if !terminal && final_message_delivered {
-                        // A completed output needs no further typing refresh.
-                    } else if !terminal && sender.scope().await.is_some() {
+                    if successful && !terminal && !final_message_delivered {
                         reply.typing_tick().await;
                     }
                     if terminal {
@@ -705,8 +708,9 @@ async fn apply_legacy_feed(
     sender: &Sender,
     events: Vec<ProgressiveEvent>,
 ) -> Result<()> {
+    apply(reply, events)?;
     sender.set_scope(None).await;
-    apply(reply, events)
+    Ok(())
 }
 
 async fn apply_output(
