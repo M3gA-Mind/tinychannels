@@ -666,7 +666,7 @@ async fn oversized_voice_transcript_is_sent_as_a_follow_up_with_combined_receipt
     let voice = raw_bodies(&server, "sendVoice").await;
     assert_eq!(voice.len(), 1);
     assert!(!voice[0].contains("name=\"caption\""));
-    assert_eq!(sent_texts(&server), [transcript]);
+    assert_eq!(sent_texts(&server).await, [transcript]);
 }
 
 #[test]
