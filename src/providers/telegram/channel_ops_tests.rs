@@ -790,14 +790,17 @@ async fn typed_image_upload_reads_host_scope_and_returns_provider_receipt() {
         tinychannels_bus::channel::MessageReceiptPartKind::Media
     );
     assert_eq!(outcome.receipt.parts[0].thread_id.as_deref(), Some("18"));
-    let reads = reads.lock().unwrap();
-    assert_eq!(reads.len(), 1);
-    assert_eq!(reads[0].1, "opaque-photo-1");
-    assert_eq!(reads[0].2, 20 * 1024 * 1024);
-    assert_eq!(reads[0].0.configured_instance, "telegram-main");
-    assert_eq!(reads[0].0.channel.id, "telegram");
-    assert_eq!(reads[0].0.conversation.thread_id.as_deref(), Some("18"));
-    assert_eq!(reads[0].0.turn_id, "turn-image-1");
+    let read_records = reads.lock().unwrap().clone();
+    assert_eq!(read_records.len(), 1);
+    assert_eq!(read_records[0].1, "opaque-photo-1");
+    assert_eq!(read_records[0].2, 20 * 1024 * 1024);
+    assert_eq!(read_records[0].0.configured_instance, "telegram-main");
+    assert_eq!(read_records[0].0.channel.id, "telegram");
+    assert_eq!(
+        read_records[0].0.conversation.thread_id.as_deref(),
+        Some("18")
+    );
+    assert_eq!(read_records[0].0.turn_id, "turn-image-1");
     let bodies = raw_bodies(&server, "sendPhoto").await;
     assert_eq!(bodies.len(), 1);
     assert!(bodies[0].contains("name=\"reply_parameters\"\r\n\r\n{\"message_id\":27}"));
@@ -853,11 +856,11 @@ async fn typed_voice_uses_scoped_host_audio_and_selects_voice_or_audio_endpoint(
             outcome.receipt.parts[0].kind,
             tinychannels_bus::channel::MessageReceiptPartKind::Voice
         );
-        let reads = reads.lock().unwrap();
-        assert_eq!(reads.len(), 1);
-        assert_eq!(reads[0].1, "opaque-voice-1");
-        assert_eq!(reads[0].0.configured_instance, "telegram-main");
-        assert_eq!(reads[0].0.turn_id, "turn-image-1");
+        let read_records = reads.lock().unwrap().clone();
+        assert_eq!(read_records.len(), 1);
+        assert_eq!(read_records[0].1, "opaque-voice-1");
+        assert_eq!(read_records[0].0.configured_instance, "telegram-main");
+        assert_eq!(read_records[0].0.turn_id, "turn-image-1");
         let body = raw_bodies(&server, method_name).await;
         assert_eq!(body.len(), 1);
         assert!(body[0].contains(&format!("name=\"{field}\"; filename=\"recording.ogg\"")));
