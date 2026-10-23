@@ -152,3 +152,55 @@ impl VoiceMediaStore for DefaultVoiceMediaStore {
         unreachable!("this test only exercises the default read_voice behavior")
     }
 }
+
+struct UnsupportedMediaRepository;
+
+#[async_trait]
+impl MediaRepository for UnsupportedMediaRepository {
+    async fn store_media(
+        &self,
+        _request: MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        unreachable!("this test exercises only the optional repository defaults")
+    }
+
+    async fn read_media(
+        &self,
+        _scope: MediaScope,
+        _opaque_id: String,
+        _max_bytes: u64,
+    ) -> anyhow::Result<StoredMedia> {
+        unreachable!("this test exercises only the optional repository defaults")
+    }
+}
+
+#[tokio::test]
+async fn media_repository_defaults_reject_streaming_and_deletion() {
+    let repository = UnsupportedMediaRepository;
+    let stream_error = repository
+        .store_media_stream(MediaStreamRequest {
+            metadata: MediaStoreRequest {
+                scope: MediaScope::default(),
+                content_type: "application/octet-stream".into(),
+                file_name: None,
+                expected_bytes: 0,
+                dedupe_key: None,
+            },
+            reader: Box::pin(tokio::io::empty()),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        stream_error.to_string(),
+        "media repository does not support streamed storage"
+    );
+
+    let delete_error = repository
+        .delete_media(MediaScope::default(), "opaque-id".into())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        delete_error.to_string(),
+        "media repository does not support deletion"
+    );
+}
