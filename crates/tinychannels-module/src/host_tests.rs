@@ -325,9 +325,11 @@ async fn module_host_rejects_empty_speech_results() {
     let error = host
         .synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
             scope: tinychannels_bus::HostVoiceScope {
-                agent_id: "agent-voice".into(),
-                channel_id: "telegram".into(),
-                account_id: Some("account-1".into()),
+                configured_instance: "telegram".into(),
+                channel: tinychannels_bus::ChannelRef {
+                    id: tinychannels_bus::provider_id("telegram").into(),
+                    account_id: Some("telegram".into()),
+                },
                 conversation: tinychannels_bus::ConversationRef {
                     id: "chat-7".into(),
                     ..Default::default()
