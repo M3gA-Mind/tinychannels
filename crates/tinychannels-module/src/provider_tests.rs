@@ -936,6 +936,20 @@ impl ChannelAdapter for FailingStartAdapter {
     async fn stop(&self) -> std::result::Result<(), ChannelSendError> {
         Ok(())
     }
+
+    async fn send(
+        &self,
+        _intent: tinychannels::channel::ChannelOutboundIntent,
+    ) -> std::result::Result<tinychannels::channel::MessageReceipt, ChannelSendError> {
+        Err(ChannelSendError::unsupported("send is not used"))
+    }
+
+    async fn status(
+        &self,
+    ) -> std::result::Result<tinychannels::controllers::ChannelAccountSnapshot, ChannelSendError>
+    {
+        Ok(Default::default())
+    }
 }
 
 struct FailedIngressSink(Arc<tokio::sync::Notify>);
