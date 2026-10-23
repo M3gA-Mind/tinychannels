@@ -497,6 +497,27 @@ async fn outbound_only_provider_routes_scoped_reactions_to_native_extension() {
     running.stop().await.unwrap();
 }
 
+#[tokio::test]
+async fn outbound_only_provider_describes_native_adapter_capabilities() {
+    let running = Running::start_built_outbound(
+        BuiltChannel::from_adapter(Arc::new(WebhookVerificationAdapter)),
+        Arc::new(Hooks::default()),
+        memory_host().await,
+    );
+
+    let result = running
+        .interact(tinychannels_bus::ChannelInteraction::DescribeV2)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    let tinychannels_bus::ChannelInteractionResult::InfoV2(info) = result else {
+        panic!("DescribeV2 should return the configured adapter's capabilities")
+    };
+    assert_eq!(info.capabilities.account.configured, Some(true));
+    assert_eq!(info.capabilities.account.enabled, Some(true));
+    running.stop().await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
     use tinychannels_bus::ChannelInteraction as Op;
