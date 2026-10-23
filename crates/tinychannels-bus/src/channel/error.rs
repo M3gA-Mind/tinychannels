@@ -50,3 +50,27 @@ impl Default for ChannelSendError {
         }
     }
 }
+
+impl ChannelSendError {
+    const UNSUPPORTED_PREFIX: &'static str = "unsupported operation: ";
+
+    /// Build an explicit unsupported-operation error without changing the
+    /// public struct layout used by existing Rust callers.
+    pub fn unsupported(message: impl Into<String>) -> Self {
+        Self {
+            kind: SendErrorKind::BadFormat,
+            message: format!("{}{}", Self::UNSUPPORTED_PREFIX, message.into()),
+            unsupported: true,
+            ..Default::default()
+        }
+    }
+
+    /// Whether this error was produced by [`Self::unsupported`].
+    pub fn is_unsupported(&self) -> bool {
+        self.kind == SendErrorKind::BadFormat && self.message.starts_with(Self::UNSUPPORTED_PREFIX)
+    }
+}
+
+#[cfg(test)]
+#[path = "error_tests.rs"]
+mod tests;

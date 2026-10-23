@@ -573,7 +573,7 @@ impl YuanbaoChannel {
             }
         };
 
-        if let Err(error) = sink.push(ChannelIngress::Inbound(envelope)).await {
+        if let Err(error) = sink.push_ingress(ChannelIngress::Inbound(envelope)).await {
             return Err(ChannelSendError {
                 kind: SendErrorKind::Transient,
                 message: "Yuanbao typed ingress sink rejected a message".into(),

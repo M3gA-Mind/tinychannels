@@ -2,8 +2,8 @@
 
 use super::api_tests::{FixtureVoiceCodec, fixture_client, is_token_request, token_ok};
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelInboundSink, ChannelReaction,
-    ChannelStreamingDraft, ChannelTyping,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelInboundSink, ChannelStreamingDraft,
+    ChannelTyping,
 };
 use crate::factory::{HttpClientFactory, build_long_tail_channel_with_host};
 use crate::host::ChannelHostBuilder;
@@ -57,7 +57,15 @@ struct LarkFixtureSink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
 
 #[async_trait]
 impl ChannelInboundSink for LarkFixtureSink {
-    async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+    async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
         self.0.send(ingress).map_err(|_| ChannelSendError {
             kind: SendErrorKind::Transient,
             message: "Lark conformance sink closed".into(),
@@ -394,7 +402,8 @@ impl LarkFixture {
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         let before = self.request_count().await;
         let issued_before = self.issued_message_ids.lock().len();
-        let outcome = ChannelAdapter::send(self.channel.as_ref(), self.intent(payload)).await?;
+        let outcome =
+            ChannelAdapter::send_outcome(self.channel.as_ref(), self.intent(payload)).await?;
         let issued_ids = self.issued_message_ids.lock()[issued_before..].to_vec();
         assert_eq!(
             outcome.receipt.platform_message_ids, issued_ids,
@@ -600,10 +609,8 @@ impl AdapterFixture for LarkFixture {
                     OutboundPayload::Voice {
                         voice: OutboundVoice::Media {
                             media: media_ref(MediaKind::Audio),
-                            audio_base64: None,
                             codec: Some("m4a_aac".into()),
                             duration_ms: Some(1000),
-                            waveform: None,
                         },
                     },
                 )
@@ -612,7 +619,7 @@ impl AdapterFixture for LarkFixture {
             // Media and action kinds that Lark does not declare still go
             // through the actual adapter planner and must stop before HTTP.
             Feature::Sticker => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     self.channel.as_ref(),
                     self.intent(rich(ContentPart::Sticker {
                         media: Default::default(),
@@ -625,7 +632,7 @@ impl AdapterFixture for LarkFixture {
                 .await
             }
             Feature::Location => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     self.channel.as_ref(),
                     self.intent(rich(ContentPart::Location {
                         latitude: 1.0,
@@ -639,7 +646,7 @@ impl AdapterFixture for LarkFixture {
                 .await
             }
             Feature::Contact => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     self.channel.as_ref(),
                     self.intent(rich(ContentPart::Contact {
                         display_name: "test".into(),
@@ -651,14 +658,14 @@ impl AdapterFixture for LarkFixture {
                 .await
             }
             Feature::Buttons => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     self.channel.as_ref(),
                     self.intent(rich(ContentPart::Buttons { rows: vec![] })),
                 ))
                 .await
             }
             Feature::Poll => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     self.channel.as_ref(),
                     self.intent(rich(ContentPart::Poll {
                         question: "q".into(),
@@ -671,7 +678,7 @@ impl AdapterFixture for LarkFixture {
                 .await
             }
             Feature::Presentation => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     self.channel.as_ref(),
                     self.intent(rich(ContentPart::Presentation {
                         blocks: serde_json::json!({"kind":"test"}),
@@ -680,7 +687,7 @@ impl AdapterFixture for LarkFixture {
                 .await
             }
             Feature::NativeData => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     self.channel.as_ref(),
                     self.intent(OutboundPayload::NativeChannelData {
                         data: serde_json::json!({"kind":"test"}),
@@ -689,7 +696,7 @@ impl AdapterFixture for LarkFixture {
                 .await
             }
             Feature::VoiceSynthesis => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     self.channel.as_ref(),
                     self.intent(OutboundPayload::Voice {
                         voice: OutboundVoice::Synthesize {
@@ -705,7 +712,7 @@ impl AdapterFixture for LarkFixture {
                     .await
             }
             Feature::Reactions => {
-                self.refused(ChannelReaction::send_reaction(
+                self.refused(crate::channel::LegacyChannelReaction::send_reaction(
                     self.channel.as_ref(),
                     &channel_ref(),
                     &conversation_ref(),
@@ -747,7 +754,7 @@ impl AdapterFixture for LarkFixture {
                     text: "reply".into(),
                 });
                 intent.reply_to_id = Some("om-parent".into());
-                self.refused(ChannelAdapter::send(self.channel.as_ref(), intent))
+                self.refused(ChannelAdapter::send_outcome(self.channel.as_ref(), intent))
                     .await
             }
             Feature::ThreadAddressing => {
@@ -755,7 +762,7 @@ impl AdapterFixture for LarkFixture {
                     text: "thread".into(),
                 });
                 intent.thread_id = Some("om-root".into());
-                self.refused(ChannelAdapter::send(self.channel.as_ref(), intent))
+                self.refused(ChannelAdapter::send_outcome(self.channel.as_ref(), intent))
                     .await
             }
             // These inbound-only features have no outbound adapter operation;

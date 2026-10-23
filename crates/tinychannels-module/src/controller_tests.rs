@@ -501,14 +501,54 @@ impl tinychannels_conformance::NativeControllerFixture for NativeControllerFixtu
     }
 }
 
-struct ManagedConformanceChannel(tinychannels_bus::ChannelCapabilities);
+struct ManagedConformanceChannel {
+    capabilities: tinychannels_bus::ChannelCapabilities,
+    sends: Arc<Mutex<Vec<tinychannels_bus::ChannelOutboundMessage>>>,
+    edits: Arc<Mutex<Vec<tinychannels_bus::ChannelOutboundIntent>>>,
+}
 
+#[async_trait::async_trait]
 impl crate::provider::TestProviderBehavior for ManagedConformanceChannel {
     fn test_provider_id(&self) -> &'static str {
         "mattermost"
     }
     fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.0.clone()
+        self.capabilities.clone()
+    }
+    async fn test_send(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        self.sends.lock().await.push(message.clone());
+        Ok(tinychannels_bus::channel::ChannelSendOutcome {
+            receipt: tinychannels_bus::channel::MessageReceipt {
+                channel: message.channel_ref.clone(),
+                conversation: message.conversation_ref.clone(),
+                primary_platform_message_id: Some("managed-source-1".into()),
+                platform_message_ids: vec!["managed-source-1".into()],
+                parts: vec![tinychannels_bus::channel::MessageReceiptPart {
+                    platform_message_id: "managed-source-1".into(),
+                    kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+    async fn test_edit(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::MessageReceipt,
+        tinychannels::channel::ChannelSendError,
+    > {
+        self.edits.lock().await.push(intent);
+        Ok(receipt.clone())
     }
 }
 
@@ -517,6 +557,7 @@ struct ManagedConformanceFixture {
     backend: BackendFixture,
     replies: crate::progressive::Replies,
     running: Arc<Running>,
+    managed_channel: Arc<ManagedConformanceChannel>,
     observed: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
 }
 
@@ -532,8 +573,13 @@ impl ManagedConformanceFixture {
             .actions
             .supported
             .extend(["edit", "thread-create", "thread-update", "thread-list"].map(str::to_owned));
+        let managed_channel = Arc::new(ManagedConformanceChannel {
+            capabilities,
+            sends: Arc::new(Mutex::new(Vec::new())),
+            edits: Arc::new(Mutex::new(Vec::new())),
+        });
         let running = Running::start_test_outbound(
-            Arc::new(ManagedConformanceChannel(capabilities)),
+            managed_channel.clone(),
             Arc::new(crate::provider::Hooks::default()),
             host.clone(),
         );
@@ -547,6 +593,7 @@ impl ManagedConformanceFixture {
                 backend,
                 replies,
                 running,
+                managed_channel,
                 observed: std::sync::Mutex::new(Vec::new()),
             },
             server,
@@ -654,8 +701,7 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
             ChannelControllerRequest as Request, ChannelControllerResult as Response,
         };
         use tinychannels_bus::module_progressive::{
-            ChannelOutputEvent, ProgressiveCommand, ProgressiveResult, ProgressiveTransportRequest,
-            ProgressiveTransportResult,
+            ChannelOutputEvent, ProgressiveCommand, ProgressiveResult,
         };
         use tinychannels_conformance::ConformanceFeature as Feature;
 
@@ -946,19 +992,11 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                     for _ in 0..5 {
                         tokio::task::yield_now().await;
                     }
-                    if self.backend.0.lock().await.iter().any(|request| {
-                        matches!(request,
-                        ChannelBackendRequest::ProgressiveTransport(request)
-                            if matches!(request.as_ref(), ProgressiveTransportRequest::Send { .. }))
-                    }) {
+                    if !self.managed_channel.sends.lock().await.is_empty() {
                         break;
                     }
                 }
-                if !self.backend.0.lock().await.iter().any(|request| {
-                    matches!(request,
-                    ChannelBackendRequest::ProgressiveTransport(request)
-                        if matches!(request.as_ref(), ProgressiveTransportRequest::Send { .. }))
-                }) {
+                if self.managed_channel.sends.lock().await.is_empty() {
                     return Err(tinychannels_bus::channel::ChannelSendError::default());
                 }
                 let finalized = self
@@ -979,43 +1017,15 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                 if outcome.error.is_some() {
                     return Err(outcome.error.clone().unwrap());
                 }
-                let requests = self.backend.0.lock().await.clone();
-                let responses = self.backend.1.lock().await.clone();
-                let index = requests
-                    .iter()
-                    .rposition(|request| {
-                        matches!(request,
-                        ChannelBackendRequest::ProgressiveTransport(request)
-                            if matches!(request.as_ref(), ProgressiveTransportRequest::Edit { .. }))
-                    })
+                let edits = self.managed_channel.edits.lock().await.clone();
+                let intent = edits.last().cloned().ok_or_default()?;
+                let channel = intent.channel_ref.clone().ok_or_default()?;
+                let conversation = intent.conversation_ref.clone().ok_or_default()?;
+                let returned_id = outcome
+                    .receipt
+                    .primary_platform_message_id
+                    .clone()
                     .ok_or_default()?;
-                let ChannelBackendRequest::ProgressiveTransport(request) = &requests[index] else {
-                    unreachable!()
-                };
-                let ProgressiveTransportRequest::Edit {
-                    channel_ref,
-                    conversation,
-                    ..
-                } = request.as_ref()
-                else {
-                    unreachable!()
-                };
-                let response = responses.get(index).cloned().ok_or_default()?;
-                let response_value = match &response {
-                    ChannelBackendResult::ProgressiveTransport(response) => match response.as_ref()
-                    {
-                        ProgressiveTransportResult::Success(value) => value.clone(),
-                        _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
-                    },
-                    _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
-                };
-                let returned_id = response_value
-                    .get("message_id")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_default()?
-                    .to_owned();
-                let channel = channel_ref.clone().ok_or_default()?;
-                let conversation = conversation.clone().ok_or_default()?;
                 if outcome.receipt.channel.as_ref() != Some(&channel)
                     || outcome.receipt.conversation.as_ref() != Some(&conversation)
                     || outcome.receipt.primary_platform_message_id.as_deref()
@@ -1030,7 +1040,7 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                     channel.clone(),
                     conversation.clone(),
                     vec![returned_id.clone()],
-                    serde_json::json!({"request": request, "response": response}),
+                    serde_json::json!({"provider_edit": intent}),
                 );
                 Ok(Some(*outcome))
             }
@@ -1097,13 +1107,12 @@ async fn managed_controller_and_progressive_paths_pass_shared_conformance_featur
         ChannelBackendRequest::ListThreads { channel, active: Some(true) }
             if channel == "mattermost"
     )));
-    assert!(requests.iter().any(|request| matches!(request,
-        ChannelBackendRequest::ProgressiveTransport(request)
-            if matches!(request.as_ref(), tinychannels_bus::module_progressive::ProgressiveTransportRequest::Edit {
-                channel_ref: Some(channel), conversation: Some(conversation), text, ..
-            } if channel.account_id.as_deref() == Some("mattermost:managed-fixture")
-                && conversation.id == "managed-room-1" && text == "managed draft finalized")
-    )));
+    assert!(fixture.managed_channel.edits.lock().await.iter().any(|intent|
+        intent.channel_ref.as_ref().and_then(|channel| channel.account_id.as_deref())
+            == Some("mattermost:managed-fixture")
+            && intent.conversation_ref.as_ref().is_some_and(|conversation| conversation.id == "managed-room-1")
+            && matches!(&intent.payload, tinychannels_bus::OutboundPayload::Text { text } if text == "managed draft finalized")
+    ));
     fixture.shutdown(server).await;
 }
 

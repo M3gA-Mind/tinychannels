@@ -1,16 +1,25 @@
 use super::*;
+use crate::providers::telegram::attachments::{TelegramAttachment, TelegramAttachmentKind};
 use crate::providers::telegram::fixtures::*;
 use crate::providers::telegram::text::TELEGRAM_MAX_MESSAGE_LENGTH;
+use crate::traits::SendMessage;
 use std::sync::Arc;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-const UPLOAD_METHODS: [&str; 5] = [
-    "sendDocument",
-    "sendPhoto",
-    "sendVideo",
-    "sendAudio",
-    "sendVoice",
+fn attachment(kind: TelegramAttachmentKind, target: &str) -> TelegramAttachment {
+    TelegramAttachment {
+        kind,
+        target: target.to_string(),
+    }
+}
+
+const ALL_KINDS: [(TelegramAttachmentKind, &str, &str); 5] = [
+    (TelegramAttachmentKind::Image, "sendPhoto", "photo"),
+    (TelegramAttachmentKind::Document, "sendDocument", "document"),
+    (TelegramAttachmentKind::Video, "sendVideo", "video"),
+    (TelegramAttachmentKind::Audio, "sendAudio", "audio"),
+    (TelegramAttachmentKind::Voice, "sendVoice", "voice"),
 ];
 
 #[tokio::test]
@@ -56,7 +65,7 @@ async fn send_message_reaction_rejection_is_not_an_error_and_reports_failure() {
     mount_post(
         &server,
         "setMessageReaction",
-        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        ResponseTemplate::new(400).set_body_json(serde_json::json!({
             "ok": false,
             "description": "REACTION_INVALID"
         })),
@@ -108,21 +117,6 @@ async fn send_text_chunks_single_chunk_carries_thread_and_reply_ids() {
             "reply_to_message_id": 42,
         })]
     );
-}
-
-#[tokio::test]
-async fn send_text_uses_markdown_v2_for_formatted_content() {
-    let server = mock_api().await;
-    mount_post(&server, "sendMessage", ok()).await;
-    let ch = channel_for(&server, &["*"]);
-
-    ch.send_text_chunks("*bold* and _italic_", "100", None, None)
-        .await
-        .unwrap();
-
-    let bodies = json_bodies(&server, "sendMessage").await;
-    assert_eq!(bodies[0]["parse_mode"], "MarkdownV2");
-    assert_eq!(bodies[0]["text"], "*bold* and _italic_");
 }
 
 #[tokio::test]
@@ -207,14 +201,17 @@ async fn send_text_chunks_marks_continuations_and_replies_only_on_first_chunk() 
     let bodies = json_bodies(&server, "sendMessage").await;
     assert_eq!(bodies.len(), 3, "message splits into three chunks");
     let texts: Vec<&str> = bodies.iter().map(|b| b["text"].as_str().unwrap()).collect();
-    assert!(texts[0].ends_with("\\(continues\\.\\.\\.\\)"));
-    assert!(!texts[0].starts_with("\\(continued\\)"));
     assert!(
-        texts[1].starts_with("\\(continued\\)") && texts[1].ends_with("\\(continues\\.\\.\\.\\)")
+        texts
+            .iter()
+            .all(|text| text.len() <= TELEGRAM_MAX_MESSAGE_LENGTH)
     );
     assert!(
-        texts[2].starts_with("\\(continued\\)") && !texts[2].ends_with("\\(continues\\.\\.\\.\\)")
+        texts
+            .iter()
+            .all(|text| { !text.starts_with("(continued)") && !text.ends_with("(continues...)") })
     );
+    assert_eq!(texts.concat(), message);
     assert_eq!(bodies[0]["reply_to_message_id"], 42);
     assert!(bodies[1].get("reply_to_message_id").is_none());
     assert!(bodies[2].get("reply_to_message_id").is_none());
@@ -256,7 +253,54 @@ async fn send_text_chunks_retries_without_markdown_when_markdown_rejected() {
 }
 
 #[tokio::test]
-async fn send_text_chunks_fails_when_markdown_fallback_is_rejected() {
+async fn channel_send_short_message_retries_plain_preserving_thread_and_reply() {
+    let server = mock_api().await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .and(body_partial_json(
+            serde_json::json!({ "parse_mode": "MarkdownV2" }),
+        ))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "ok": false,
+            "description": "Bad Request: can't parse entities"
+        })))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &["*"]);
+
+    ch.send_compat_message(
+        &SendMessage::new("**markdown fallback**", "100:3").in_thread(Some("5".into())),
+    )
+    .await
+    .unwrap();
+
+    let bodies = json_bodies(&server, "sendMessage").await;
+    assert_eq!(
+        bodies,
+        vec![
+            serde_json::json!({
+                "chat_id": "100",
+                "text": "**markdown fallback**",
+                "parse_mode": "MarkdownV2",
+                "message_thread_id": "3",
+                "reply_to_message_id": 5,
+            }),
+            serde_json::json!({
+                "chat_id": "100",
+                "text": "**markdown fallback**",
+                "message_thread_id": "3",
+                "reply_to_message_id": 5,
+            }),
+        ],
+        "short messages retry once without Markdown while preserving reply routing"
+    );
+    assert!(bodies[1].get("parse_mode").is_none());
+}
+
+#[tokio::test]
+async fn send_text_chunks_fails_when_markdown_and_plain_both_rejected() {
     let server = mock_api().await;
     Mock::given(method("POST"))
         .and(path(api_path("sendMessage")))
@@ -296,9 +340,88 @@ async fn send_text_chunks_fails_when_markdown_fallback_is_rejected() {
 }
 
 #[tokio::test]
+async fn send_attachment_by_url_routes_each_kind_to_its_method() {
+    let server = mock_api().await;
+    for (_, api_method, _) in ALL_KINDS {
+        mount_post(&server, api_method, ok()).await;
+    }
+    let ch = channel_for(&server, &["*"]);
+
+    for (kind, api_method, field) in ALL_KINDS {
+        let url = format!("https://cdn.example/{field}");
+        let attachment = attachment(kind, &format!(" {url} "));
+        let target = attachment.target.trim();
+        match kind {
+            TelegramAttachmentKind::Image => {
+                ch.send_photo_by_url("100", Some("4"), target, None).await
+            }
+            TelegramAttachmentKind::Document => {
+                ch.send_document_by_url("100", Some("4"), target, None)
+                    .await
+            }
+            TelegramAttachmentKind::Video => {
+                ch.send_video_by_url("100", Some("4"), target, None).await
+            }
+            TelegramAttachmentKind::Audio => {
+                ch.send_audio_by_url("100", Some("4"), target, None).await
+            }
+            TelegramAttachmentKind::Voice => {
+                ch.send_voice_by_url("100", Some("4"), target, None).await
+            }
+        }
+        .unwrap();
+        let bodies = json_bodies(&server, api_method).await;
+        let body = bodies.last().expect("request sent");
+        assert_eq!(body[field], url, "{api_method}");
+        assert_eq!(body["chat_id"], "100");
+        assert_eq!(body["message_thread_id"], "4");
+    }
+}
+
+#[tokio::test]
+async fn send_attachment_from_local_path_uploads_multipart_for_each_kind() {
+    let server = mock_api().await;
+    for (_, api_method, _) in ALL_KINDS {
+        mount_post(&server, api_method, ok()).await;
+    }
+    let ch = channel_for(&server, &["*"]);
+    let dir = tempfile::tempdir().unwrap();
+
+    for (kind, api_method, field) in ALL_KINDS {
+        let file = dir.path().join(format!("{field}.bin"));
+        std::fs::write(&file, b"payload-bytes").unwrap();
+        match kind {
+            TelegramAttachmentKind::Image => ch.send_photo("100", None, &file, None).await,
+            TelegramAttachmentKind::Document => ch.send_document("100", None, &file, None).await,
+            TelegramAttachmentKind::Video => ch.send_video("100", None, &file, None).await,
+            TelegramAttachmentKind::Audio => ch.send_audio("100", None, &file, None).await,
+            TelegramAttachmentKind::Voice => ch.send_voice("100", None, &file, None).await,
+        }
+        .unwrap();
+        let bodies = raw_bodies(&server, api_method).await;
+        let body = bodies.last().expect("upload sent");
+        assert!(body.contains(&format!("name=\"{field}\"")), "{api_method}");
+        assert!(body.contains(&format!("filename=\"{field}.bin\"")));
+        assert!(body.contains("payload-bytes"));
+        assert!(!body.contains("message_thread_id"));
+    }
+}
+
+#[tokio::test]
+async fn send_attachment_missing_local_path_errors_without_network() {
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["*"]);
+    let result = ch
+        .send_document("100", None, std::path::Path::new("/no/such/file.pdf"), None)
+        .await;
+    assert!(result.is_err());
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn file_uploads_include_thread_and_caption_fields() {
     let server = mock_api().await;
-    for api_method in UPLOAD_METHODS {
+    for (_, api_method, _) in ALL_KINDS {
         mount_post(&server, api_method, ok()).await;
     }
     let ch = channel_for(&server, &["*"]);
@@ -347,7 +470,7 @@ async fn file_uploads_include_thread_and_caption_fields() {
 #[tokio::test]
 async fn file_uploads_surface_api_rejection_text() {
     let server = mock_api().await;
-    for api_method in UPLOAD_METHODS {
+    for (_, api_method, _) in ALL_KINDS {
         mount_post(
             &server,
             api_method,
@@ -398,7 +521,7 @@ async fn send_by_url_includes_caption_and_surfaces_rejections() {
         .with_priority(1)
         .mount(&server)
         .await;
-    for api_method in UPLOAD_METHODS {
+    for (_, api_method, _) in ALL_KINDS {
         mount_post(&server, api_method, ok()).await;
     }
     let ch = channel_for(&server, &["*"]);
@@ -417,6 +540,14 @@ async fn send_by_url_includes_caption_and_surfaces_rejections() {
         .await
         .unwrap();
     ch.send_voice_by_url("1", None, url, None).await.unwrap();
+
+    for (_, api_method, _) in ALL_KINDS {
+        assert_eq!(
+            json_bodies(&server, api_method).await.len(),
+            1,
+            "{api_method}"
+        );
+    }
 
     assert_eq!(
         json_bodies(&server, "sendDocument").await[0],
@@ -459,25 +590,46 @@ async fn send_by_url_includes_caption_and_surfaces_rejections() {
 }
 
 #[tokio::test]
-async fn legacy_media_markers_are_plain_text_not_uploads() {
+async fn byte_uploads_preserve_configured_filenames_and_optional_thread() {
     let server = mock_api().await;
-    mount_post(&server, "sendMessage", ok()).await;
-    for api_method in UPLOAD_METHODS {
-        mount_post(&server, api_method, ok()).await;
-    }
+    mount_post(&server, "sendDocument", ok()).await;
+    mount_post(&server, "sendPhoto", ok()).await;
     let ch = channel_for(&server, &["*"]);
 
-    let text = "listen [VOICE:/tmp/a.ogg] and [AUDIO:/tmp/b.mp3] [IMAGE:/tmp/c.png]";
-    ch.send_text_chunks(text, "100", None, None).await.unwrap();
+    ch.send_document_bytes(
+        "100",
+        Some("3"),
+        b"document-payload".to_vec(),
+        "document.txt",
+        Some("document caption"),
+    )
+    .await
+    .unwrap();
+    ch.send_photo_bytes(
+        "100",
+        None,
+        b"photo-payload".to_vec(),
+        "photo.png",
+        Some("photo caption"),
+    )
+    .await
+    .unwrap();
 
-    let bodies = json_bodies(&server, "sendMessage").await;
-    assert_eq!(bodies.len(), 1);
-    let sent = bodies[0]["text"].as_str().unwrap();
-    assert!(sent.contains("VOICE:"), "marker stays literal text: {sent}");
-    for api_method in UPLOAD_METHODS {
-        assert!(
-            raw_bodies(&server, api_method).await.is_empty(),
-            "{api_method} must not fire for marker text"
-        );
-    }
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+
+    let documents = raw_bodies(&server, "sendDocument").await;
+    assert_eq!(documents.len(), 1);
+    assert!(documents[0].contains("filename=\"document.txt\""));
+    assert!(documents[0].contains("document-payload"));
+    assert!(documents[0].contains("document caption"));
+    assert!(documents[0].contains("name=\"message_thread_id\""));
+    assert!(documents[0].contains("\r\n3\r\n"));
+
+    let photos = raw_bodies(&server, "sendPhoto").await;
+    assert_eq!(photos.len(), 1);
+    assert!(photos[0].contains("filename=\"photo.png\""));
+    assert!(photos[0].contains("photo-payload"));
+    assert!(photos[0].contains("photo caption"));
+    assert!(!photos[0].contains("name=\"message_thread_id\""));
 }

@@ -15,6 +15,14 @@ struct RecordingInboundSink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
 impl ChannelInboundSink for RecordingInboundSink {
     async fn push(
         &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
+        &self,
         ingress: ChannelIngress,
     ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
         self.0
@@ -290,7 +298,6 @@ async fn session_webhook_unverifiable_success_is_reported_as_uncertain() {
 async fn typed_send_rejects_missing_admission_or_robot_context_before_http() {
     use crate::providers::http_test_support::HttpsServer;
     use tinychannels_bus::{ChannelOutboundMessage, ContentPart, OutboundContentPart};
-    use tinychannels_runtime::channel::ChannelTypedSend;
 
     let server = HttpsServer::start(|request| {
         panic!("missing admitted context must fail before HTTP: {request:?}")
@@ -350,7 +357,6 @@ async fn group_file_upload_sends_the_uploaded_media_id_and_real_receipt() {
     use tinychannels_bus::{
         ChannelOutboundMessage, ContentPart, MediaKind, MediaReference, OutboundContentPart,
     };
-    use tinychannels_runtime::channel::ChannelTypedSend;
 
     const FILE_BYTES: &[u8] = b"%PDF-1.7\nactual fixture bytes\n";
 
@@ -522,12 +528,10 @@ fn voice_message(conversation_id: &str) -> tinychannels_bus::ChannelOutboundMess
                     content_type: Some("audio/amr".into()),
                     ..Default::default()
                 },
-                audio_base64: None,
                 codec: Some("amr_nb".into()),
                 // Verify this stored metadata is forwarded. Codec-derived
                 // duration is tested at the TinyVoice module boundary.
                 duration_ms: Some(1_240),
-                waveform: None,
             },
         }],
     }
@@ -537,7 +541,6 @@ fn voice_message(conversation_id: &str) -> tinychannels_bus::ChannelOutboundMess
 async fn typed_voice_send_forwards_amr_bytes_and_declared_duration() {
     use crate::providers::http_test_support::HttpsServer;
     use tinychannels_bus::channel::MessageReceiptPartKind;
-    use tinychannels_runtime::channel::ChannelTypedSend;
 
     const AMR_BYTES: &[u8] = include_bytes!("../../../tests/fixtures/dingtalk/amrnb_mode0.amr");
 
@@ -623,7 +626,6 @@ async fn typed_voice_send_preserves_transcript_as_an_ordered_text_message() {
     use crate::providers::http_test_support::HttpsServer;
     use tinychannels_bus::channel::MessageReceiptPartKind;
     use tinychannels_bus::{ContentPart, OutboundContentPart};
-    use tinychannels_runtime::channel::ChannelTypedSend;
 
     const AMR_BYTES: &[u8] = include_bytes!("../../../tests/fixtures/dingtalk/amrnb_mode0.amr");
     let server = HttpsServer::start_with_bytes(
@@ -882,8 +884,9 @@ async fn loaded_tinyvoice_scoped_reply_reaches_dingtalk_voice_upload_and_receipt
     use tinychannels_bus::{
         ChannelOutboundMessage, ChannelRef, ContentPart, OutboundContentPart, OutboundVoice,
     };
-    use tinychannels_runtime::channel::ChannelTypedSend;
-    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+    use tinystoragedrivers_api::StorageBackend;
+    use tinystoragedrivers_testkit::MemoryBackend as MemoryStorage;
+    use tinystoragedrivers_types::Scope;
 
     let artifact = std::env::var("TINYVOICE_MODULE_ARTIFACT").expect("TinyVoice module path");
     let artifact_bytes = std::fs::read(&artifact).expect("read TinyVoice module artifact");
@@ -1086,10 +1089,8 @@ async fn loaded_tinyvoice_scoped_reply_reaches_dingtalk_voice_upload_and_receipt
             OutboundContentPart::Voice {
                 voice: OutboundVoice::Media {
                     media: prepared.note.media,
-                    audio_base64: None,
                     codec: prepared.note.codec,
                     duration_ms: prepared.note.duration_ms,
-                    waveform: None,
                 },
             },
         ],
@@ -1156,7 +1157,6 @@ fn dingtalk_synthesis_wav() -> Vec<u8> {
 #[tokio::test]
 async fn typed_voice_over_two_mib_is_rejected_before_platform_requests() {
     use crate::providers::http_test_support::HttpsServer;
-    use tinychannels_runtime::channel::ChannelTypedSend;
 
     let server = HttpsServer::start(|request| {
         panic!("oversized DingTalk voice must be rejected before HTTP: {request:?}")
@@ -1487,7 +1487,6 @@ async fn typed_mixed_text_and_captioned_file_fails_before_platform_requests() {
     use tinychannels_bus::{
         ChannelOutboundMessage, ContentPart, MediaKind, MediaReference, OutboundContentPart,
     };
-    use tinychannels_runtime::channel::ChannelTypedSend;
 
     let server = HttpsServer::start(|request| {
         panic!("caption preflight must not make platform requests: {request:?}")
@@ -1905,6 +1904,14 @@ async fn public_adapter_does_not_ack_or_deduplicate_rejected_typed_callbacks() {
     #[async_trait::async_trait]
     impl ChannelInboundSink for RejectOnceSink {
         async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(
             &self,
             ingress: ChannelIngress,
         ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {

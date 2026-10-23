@@ -251,7 +251,7 @@ impl DingTalkChannel {
                             stopped = true;
                             break 'stream;
                         }
-                        result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
+                        result = sink.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
                     };
                     published.map_err(|error| {
                         anyhow::anyhow!("DingTalk typed ingress rejected: {}", error.message)

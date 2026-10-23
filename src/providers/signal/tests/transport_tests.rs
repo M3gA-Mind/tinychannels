@@ -180,6 +180,14 @@ async fn typed_sse_retries_failures_and_stops_after_accepted_ingress() {
     impl ChannelInboundSink for StopAfterFirst {
         async fn push(
             &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(
+            &self,
             ingress: tinychannels_bus::ChannelIngress,
         ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
             self.tx.send(ingress).await.map_err(|_| {
@@ -229,6 +237,14 @@ async fn typed_sse_returns_without_connecting_when_already_cancelled() {
     impl ChannelInboundSink for IgnoreSink {
         async fn push(
             &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(
+            &self,
             _ingress: tinychannels_bus::ChannelIngress,
         ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
             Ok(())
@@ -268,6 +284,14 @@ async fn typed_sse_cancellation_interrupts_trailing_event_delivery() {
     #[async_trait]
     impl ChannelInboundSink for BlockingSink {
         async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(
             &self,
             _ingress: tinychannels_bus::ChannelIngress,
         ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
@@ -348,6 +372,14 @@ async fn typed_sse_skips_invalid_utf8_and_retries_malformed_trailing_data() {
     #[async_trait]
     impl ChannelInboundSink for IgnoreSink {
         async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(
             &self,
             _ingress: tinychannels_bus::ChannelIngress,
         ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {

@@ -393,10 +393,8 @@ impl AdapterFixture for CloudKit {
                         opaque_id: Some("voice-kit".into()),
                         ..Default::default()
                     },
-                    audio_base64: None,
                     codec: Some("ogg_opus".into()),
                     duration_ms: Some(1000),
-                    waveform: Some(vec![0.5; 8]),
                 },
             },
             Feature::VoiceSynthesis => OutboundPayload::Voice {
@@ -443,7 +441,7 @@ impl AdapterFixture for CloudKit {
                     .await
                     .map(|()| None)
             }
-            Feature::Reactions => crate::channel::ChannelReaction::send_reaction(
+            Feature::Reactions => crate::channel::LegacyChannelReaction::send_reaction(
                 self.channel.as_ref(),
                 &self.scope.channel,
                 &self.scope.conversation,
@@ -580,7 +578,7 @@ impl AdapterFixture for CloudKit {
                 });
                 Ok(None)
             }
-            _ => crate::channel::ChannelAdapter::send(self.channel.as_ref(), intent)
+            _ => crate::channel::ChannelAdapter::send_outcome(self.channel.as_ref(), intent)
                 .await
                 .map(Some),
         };

@@ -700,7 +700,7 @@ async fn send_text(
     content: &str,
     recipient: &str,
 ) -> Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError> {
-    ChannelAdapter::send(channel, outbound(content, recipient)).await
+    ChannelAdapter::send_outcome(channel, outbound(content, recipient)).await
 }
 
 fn next_inbound(rx: &mut mpsc::Receiver<ChannelIngress>) -> ChannelInboundEnvelope {

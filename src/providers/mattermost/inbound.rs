@@ -256,7 +256,7 @@ impl MattermostChannel {
                 };
                 tokio::select! {
                     _ = cancellation.changed() => return Ok(()),
-                    result = sink.push(ChannelIngress::Inbound(envelope)) => {
+                    result = sink.push_ingress(ChannelIngress::Inbound(envelope)) => {
                         result?;
                     }
                 }

@@ -4,9 +4,56 @@
 
 //! Module-owned provider interaction execution.
 
+/// V21 compatibility interactions for isolated legacy channel doubles.
+/// Factory-built production providers use the adapter interaction path.
+#[allow(deprecated)]
+pub(crate) async fn dispatch(
+    channel: &dyn tinychannels::channel::Channel,
+    interaction: ChannelInteraction,
+) -> tinybus::Result<ChannelInteractionResult> {
+    use ChannelInteraction as Op;
+    match interaction {
+        Op::StartTyping { recipient } => channel
+            .start_typing(&recipient)
+            .await
+            .map(|()| ChannelInteractionResult::Completed)
+            .map_err(|_| tinybus::Error::failed("provider typing start failed")),
+        Op::StopTyping { recipient } => channel
+            .stop_typing(&recipient)
+            .await
+            .map(|()| ChannelInteractionResult::Completed)
+            .map_err(|_| tinybus::Error::failed("provider typing stop failed")),
+        Op::SendDraft { message } => channel
+            .send_draft(&message)
+            .await
+            .map(ChannelInteractionResult::Draft)
+            .map_err(|_| tinybus::Error::failed("provider draft creation failed")),
+        Op::Describe => {
+            let capabilities = channel.capabilities();
+            Ok(ChannelInteractionResult::Info(Box::new(
+                ChannelInteractionInfo {
+                    capabilities: (&capabilities).into(),
+                    proactive_target: channel.proactive_target(),
+                    supports_reactions: capabilities.reactions,
+                    supports_draft_updates: capabilities.streaming_reply_pipeline,
+                },
+            )))
+        }
+        Op::DescribeV2 => Ok(ChannelInteractionResult::InfoV2(Box::new(
+            tinychannels_bus::ChannelInteractionInfoV2 {
+                capabilities: channel.capabilities(),
+            },
+        ))),
+        _ => Err(tinybus::Error::failed(
+            "interaction is unavailable through the v21 compatibility boundary",
+        )),
+    }
+}
+
 /// Return Describe information from the exact configured native adapter.
 /// V1 keeps its wire projection until the compatibility window ends; all
 /// capability facts come from the same adapter selected for provider launch.
+#[cfg(test)]
 pub(crate) fn describe_adapter(
     adapter: &dyn tinychannels::channel::ChannelAdapter,
     legacy: bool,
@@ -34,6 +81,7 @@ pub(crate) fn describe_adapter(
 /// provider. The configured adapter supplies account scope; the caller's
 /// recipient remains only the conversation address.
 #[allow(deprecated)]
+#[cfg(test)]
 fn draft_intent(
     adapter: &dyn tinychannels::channel::ChannelAdapter,
     configured_instance: &str,
@@ -68,6 +116,7 @@ fn draft_intent(
 /// handed to typed provider operations. `recipient` may encode
 /// `chat_id:topic_id`, while `thread_ts` identifies a reply parent rather than
 /// a conversation thread. Canonical typed intents do not pass through here.
+#[cfg(test)]
 pub(crate) fn normalize_telegram_v1_address(
     intent: &mut tinychannels_bus::ChannelOutboundIntent,
     message: &tinychannels::SendMessage,
@@ -95,6 +144,7 @@ pub(crate) fn normalize_telegram_v1_address(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn compatibility_text(provider: &str, message: &tinychannels::SendMessage) -> String {
     // Configured instances are named `<provider>:<account>`. Keep the v1
     // subject convention keyed to the provider family, not the instance id.
@@ -115,6 +165,7 @@ pub(crate) fn compatibility_text(provider: &str, message: &tinychannels::SendMes
 /// `None` means the provider has not migrated that operation yet, so the
 /// caller may use the temporary legacy-provider compatibility path.
 #[allow(deprecated)]
+#[cfg(test)]
 pub(crate) async fn dispatch_native_draft(
     adapter: &dyn tinychannels::channel::ChannelAdapter,
     drafts: &dyn tinychannels::channel::ChannelStreamingDraft,
@@ -183,10 +234,8 @@ pub(crate) fn configured_adapter_capabilities(
 ) -> tinychannels_bus::ChannelCapabilities {
     let adapter = provider.adapter_handle();
     let descriptor = adapter.descriptor();
-    debug_assert_eq!(
-        descriptor.id,
-        tinychannels_bus::provider_id(provider.provider_name())
-    );
+    let provider_name = provider.provider_name();
+    debug_assert_eq!(descriptor.id, tinychannels_bus::provider_id(&provider_name));
     let mut capabilities = adapter.declared_capabilities();
     capabilities.account.configured = Some(true);
     capabilities.account.enabled = Some(true);
@@ -196,11 +245,14 @@ pub(crate) fn configured_adapter_capabilities(
 use tinychannels_bus::{ChannelInteraction, ChannelInteractionInfo, ChannelInteractionResult};
 
 /// The error name of a refused webhook; hosts answer it with a client error.
+#[cfg(test)]
 pub(crate) const WEBHOOK_REJECTED_ERROR: &str = "ai.tinyhumans.tinychannels.Error.WebhookRejected";
 /// The error name of a delivery that failed after it was authenticated; hosts
 /// answer it with a retryable error.
+#[cfg(test)]
 pub(crate) const WEBHOOK_FAILED_ERROR: &str = "ai.tinyhumans.tinychannels.Error.WebhookFailed";
 
+#[cfg(test)]
 fn webhook_rejected() -> tinybus::Error {
     tinybus::Error::MethodFailed {
         name: WEBHOOK_REJECTED_ERROR.to_owned(),
@@ -208,6 +260,7 @@ fn webhook_rejected() -> tinybus::Error {
     }
 }
 
+#[cfg(test)]
 fn webhook_failed() -> tinybus::Error {
     tinybus::Error::MethodFailed {
         name: WEBHOOK_FAILED_ERROR.to_owned(),
@@ -217,6 +270,7 @@ fn webhook_failed() -> tinybus::Error {
 
 /// Route a migrated provider's webhook through its typed owner port while
 /// keeping exact-byte authentication and the existing bounded wire contract.
+#[cfg(test)]
 pub(crate) async fn dispatch_native_webhook(
     provider: &dyn tinychannels::channel::ChannelAdapter,
     interaction: ChannelInteraction,
@@ -243,6 +297,7 @@ pub(crate) async fn dispatch_native_webhook(
     }
 }
 
+#[cfg(test)]
 async fn deliver_webhook_typed(
     provider: &dyn tinychannels::channel::ChannelAdapter,
     signature: Option<&str>,

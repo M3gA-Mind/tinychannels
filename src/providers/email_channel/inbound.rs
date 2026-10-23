@@ -95,7 +95,7 @@ impl EmailChannel {
         let Some(envelope) = self.typed_envelope(email).await else {
             anyhow::bail!("Email message could not be parsed for typed ingress");
         };
-        sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+        sink.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
             .await
             .map_err(|_| anyhow::Error::new(super::InboundSinkRejected))
     }

@@ -1352,6 +1352,14 @@ struct RejectSecondTypedEmail {
 impl crate::channel::ChannelInboundSink for RejectSecondTypedEmail {
     async fn push(
         &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
+        &self,
         ingress: tinychannels_bus::ChannelIngress,
     ) -> Result<(), crate::channel::ChannelSendError> {
         let mut accepted = self.accepted.lock().unwrap();
@@ -1371,6 +1379,14 @@ struct TypedEmailRecorder(tokio::sync::mpsc::Sender<tinychannels_bus::ChannelIng
 #[async_trait::async_trait]
 impl crate::channel::ChannelInboundSink for TypedEmailRecorder {
     async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
         &self,
         ingress: tinychannels_bus::ChannelIngress,
     ) -> Result<(), crate::channel::ChannelSendError> {
@@ -1554,6 +1570,14 @@ struct BlockingTypedEmailSink(tokio::sync::Notify);
 #[async_trait::async_trait]
 impl crate::channel::ChannelInboundSink for BlockingTypedEmailSink {
     async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
         &self,
         _ingress: tinychannels_bus::ChannelIngress,
     ) -> Result<(), crate::channel::ChannelSendError> {

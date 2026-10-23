@@ -104,10 +104,8 @@ async fn voice_clips_are_audio_attachments_captioned_with_the_transcript() {
             OutboundContentPart::Voice {
                 voice: OutboundVoice::Media {
                     media: media_ref(MediaKind::Audio),
-                    audio_base64: None,
                     codec: None,
                     duration_ms: None,
-                    waveform: None,
                 },
             },
         ]),
@@ -458,6 +456,14 @@ async fn lifecycle_hooks_are_owned_by_the_module_runtime() {
     #[async_trait::async_trait]
     impl crate::channel::ChannelInboundSink for NoSink {
         async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(
             &self,
             _: tinychannels_bus::ChannelIngress,
         ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {

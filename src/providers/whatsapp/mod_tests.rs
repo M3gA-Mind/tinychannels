@@ -1089,7 +1089,7 @@ mod v2 {
             value: "👍".into(),
             custom_emoji_id: None,
         };
-        crate::channel::ChannelReaction::send_reaction(
+        crate::channel::LegacyChannelReaction::send_reaction(
             &channel,
             &ChannelRef {
                 id: "whatsapp".into(),
@@ -1102,7 +1102,7 @@ mod v2 {
         )
         .await
         .unwrap();
-        crate::channel::ChannelReaction::send_reaction(
+        crate::channel::LegacyChannelReaction::send_reaction(
             &channel,
             &ChannelRef {
                 id: "whatsapp".into(),
@@ -1132,7 +1132,7 @@ mod v2 {
         };
         let blank = tinychannels_bus::ChannelReaction::default();
         for (reaction, unsupported) in [(&custom, true), (&blank, false)] {
-            let error = crate::channel::ChannelReaction::send_reaction(
+            let error = crate::channel::LegacyChannelReaction::send_reaction(
                 &channel,
                 &ChannelRef {
                     id: "whatsapp".into(),
@@ -1148,7 +1148,7 @@ mod v2 {
             assert_eq!(error.unsupported, unsupported);
         }
         assert!(
-            crate::channel::ChannelReaction::send_reaction(
+            crate::channel::LegacyChannelReaction::send_reaction(
                 &channel,
                 &ChannelRef {
                     id: "whatsapp".into(),
@@ -1175,7 +1175,7 @@ mod v2 {
             account_id: None,
         };
         assert!(
-            crate::channel::ChannelReaction::send_reaction(
+            crate::channel::LegacyChannelReaction::send_reaction(
                 &channel,
                 &other,
                 &conversation(),
@@ -1186,7 +1186,7 @@ mod v2 {
             .await
             .is_err()
         );
-        crate::channel::ChannelReaction::send_reaction(
+        crate::channel::LegacyChannelReaction::send_reaction(
             &channel,
             &mine,
             &conversation(),
@@ -1196,7 +1196,7 @@ mod v2 {
         )
         .await
         .unwrap();
-        let bad = crate::channel::ChannelReaction::send_reaction(
+        let bad = crate::channel::LegacyChannelReaction::send_reaction(
             &channel,
             &mine,
             &conversation(),
@@ -1260,6 +1260,14 @@ mod v2 {
     impl crate::channel::ChannelInboundSink for NoSink {
         async fn push(
             &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), crate::channel::ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(
+            &self,
             _ingress: tinychannels_bus::ChannelIngress,
         ) -> Result<(), crate::channel::ChannelSendError> {
             Ok(())
@@ -1278,7 +1286,7 @@ mod v2 {
             payload: tinychannels_bus::OutboundPayload::Text { text: "hi".into() },
             ..Default::default()
         };
-        let outcome = crate::channel::ChannelAdapter::send(&channel, intent.clone())
+        let outcome = crate::channel::ChannelAdapter::send_outcome(&channel, intent.clone())
             .await
             .unwrap();
         assert_eq!(outcome.receipt.platform_message_ids, ["wamid.ok"]);
@@ -1297,7 +1305,7 @@ mod v2 {
 
         let mut threaded = intent;
         threaded.thread_id = Some("t".into());
-        let error = crate::channel::ChannelAdapter::send(&channel, threaded.clone())
+        let error = crate::channel::ChannelAdapter::send_outcome(&channel, threaded.clone())
             .await
             .unwrap_err();
         assert!(error.unsupported);

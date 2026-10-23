@@ -199,38 +199,39 @@ fn webhook_results_are_additive_and_keep_their_counts() {
 }
 
 #[test]
-fn outbound_voice_carries_an_optional_waveform_without_breaking_older_payloads() {
+fn outbound_voice_uses_a_typed_media_reference_without_legacy_payload_fields() {
     use crate::channel::{MediaReference, OutboundVoice};
     let with = OutboundVoice::Media {
         media: MediaReference::default(),
-        audio_base64: None,
         codec: Some("ogg_opus".into()),
         duration_ms: Some(1000),
-        waveform: Some(vec![0.0, 0.5, 1.0]),
     };
     let value = serde_json::to_value(&with).unwrap();
-    assert_eq!(value["waveform"], serde_json::json!([0.0, 0.5, 1.0]));
+    assert_eq!(value["codec"], "ogg_opus");
+    assert_eq!(value["durationMs"], 1000);
+    assert!(value.get("audioBase64").is_none());
+    assert!(value.get("waveform").is_none());
     assert_eq!(
         serde_json::from_value::<OutboundVoice>(value).unwrap(),
         with
     );
-    // A payload from before the field existed still decodes, with no waveform.
+    // Unknown legacy payload fields remain ignored by the typed v22 reader.
     let older = serde_json::json!({
         "kind": "media",
         "media": {},
         "codec": "ogg_opus",
-        "durationMs": 1000
+        "durationMs": 1000,
+        "audioBase64": "ignored",
+        "waveform": [0.0, 0.5, 1.0]
     });
-    assert!(matches!(
+    assert_eq!(
         serde_json::from_value::<OutboundVoice>(older).unwrap(),
-        OutboundVoice::Media { waveform: None, .. }
-    ));
+        with
+    );
     let without = serde_json::to_value(OutboundVoice::Media {
         media: MediaReference::default(),
-        audio_base64: None,
         codec: None,
         duration_ms: None,
-        waveform: None,
     })
     .unwrap();
     assert!(without.get("waveform").is_none());

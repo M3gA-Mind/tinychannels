@@ -1,7 +1,7 @@
 // Scoped allowance for the one-release v21 wire DTO compatibility surface.
 #![allow(deprecated)]
 
-use super::*;
+use crate::channel;
 use crate::traits::{ChannelMessage, SendMessage};
 
 #[test]

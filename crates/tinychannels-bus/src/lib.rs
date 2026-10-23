@@ -78,17 +78,25 @@ pub use module_email::{
     EmailAttachment, EmailAttachmentUpload, EmailSendRequest, EmailUploadBegin, EmailUploadChunk,
     EmailUploadHandle,
 };
+pub use module_interaction::WebhookDeliveryOutcome;
 pub use module_media::{
-    MediaReadBegin, MediaReadChunk, MediaReadChunkResult, MediaReadFinish, MediaReadHandle,
-    MediaReadInfo, MediaUploadBegin, MediaUploadChunk, MediaUploadFinish, MediaUploadHandle,
-    MediaUploadResult,
+    MEDIA_READ_CAPACITY, MEDIA_READ_CHUNK_BYTES, MEDIA_UPLOAD_BEGIN_MAX_BYTES,
+    MEDIA_UPLOAD_CAPACITY, MEDIA_UPLOAD_CHUNK_BYTES, MEDIA_UPLOAD_MAX_BYTES,
+    MEDIA_UPLOAD_MAX_CHUNKS, MediaReadBegin, MediaReadChunk, MediaReadChunkResult, MediaReadFinish,
+    MediaReadHandle, MediaReadInfo, MediaUploadBegin, MediaUploadChunk, MediaUploadFinish,
+    MediaUploadHandle, MediaUploadResult,
 };
-pub use names::{BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH, methods};
+pub use module_web_output::{
+    BeginWebTurn, EndWebTurn, ProjectWebOutput, WebOutputEvents, WebTurnHandle,
+};
+pub use names::{
+    BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, MODULE_ID, OBJECT_PATH, methods,
+};
 #[allow(
     deprecated,
     reason = "re-export the one-release v21 compatibility DTOs"
 )]
-pub use traits::{ChannelIngress, ChannelMessage, SendMessage};
+pub use traits::{Channel, ChannelIngress, ChannelMessage, ChannelSendExt, SendMessage};
 pub use version::{CONTRACT_VERSION, is_compatible};
 pub use web::{
     ChatRequestMetadata, ChatSuggestion, GuardrailPayload, GuardrailReason,
@@ -110,17 +118,15 @@ mod tests;
 
 pub use module_interaction::{
     ChannelInteraction, ChannelInteractionInfo, ChannelInteractionInfoV2,
-    ChannelInteractionRequest, ChannelInteractionResult, WebhookDeliveryOutcome,
+    ChannelInteractionRequest, ChannelInteractionResult,
 };
 
 pub use module_supervision::ChannelSupervisionPolicy;
 
-pub use module_web_output::{
-    BeginWebTurn, EndWebTurn, ProjectWebOutput, WebOutputEvents, WebTurnHandle,
-};
+pub use module_runtime::{ChannelRuntimeDispatchPolicy, ChannelRuntimeReservation};
 
-pub use module_runtime::{
-    CHANNEL_MESSAGE_TIMEOUT_SECS, CHANNEL_TYPING_REFRESH_INTERVAL_SECS,
-    ChannelRuntimeDispatchPolicy, ChannelRuntimeReservation, DEFAULT_CHANNEL_INITIAL_BACKOFF_SECS,
-    DEFAULT_CHANNEL_MAX_BACKOFF_SECS, MAX_CHANNEL_HISTORY, MIN_CHANNEL_MESSAGE_TIMEOUT_SECS,
-};
+pub use approvals::ReplyContext;
+
+#[cfg(test)]
+#[path = "approvals_tests.rs"]
+mod approvals_tests;

@@ -48,10 +48,8 @@ fn voice(opaque: Option<&str>) -> OutboundContentPart {
     OutboundContentPart::Voice {
         voice: OutboundVoice::Media {
             media: media(MediaKind::Audio, opaque),
-            audio_base64: None,
             codec: None,
             duration_ms: None,
-            waveform: None,
         },
     }
 }

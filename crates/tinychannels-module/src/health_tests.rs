@@ -27,7 +27,7 @@ impl tinychannels::channel::ChannelAdapter for FixtureChannel {
     async fn send(
         &self,
         _: tinychannels::channel::ChannelOutboundIntent,
-    ) -> Result<tinychannels::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError>
+    ) -> Result<tinychannels::channel::MessageReceipt, tinychannels::channel::ChannelSendError>
     {
         panic!("health checks must not send messages")
     }
@@ -55,15 +55,17 @@ impl tinychannels::channel::ChannelAdapter for FixtureChannel {
 #[tokio::test]
 async fn module_health_checks_preserve_provider_order_and_bound_pending_calls() {
     let providers: Vec<tinychannels::factory::BuiltChannel> = vec![
-        tinychannels::factory::BuiltChannel::Adapter(Arc::new(FixtureChannel(
+        tinychannels::factory::BuiltChannel::from_adapter(Arc::new(FixtureChannel(
             "healthy",
             Some(true),
         ))),
-        tinychannels::factory::BuiltChannel::Adapter(Arc::new(FixtureChannel(
+        tinychannels::factory::BuiltChannel::from_adapter(Arc::new(FixtureChannel(
             "unhealthy",
             Some(false),
         ))),
-        tinychannels::factory::BuiltChannel::Adapter(Arc::new(FixtureChannel("pending", None))),
+        tinychannels::factory::BuiltChannel::from_adapter(Arc::new(FixtureChannel(
+            "pending", None,
+        ))),
     ];
     let reports = check_providers(&providers, Duration::ZERO).await;
     assert_eq!(reports.len(), 3);
@@ -104,7 +106,7 @@ async fn module_health_checks_long_tail_adapter_status_as_unhealthy() {
     let adapter =
         tinychannels::build_long_tail_channel(&config, &tinychannels::DefaultHttpClients, "irc")
             .expect("configured IRC adapter");
-    let provider = tinychannels::factory::BuiltChannel::Adapter(adapter.clone());
+    let provider = tinychannels::factory::BuiltChannel::from_adapter(adapter.clone());
 
     let reports = check_providers(&[provider], Duration::from_secs(1)).await;
     assert_eq!(reports[0].channel, "irc");

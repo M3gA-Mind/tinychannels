@@ -283,6 +283,10 @@ pub enum ProgressiveResult {
         outcomes: Vec<crate::channel::ChannelSendOutcome>,
         unsupported: Vec<crate::channel::OutboundContentPart>,
         failure: Option<ProgressiveOutputFailure>,
+        /// Hosted output accepted by its callback. This is not a provider
+        /// acknowledgement and carries no provider receipt.
+        #[serde(default)]
+        hosted_accepted: bool,
     },
 }
 
@@ -398,3 +402,7 @@ pub enum ProgressiveTransportResult {
     MessageGone,
     Failed,
 }
+
+#[cfg(test)]
+#[path = "module_progressive_tests.rs"]
+mod tests;

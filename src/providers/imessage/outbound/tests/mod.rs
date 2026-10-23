@@ -28,6 +28,14 @@ struct RecordingIngress {
 impl crate::channel::ChannelInboundSink for RecordingIngress {
     async fn push(
         &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
+        &self,
         ingress: ChannelIngress,
     ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
         self.items.lock().unwrap().push(ingress);
@@ -45,6 +53,14 @@ struct RejectSecondIngress {
 #[async_trait]
 impl crate::channel::ChannelInboundSink for RejectSecondIngress {
     async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
         &self,
         ingress: ChannelIngress,
     ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
@@ -68,6 +84,14 @@ struct BlockingIngress {
 #[async_trait]
 impl crate::channel::ChannelInboundSink for BlockingIngress {
     async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
         &self,
         _ingress: ChannelIngress,
     ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {

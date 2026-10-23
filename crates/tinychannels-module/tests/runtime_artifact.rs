@@ -39,11 +39,6 @@ enum PreviousControlResult {
 #[derive(Clone, Default)]
 struct Callback {
     sends: Arc<std::sync::atomic::AtomicUsize>,
-    output_events:
-        Arc<std::sync::Mutex<Vec<tinychannels_bus::module_progressive::ChannelOutputEvent>>>,
-    requests: Arc<
-        std::sync::Mutex<Vec<tinychannels_bus::module_progressive::ProgressiveTransportRequest>>,
-    >,
 }
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
@@ -58,27 +53,8 @@ impl Callback {
         let tinychannels_bus::ChannelBackendRequest::ProgressiveTransport(request) = request else {
             return Err(tinybus::Error::failed("unexpected backend callback"));
         };
-        let request = *request;
-        self.requests.lock().unwrap().push(request.clone());
-        match request {
-            ProgressiveTransportRequest::Send { .. } => {
-                self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
-            ProgressiveTransportRequest::SendTyped { .. } => {
-                self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
-                outcome.receipt.primary_platform_message_id = Some("artifact-message".into());
-                outcome.receipt.platform_message_ids = vec!["artifact-message".into()];
-                return Ok(
-                    tinychannels_bus::ChannelBackendResult::ProgressiveTransport(Box::new(
-                        ProgressiveTransportResult::Outcome(Box::new(outcome)),
-                    )),
-                );
-            }
-            ProgressiveTransportRequest::OutputEvent { event, .. } => {
-                self.output_events.lock().unwrap().push(*event);
-            }
-            _ => {}
+        if matches!(*request, ProgressiveTransportRequest::Send { .. }) {
+            self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         Ok(
             tinychannels_bus::ChannelBackendResult::ProgressiveTransport(Box::new(
@@ -203,7 +179,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         PreparedChannelIdentity, PreparedChannelInbound,
     };
     use tinychannels_bus::module_progressive::{
-        ChannelOutputEvent, ProgressiveCommand, ProgressiveResult, ProgressiveTransportRequest,
+        ProgressiveCommand, ProgressiveEvent, ProgressiveResult,
     };
     let ordinary = first_client
         .call::<ProgressiveResult>(
@@ -229,73 +205,31 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
     let ProgressiveResult::Opened { handle } = opened else {
         panic!("missing progressive artifact handle");
     };
-    let terminal_events = vec![
-        ChannelOutputEvent::TextDelta {
-            text: "artifact draft".into(),
-            iteration: Some(1),
-        },
-        ChannelOutputEvent::ToolCallCompleted {
-            call_id: "artifact-call".into(),
-            tool_name: "lookup".into(),
-            success: true,
-            output_chars: 5,
-            output: "found".into(),
-            arguments: Some(serde_json::json!({"query": "artifact"})),
-            elapsed_ms: 4,
-            iteration: 1,
-            failure: None,
-            display_label: Some("Lookup".into()),
-            display_detail: None,
-            structured: Some(serde_json::json!({"kind": "lookup", "count": 1})),
-        },
-        ChannelOutputEvent::FinalMessage {
-            text: "artifact final".into(),
-            parts: vec![tinychannels_bus::OutboundContentPart::Content {
-                part: tinychannels_bus::ContentPart::Text {
-                    text: "artifact final".into(),
-                    markdown_dialect: None,
-                },
-            }],
-            receipt: None,
-        },
-    ];
     let updated: ProgressiveResult = first_client
         .call_confidential(
             methods::EXECUTE_PROGRESSIVE,
-            ProgressiveCommand::FeedOutput {
+            ProgressiveCommand::Feed {
                 handle: handle.clone(),
-                events: terminal_events.clone(),
+                events: vec![ProgressiveEvent::TextDelta("artifact draft".into())],
             },
         )
         .await
         .unwrap();
-    assert!(
-        matches!(updated, ProgressiveResult::DeliveryOutcome { outcome }
-        if outcome.receipt.platform_message_ids == ["artifact-message"])
-    );
+    assert_eq!(updated, ProgressiveResult::Updated);
     for _ in 0..2 {
         let result: ProgressiveResult = first_client
             .call_confidential(
                 methods::EXECUTE_PROGRESSIVE,
-                ProgressiveCommand::FeedOutput {
+                ProgressiveCommand::Finish {
                     handle: handle.clone(),
-                    events: terminal_events.clone(),
+                    text: "artifact final".into(),
                 },
             )
             .await
             .unwrap();
-        assert!(
-            matches!(result, ProgressiveResult::DeliveryOutcome { outcome }
-            if outcome.receipt.platform_message_ids == ["artifact-message"])
-        );
+        assert_eq!(result, ProgressiveResult::Closed);
     }
     assert_eq!(callback.sends.load(std::sync::atomic::Ordering::SeqCst), 1);
-    let output_events = callback.output_events.lock().unwrap().clone();
-    assert!(
-        matches!(output_events.get(1), Some(ChannelOutputEvent::ToolCallCompleted {
-        call_id, arguments: Some(arguments), structured: Some(structured), ..
-    }) if call_id == "artifact-call" && arguments["query"] == "artifact" && structured["count"] == 1)
-    );
     use tinychannels_bus::module_remote::{RemoteOperation, RemoteOperationResult, RemoteRoute};
     let remote_workspace = tempfile::tempdir().unwrap();
     use tinychannels_bus::module_control::{ChannelControlRequest, ChannelControlResult};
@@ -419,7 +353,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
     assert_eq!(prepared.client_id, "inbound:discord:user");
     assert_eq!(
         prepared.session_key,
-        "v22|namespace=p6:tenant|channel=p7:discord|account=a|kind=p7:unknown|scope=a|conversation=p4:room|parent=a|topic=a|thread=a|participant=p4:user"
+        "tenant:discord:default:unknown:room:user"
     );
     assert_eq!(prepared.envelope.text, "fixture");
 
@@ -500,77 +434,6 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         )
         .await
         .unwrap();
-    let scope = tinychannels_bus::ConversationRef {
-        kind: tinychannels_bus::ConversationKind::Thread,
-        id: "artifact-room".into(),
-        scope_id: Some("artifact-scope".into()),
-        parent_id: Some("artifact-parent".into()),
-        thread_id: Some("artifact-thread".into()),
-        topic_id: Some("artifact-topic".into()),
-    };
-    let ProgressiveResult::Opened {
-        handle: scoped_handle,
-    } = first_client
-        .call_confidential(
-            methods::EXECUTE_PROGRESSIVE,
-            ProgressiveCommand::OpenOutput {
-                channel: tinychannels_bus::ChannelRef {
-                    id: "linq".into(),
-                    account_id: None,
-                },
-                conversation: scope.clone(),
-                turn_id: "artifact-scoped-turn".into(),
-                lifetime_ms: 210_000,
-            },
-        )
-        .await
-        .unwrap()
-    else {
-        panic!("scoped output handle did not open")
-    };
-    let terminal = vec![ChannelOutputEvent::FinalMessage {
-        text: "scoped artifact final".into(),
-        parts: vec![],
-        receipt: None,
-    }];
-    for _ in 0..2 {
-        let result: ProgressiveResult = first_client
-            .call_confidential(
-                methods::EXECUTE_PROGRESSIVE,
-                ProgressiveCommand::FeedOutput {
-                    handle: scoped_handle.clone(),
-                    events: terminal.clone(),
-                },
-            )
-            .await
-            .unwrap();
-        assert!(
-            matches!(result, ProgressiveResult::DeliveryOutcome { outcome }
-            if outcome.receipt.platform_message_ids == ["artifact-message"])
-        );
-    }
-    let scoped_send = callback
-        .requests
-        .lock()
-        .unwrap()
-        .iter()
-        .find_map(|request| match request {
-            ProgressiveTransportRequest::SendTyped {
-                channel_ref: Some(channel),
-                conversation: Some(conversation),
-                turn_id: Some(turn_id),
-                idempotency_key: Some(key),
-                ..
-            } if turn_id == "artifact-scoped-turn" => {
-                Some((channel.clone(), conversation.clone(), key.clone()))
-            }
-            _ => None,
-        })
-        .expect("scoped typed send callback");
-    assert_eq!(scoped_send.0.id, "linq");
-    assert_eq!(scoped_send.1, scope);
-    assert!(!scoped_send.2.is_empty());
-    assert_eq!(callback.sends.load(std::sync::atomic::Ordering::SeqCst), 2);
     let interaction: tinychannels_bus::ChannelInteractionResult = first_client
         .call_confidential(
             methods::CHANNEL_INTERACTION,

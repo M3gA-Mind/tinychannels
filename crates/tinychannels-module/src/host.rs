@@ -133,7 +133,7 @@ pub struct HostChannels {
     object_path: Arc<str>,
     /// The host's storage objects, connected on first use and then shared by
     /// every clone.
-    storage: Arc<Mutex<Option<tinystoragedrivers_core::ScopedStorage>>>,
+    storage: Arc<Mutex<Option<tinystoragedrivers_api::Storage>>>,
 }
 impl std::fmt::Debug for HostChannels {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -250,6 +250,13 @@ impl HostChannels {
                     continue;
                 }
                 if let Notification::DeliverEvent { event, reply } = notification {
+                    // Typed events share provider ingress order with messages.
+                    // Scoped runtimes may still be processing an earlier
+                    // message in the parallel dispatcher after its notification
+                    // left this queue, so drain that accepted frontier first.
+                    if let Some(dispatcher) = dispatcher.as_ref() {
+                        dispatcher.flush().await;
+                    }
                     let result = async {
                         let proxy = callback_connection.proxy(
                             HOST_BUS_NAME,
@@ -331,23 +338,21 @@ impl HostChannels {
     /// serving storage later is picked up by the next call.
     pub(crate) async fn storage(
         &self,
-    ) -> tinystoragedrivers_core::Result<tinystoragedrivers_core::ScopedStorage> {
-        use tinystoragedrivers_core::StorageBackend;
+    ) -> tinystoragedrivers_types::Result<tinystoragedrivers_api::Storage> {
         let mut slot = self.storage.lock().await;
         if let Some(scoped) = slot.as_ref() {
             return Ok(scoped.clone());
         }
-        let bus = tinystoragedrivers_busproxy::connect_storage(self.connection.clone()).await?;
-        let scoped = bus.for_scope(&tinystoragedrivers_busproxy::module_scope_label())?;
-        *slot = Some(scoped.clone());
-        Ok(scoped)
+        let storage = tinystoragedrivers_busproxy::connect_storage(self.connection.clone()).await?;
+        *slot = Some(storage.clone());
+        Ok(storage)
     }
 
     /// The scoped document store, for the delivery, remote-session and
     /// WhatsApp session records.
     pub(crate) async fn documents(
         &self,
-    ) -> tinystoragedrivers_core::Result<Arc<dyn tinystoragedrivers_core::DocumentStore>> {
+    ) -> tinystoragedrivers_types::Result<Arc<dyn tinystoragedrivers_api::DocumentStore>> {
         Ok(Arc::clone(self.storage().await?.documents()))
     }
 
@@ -664,20 +669,51 @@ impl HostChannels {
         }
     }
 
+    /// Deliver one typed provider event and preserve whether failure came
+    /// from invalid ingress, a closed consumer, or the host callback itself.
+    pub async fn try_deliver_event(
+        &self,
+        event: ChannelEvent,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        if serde_json::to_vec(&event).map_or(true, |bytes| bytes.len() > MAX_CALLBACK_BYTES) {
+            return Err(ingress_rejected_error());
+        }
+        if self.owner.terminal.load(Ordering::SeqCst) {
+            return Err(inbound_host_closed_error());
+        }
+        match self.deliver_event(event).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.to_string() == "callback consumer is closed" => {
+                Err(inbound_host_closed_error())
+            }
+            Err(error) => {
+                tracing::warn!(%error, "channel host ingress callback failed");
+                Err(host_ingress_transient_error())
+            }
+        }
+    }
+
     /// Enqueue one inbound message; a flush observes delivery failures.
     pub async fn deliver_inbound(
         &self,
         channel: &str,
         envelope: tinychannels_bus::ChannelInboundEnvelope,
     ) {
-        let Ok(message) = serde_json::to_value(envelope) else {
-            record_failure(
-                &self.owner.failure,
-                "inbound envelope could not be encoded".into(),
-            );
-            return;
-        };
-        self.deliver_inbound_value(channel, message).await;
+        if let Err(error) = self.try_deliver_inbound(channel, envelope).await {
+            record_failure(&self.owner.failure, error.message);
+        }
+    }
+
+    /// Enqueue one inbound message and report rejection to an adapter that can
+    /// retry it. The legacy [`Self::deliver_inbound`] method retains its
+    /// fire-and-forget behavior for existing callers.
+    pub async fn try_deliver_inbound(
+        &self,
+        channel: &str,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        let message = serde_json::to_value(envelope).map_err(|_| ingress_rejected_error())?;
+        self.try_deliver_inbound_value(channel, message).await
     }
 
     /// Enqueue authenticated relay provenance with its normalized envelope.
@@ -697,18 +733,26 @@ impl HostChannels {
     }
 
     async fn deliver_inbound_value(&self, channel: &str, message: serde_json::Value) {
-        if serde_json::to_vec(&message).map_or(true, |bytes| bytes.len() > MAX_CALLBACK_BYTES) {
-            record_failure(
-                &self.owner.failure,
-                "inbound callback byte limit exceeded".into(),
-            );
-            return;
+        if let Err(error) = self.try_deliver_inbound_value(channel, message).await {
+            record_failure(&self.owner.failure, error.message);
         }
-        self.enqueue(Notification::DeliverInbound {
+    }
+
+    async fn try_deliver_inbound_value(
+        &self,
+        channel: &str,
+        message: serde_json::Value,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        if serde_json::to_vec(&message).map_or(true, |bytes| bytes.len() > MAX_CALLBACK_BYTES) {
+            return Err(ingress_rejected_error());
+        }
+        self.enqueue_result(Notification::DeliverInbound {
             channel: channel.to_owned(),
             message,
         })
-        .await;
+        .await
+        .map_err(|_| inbound_host_closed_error())?;
+        Ok(())
     }
 
     /// Enqueue a status fact after preceding inbound messages.
@@ -752,12 +796,20 @@ impl HostChannels {
     }
 
     async fn enqueue(&self, notification: Notification) {
-        let _publication = self.owner.publication.lock().await;
-        if self.owner.terminal.load(Ordering::SeqCst)
-            || self.outbox.send(notification).await.is_err()
-        {
-            record_failure(&self.owner.failure, "callback consumer is closed".into());
+        if let Err(error) = self.enqueue_result(notification).await {
+            record_failure(&self.owner.failure, error.to_string());
         }
+    }
+
+    async fn enqueue_result(&self, notification: Notification) -> Result<()> {
+        let _publication = self.owner.publication.lock().await;
+        if self.owner.terminal.load(Ordering::SeqCst) {
+            return Err(Error::failed("callback consumer is closed"));
+        }
+        self.outbox
+            .send(notification)
+            .await
+            .map_err(|_| Error::failed("callback consumer is closed"))
     }
 
     /// Await all preceding callbacks, returning an observed terminal delivery error.
@@ -824,6 +876,32 @@ impl HostChannels {
         }
     }
 }
+
+fn ingress_rejected_error() -> tinychannels::channel::ChannelSendError {
+    tinychannels::channel::ChannelSendError {
+        kind: tinychannels::channel::SendErrorKind::BadFormat,
+        message: "channel host rejected ingress payload".into(),
+        ..Default::default()
+    }
+}
+
+fn inbound_host_closed_error() -> tinychannels::channel::ChannelSendError {
+    tinychannels::channel::ChannelSendError {
+        kind: tinychannels::channel::SendErrorKind::Unknown,
+        message: "channel host ingress consumer is closed".into(),
+        ..Default::default()
+    }
+}
+
+fn host_ingress_transient_error() -> tinychannels::channel::ChannelSendError {
+    tinychannels::channel::ChannelSendError {
+        kind: tinychannels::channel::SendErrorKind::Transient,
+        message: "channel host ingress callback failed".into(),
+        retryable: true,
+        ..Default::default()
+    }
+}
+
 fn record_failure(failure: &StdMutex<Option<String>>, error: String) {
     let mut failure = failure.lock().unwrap_or_else(|error| error.into_inner());
     if failure.is_none() {

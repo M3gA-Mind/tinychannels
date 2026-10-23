@@ -91,7 +91,7 @@ impl SlackChannel {
         typed_sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
     ) -> Result<bool, ChannelSendError> {
         if let Some(sink) = typed_sink {
-            sink.push(ChannelIngress::Event(event)).await?;
+            sink.push_ingress(ChannelIngress::Event(event)).await?;
             return Ok(true);
         }
         let Some(events) = &self.events else {
@@ -274,7 +274,7 @@ impl SlackChannel {
             ..Default::default()
         };
         let delivered = if let Some(sink) = typed_sink {
-            sink.push(ChannelIngress::Inbound(envelope)).await?;
+            sink.push_ingress(ChannelIngress::Inbound(envelope)).await?;
             true
         } else {
             match &self.events {

@@ -345,7 +345,7 @@ impl SignalChannel {
         ingress: tinychannels_bus::ChannelIngress,
     ) -> bool {
         if let Some(sink) = sink {
-            return sink.push(ingress).await.is_ok();
+            return sink.push_ingress(ingress).await.is_ok();
         }
         match ingress {
             tinychannels_bus::ChannelIngress::Inbound(envelope) => {

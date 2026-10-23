@@ -37,36 +37,52 @@ impl RecordingInboundSink {
 
 #[async_trait]
 impl ChannelInboundSink for RecordingInboundSink {
-    async fn push(&self, ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
-        self.0.lock().unwrap().push(ingress);
+    async fn push(
+        &self,
+        envelope: crate::channel::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.0
+            .lock()
+            .unwrap()
+            .push(ChannelIngress::Inbound(envelope));
+        Ok(())
+    }
+
+    async fn push_event(
+        &self,
+        event: tinychannels_bus::ChannelEvent,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.0.lock().unwrap().push(ChannelIngress::Event(event));
         Ok(())
     }
 }
 
 #[async_trait]
 impl ChannelInboundSink for LegacyMessageSink {
-    async fn push(&self, ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
-        if let ChannelIngress::Inbound(envelope) = ingress {
-            let timestamp = envelope.timestamp_unix_ms.map_or_else(
-                || {
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs()
-                },
-                |timestamp| timestamp / 1_000,
-            );
-            let message = crate::channel::typed_message_from_inbound_envelope(&envelope, timestamp);
-            self.0
-                .send(message)
-                .await
-                .map_err(|_| crate::channel::ChannelSendError {
-                    kind: tinychannels_bus::channel::SendErrorKind::Transient,
-                    message: "legacy test receiver closed".into(),
-                    retryable: true,
-                    ..Default::default()
-                })?;
-        }
+    async fn push(
+        &self,
+        envelope: crate::channel::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        let timestamp = envelope.timestamp_unix_ms.map_or_else(
+            || {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            },
+            |timestamp| timestamp / 1_000,
+        );
+        let message =
+            crate::channel::envelope::typed_message_from_inbound_envelope(&envelope, timestamp);
+        self.0
+            .send(message)
+            .await
+            .map_err(|_| crate::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "legacy test receiver closed".into(),
+                retryable: true,
+                ..Default::default()
+            })?;
         Ok(())
     }
 }
@@ -99,7 +115,7 @@ pub(crate) async fn send_v1<C: ChannelAdapter>(
     };
     intent.payload = OutboundPayload::Text { text };
     let outcome = channel
-        .send(intent)
+        .send_outcome(intent)
         .await
         .map_err(|error| anyhow::Error::new(TypedSendTestError(error)))?;
     match outcome.error.clone() {

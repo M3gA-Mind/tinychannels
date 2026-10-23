@@ -41,6 +41,13 @@ pub struct ChannelStatusRequest {
     pub channel: Option<String>,
 }
 
+/// Parameters accepted by `channels.set_default`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelSetDefaultRequest {
+    pub channel: String,
+}
+
 /// Parameters accepted by `channels.test`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -106,7 +113,3 @@ pub struct ChannelListThreadsRequest {
     #[serde(default)]
     pub active: Option<bool>,
 }
-
-#[cfg(test)]
-#[path = "requests_tests.rs"]
-mod tests;

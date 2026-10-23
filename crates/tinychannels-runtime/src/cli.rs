@@ -3,31 +3,33 @@
 //! Useful for local debugging and headless hosts. It has no network
 //! dependency and is never part of a desktop UI.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
-use std::sync::{Arc, Mutex};
 use tokio::io::{self, AsyncBufRead, AsyncBufReadExt, BufReader};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::channel::{
     AccessContext, ChannelAdapter, ChannelDescriptor, ChannelInboundEnvelope, ChannelInboundSink,
-    ChannelOutboundIntent, ChannelSendError, ChannelSendOutcome, ChannelTypedSend,
-    ConversationKind, ConversationRef, GroupAccessPolicy, MentionGate, SenderDmDecision, SenderRef,
+    ChannelOutboundIntent, ChannelSendError, MessageReceipt, SenderDmDecision,
 };
 use crate::controllers::ChannelAccountSnapshot;
-use tinychannels_bus::{ChannelCapabilities, ChannelOutboundMessage, ContentPart};
+use tinychannels_bus::{
+    ChannelCapabilities, ChannelRef, ContentPart, ConversationKind, ConversationRef,
+    OutboundPayload, SenderRef,
+};
 
-/// Console channel. `/quit` or `/exit` ends the listen loop.
-#[derive(Debug, Clone)]
+/// Console provider adapter. Clones share the active reader's cancellation.
+#[derive(Clone, Default)]
 pub struct CliChannel {
-    cancellation: Arc<Mutex<CancellationToken>>,
+    active: Arc<Mutex<Option<(Uuid, CancellationToken)>>>,
 }
 
-impl Default for CliChannel {
-    fn default() -> Self {
-        Self {
-            cancellation: Arc::new(Mutex::new(CancellationToken::new())),
-        }
+impl std::fmt::Debug for CliChannel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("CliChannel").finish_non_exhaustive()
     }
 }
 
@@ -36,61 +38,65 @@ impl CliChannel {
         Self::default()
     }
 
-    fn start_token(&self) -> CancellationToken {
-        let mut guard = self
-            .cancellation
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if guard.is_cancelled() {
-            *guard = CancellationToken::new();
-        }
-        guard.clone()
-    }
-
-    async fn start_with_reader<R: AsyncBufRead + Unpin>(
+    /// Read from an injected stream, primarily for embedding and tests.
+    pub async fn start_with_reader<R>(
         &self,
         reader: R,
         sink: &(dyn ChannelInboundSink + Send + Sync),
-    ) {
-        let cancellation = self.start_token();
+    ) where
+        R: AsyncBufRead + Unpin,
+    {
+        let generation = Uuid::new_v4();
+        let cancellation = CancellationToken::new();
+        *self.active.lock().await = Some((generation, cancellation.clone()));
         forward_lines(reader, sink, &cancellation).await;
+        let mut active = self.active.lock().await;
+        if active
+            .as_ref()
+            .is_some_and(|(current, _)| *current == generation)
+        {
+            *active = None;
+        }
+    }
+
+    /// Stop the active input loop. A later start installs a fresh token.
+    pub async fn stop(&self) -> Result<(), ChannelSendError> {
+        if let Some((_, cancellation)) = self.active.lock().await.as_ref() {
+            cancellation.cancel();
+        }
+        Ok(())
     }
 }
 
-/// Read lines from `reader` and forward each non-empty one as a typed inbound
-/// envelope until EOF, `/quit`/`/exit`, or the receiver closes.
-async fn forward_lines<R: AsyncBufRead + Unpin>(
+async fn forward_lines<R>(
     reader: R,
     sink: &(dyn ChannelInboundSink + Send + Sync),
     cancellation: &CancellationToken,
-) {
+) where
+    R: AsyncBufRead + Unpin,
+{
     let mut lines = reader.lines();
     loop {
-        let result = tokio::select! {
+        let line = tokio::select! {
+            biased;
             _ = cancellation.cancelled() => break,
-            result = lines.next_line() => result,
+            line = lines.next_line() => match line {
+                Ok(Some(line)) => line.trim().to_owned(),
+                _ => break,
+            },
         };
-        let Ok(Some(line)) = result else {
-            break;
-        };
-        let line = line.trim().to_owned();
         if line.is_empty() {
             continue;
         }
         if line == "/quit" || line == "/exit" {
             break;
         }
-        let timestamp_unix_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
         let envelope = ChannelInboundEnvelope {
-            channel: tinychannels_bus::ChannelRef {
+            channel: ChannelRef {
                 id: "cli".into(),
                 account_id: Some("cli".into()),
             },
             message_id: Uuid::new_v4().to_string(),
-            timestamp_unix_ms: Some(timestamp_unix_ms),
             conversation: ConversationRef {
                 kind: ConversationKind::Dm,
                 id: "user".into(),
@@ -108,29 +114,15 @@ async fn forward_lines<R: AsyncBufRead + Unpin>(
             }],
             access: AccessContext {
                 dm_decision: SenderDmDecision::Allow,
-                group_policy: GroupAccessPolicy::Disabled,
-                mention_gate: MentionGate::None,
-                command_authorized: false,
-                delivered_via_upstream_relay: false,
+                ..Default::default()
             },
             ..Default::default()
         };
-        let push_result = tokio::select! {
+        tokio::select! {
+            biased;
             _ = cancellation.cancelled() => break,
-            result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
-        };
-        if push_result.is_err() {
-            break;
+            result = sink.push(envelope) => if result.is_err() { break; },
         }
-    }
-}
-
-fn text_only_error() -> ChannelSendError {
-    ChannelSendError {
-        kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
-        message: "CLI supports text messages only".into(),
-        unsupported: true,
-        ..Default::default()
     }
 }
 
@@ -139,7 +131,7 @@ impl ChannelAdapter for CliChannel {
     fn descriptor(&self) -> ChannelDescriptor {
         ChannelDescriptor {
             id: "cli".into(),
-            display_name: "CLI".into(),
+            display_name: "Console".into(),
             account_id: Some("cli".into()),
             ..Default::default()
         }
@@ -151,15 +143,9 @@ impl ChannelAdapter for CliChannel {
 
     fn declared_capabilities(&self) -> ChannelCapabilities {
         let mut capabilities = ChannelCapabilities::unknown();
-        capabilities.content.parts = vec!["text".into()];
         capabilities.content.text.inbound = true;
         capabilities.content.text.outbound = true;
-        capabilities.actions.supported = vec!["send".into()];
-        capabilities.addressing.account_id = true;
-        capabilities.addressing.conversation_types = vec!["dm".into()];
-        capabilities.account.configured = Some(true);
-        capabilities.account.enabled = Some(true);
-        capabilities.account.healthy = Some(true);
+        capabilities.actions.supported.push("send".into());
         capabilities
     }
 
@@ -173,49 +159,31 @@ impl ChannelAdapter for CliChannel {
     }
 
     async fn stop(&self) -> Result<(), ChannelSendError> {
-        self.cancellation
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .cancel();
-        Ok(())
+        CliChannel::stop(self).await
     }
 
     async fn send(
         &self,
         intent: ChannelOutboundIntent,
-    ) -> Result<ChannelSendOutcome, ChannelSendError> {
-        self.send_typed(&ChannelOutboundMessage::from_intent(&intent))
-            .await
+    ) -> Result<MessageReceipt, ChannelSendError> {
+        match intent.payload {
+            OutboundPayload::Text { text } => {
+                println!("{text}");
+                Ok(MessageReceipt::default())
+            }
+            _ => Err(ChannelSendError::unsupported(
+                "console supports text messages only",
+            )),
+        }
     }
 
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError> {
         Ok(ChannelAccountSnapshot {
             channel_id: "cli".into(),
             account_id: Some("cli".into()),
-            states: vec![tinychannels_bus::controllers::ChannelAccountState::Enabled],
             health_state: Some("healthy".into()),
             ..Default::default()
         })
-    }
-}
-
-#[async_trait]
-impl ChannelTypedSend for CliChannel {
-    async fn send_typed(
-        &self,
-        message: &ChannelOutboundMessage,
-    ) -> Result<ChannelSendOutcome, ChannelSendError> {
-        let mut lines = Vec::with_capacity(message.parts.len());
-        for part in &message.parts {
-            match part {
-                tinychannels_bus::OutboundContentPart::Content {
-                    part: ContentPart::Text { text, .. },
-                } => lines.push(text.as_str()),
-                _ => return Err(text_only_error()),
-            }
-        }
-        println!("{}", lines.join("\n"));
-        Ok(ChannelSendOutcome::default())
     }
 }
 

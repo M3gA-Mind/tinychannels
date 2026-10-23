@@ -413,7 +413,7 @@ macro_rules! native_v2_adapter {
                 &self,
                 intent: tinychannels_bus::ChannelOutboundIntent,
             ) -> Result<
-                tinychannels_bus::channel::ChannelSendOutcome,
+                tinychannels_bus::channel::MessageReceipt,
                 tinychannels_bus::channel::ChannelSendError,
             > {
                 $crate::providers::native::outbound::send_typed(
@@ -421,6 +421,17 @@ macro_rules! native_v2_adapter {
                     &tinychannels_bus::ChannelOutboundMessage::from_intent(&intent),
                 )
                 .await
+                .map(|outcome| outcome.receipt)
+            }
+
+            async fn send_typed(
+                &self,
+                message: &tinychannels_bus::ChannelOutboundMessage,
+            ) -> Result<
+                tinychannels_bus::channel::ChannelSendOutcome,
+                tinychannels_bus::channel::ChannelSendError,
+            > {
+                $crate::providers::native::outbound::send_typed(self, message).await
             }
 
             async fn status(
@@ -478,7 +489,7 @@ macro_rules! native_v2_adapter {
         }
 
         #[async_trait::async_trait]
-        impl $crate::channel::ChannelReaction for $ty {
+        impl $crate::channel::LegacyChannelReaction for $ty {
             async fn send_reaction(
                 &self,
                 channel: &tinychannels_bus::channel::ChannelRef,

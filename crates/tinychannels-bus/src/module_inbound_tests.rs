@@ -42,3 +42,20 @@ fn inbound_vocabulary_preserves_optional_sender_and_existing_message_wire_shape(
         "typed"
     );
 }
+
+#[test]
+fn prepared_inbound_exposes_thread_key_policy_without_leaking_key_format() {
+    let prepared = PreparedChannelInbound {
+        message: ChannelMessage::default(),
+        envelope: crate::ChannelInboundEnvelope::default(),
+        history_key: "opaque-key".into(),
+        history_key_ignores_thread: true,
+        thread_id: "thread".into(),
+        client_id: "client".into(),
+        session_key: "session".into(),
+    };
+    let value = serde_json::to_value(&prepared).unwrap();
+    assert_eq!(value["history_key_ignores_thread"], true);
+    let restored: PreparedChannelInbound = serde_json::from_value(value).unwrap();
+    assert!(restored.history_key_ignores_thread);
+}

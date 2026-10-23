@@ -32,10 +32,6 @@ struct Callback {
     transcriptions_started: Arc<AtomicUsize>,
     transcription_started: Arc<tokio::sync::Notify>,
     transcription_gate: Arc<tokio::sync::Notify>,
-    voice_scopes: Arc<Mutex<Vec<tinychannels_bus::HostVoiceScope>>>,
-    voice_requests: Arc<Mutex<Vec<serde_json::Value>>>,
-    projected_voice_media_ids: Arc<Mutex<Vec<Option<String>>>>,
-    voice_publication_failures: Arc<AtomicUsize>,
     controller_blocked: Arc<AtomicBool>,
     controllers_started: Arc<AtomicUsize>,
     controller_started: Arc<tokio::sync::Notify>,
@@ -77,101 +73,6 @@ impl Callback {
             text: "spoken words".into(),
             language: request.language,
             duration_secs: Some(1.25),
-        })
-    }
-
-    async fn transcribe_voice(
-        &self,
-        request: tinychannels_bus::HostVoiceTranscriptionRequest,
-    ) -> Result<tinychannels_bus::HostTranscriptionResult> {
-        self.voice_scopes.lock().await.push(request.scope.clone());
-        self.voice_requests.lock().await.push(serde_json::json!({"kind":"transcribe","mimeType":request.mime_type,"fileName":request.file_name,"language":request.language}));
-        self.transcriptions_started.fetch_add(1, Ordering::SeqCst);
-        self.events
-            .lock()
-            .await
-            .push("transcription:complete".into());
-        Ok(tinychannels_bus::HostTranscriptionResult {
-            text: "spoken words".into(),
-            language: request.language,
-            duration_secs: Some(1.25),
-        })
-    }
-
-    async fn synthesize_speech(
-        &self,
-        request: tinychannels_bus::HostSpeechSynthesisRequest,
-    ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
-        self.voice_scopes.lock().await.push(request.scope);
-        self.voice_requests.lock().await.push(
-            serde_json::json!({"kind":"synthesize","text":request.text,"format":request.format}),
-        );
-        Ok(tinychannels_bus::HostSpeechSynthesisResult {
-            audio_base64: if request.text == "oversized-response" {
-                "x".repeat(super::MAX_VOICE_CALLBACK_BYTES + 1)
-            } else {
-                "UklGRg==".into()
-            },
-            mime_type: "audio/wav".into(),
-            duration_ms: Some(1_250),
-        })
-    }
-
-    async fn store_voice_media(
-        &self,
-        request: tinychannels_bus::HostStoreVoiceMediaRequest,
-    ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
-        self.voice_scopes.lock().await.push(request.scope);
-        self.projected_voice_media_ids.lock().await.push(
-            request
-                .media_reference
-                .as_ref()
-                .and_then(|media| media.opaque_id.clone()),
-        );
-        self.voice_requests.lock().await.push(serde_json::json!({"kind":"store","direction":request.direction,"codec":request.codec,"durationMs":request.duration_ms,"mediaReference":request.media_reference}));
-        if consume_failure(&self.voice_publication_failures) {
-            return Err(tinybus::Error::failed("fixture publication denial"));
-        }
-        let media = request
-            .media_reference
-            .unwrap_or(tinychannels_bus::MediaReference {
-                opaque_id: Some("voice-1".into()),
-                kind: tinychannels_bus::MediaKind::Audio,
-                ..Default::default()
-            });
-        let opaque_id = media.opaque_id.clone().unwrap_or_else(|| "unknown".into());
-        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
-            media,
-            accessible_url: Some(format!("https://media.example.test/authorized/{opaque_id}")),
-        })
-    }
-
-    async fn read_voice_media(
-        &self,
-        request: tinychannels_bus::HostReadVoiceMediaRequest,
-    ) -> Result<tinychannels_bus::HostReadVoiceMediaResult> {
-        self.voice_scopes.lock().await.push(request.scope);
-        self.voice_requests.lock().await.push(serde_json::json!({"kind":"read","opaqueId":request.opaque_id,"maxBytes":request.max_bytes}));
-        Ok(tinychannels_bus::HostReadVoiceMediaResult {
-            audio_base64: "UklGRgAAAABXQVZF".into(),
-            mime_type: "audio/wav".into(),
-            file_name: Some("voice.wav".into()),
-        })
-    }
-
-    async fn get_voice_reply_policy(
-        &self,
-        request: tinychannels_bus::HostVoiceReplyPolicyRequest,
-    ) -> Result<tinychannels_bus::HostVoiceReplyPolicy> {
-        self.voice_scopes.lock().await.push(request.scope);
-        self.voice_requests
-            .lock()
-            .await
-            .push(serde_json::json!({"kind":"policy"}));
-        Ok(tinychannels_bus::HostVoiceReplyPolicy {
-            mode: tinychannels_bus::HostVoiceReplyMode::SpeakReply,
-            inbound_has_voice: true,
-            explicitly_requested: false,
         })
     }
 
@@ -272,10 +173,6 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
         transcriptions_started: Arc::new(AtomicUsize::new(0)),
         transcription_started: Arc::new(tokio::sync::Notify::new()),
         transcription_gate: Arc::new(tokio::sync::Notify::new()),
-        voice_scopes: Arc::new(Mutex::new(Vec::new())),
-        voice_requests: Arc::new(Mutex::new(Vec::new())),
-        projected_voice_media_ids: Arc::new(Mutex::new(Vec::new())),
-        voice_publication_failures: Arc::new(AtomicUsize::new(0)),
         controller_blocked: Arc::new(AtomicBool::new(false)),
         controllers_started: Arc::new(AtomicUsize::new(0)),
         controller_started: Arc::new(tokio::sync::Notify::new()),
@@ -319,6 +216,7 @@ async fn shutdown_fences_new_transcription_and_joins_accepted_callback() {
                 mime_type: Some("audio/wav".into()),
                 file_name: None,
                 language: None,
+                scope: None,
             })
             .await
     });
@@ -339,6 +237,7 @@ async fn shutdown_fences_new_transcription_and_joins_accepted_callback() {
             mime_type: Some("audio/wav".into()),
             file_name: None,
             language: None,
+            scope: None,
         })
         .await
         .is_err(),
@@ -366,6 +265,7 @@ async fn shutdown_joins_owned_transcription_after_waiter_cancellation() {
                 mime_type: Some("audio/wav".into()),
                 file_name: None,
                 language: None,
+                scope: None,
             })
             .await
     });
@@ -411,6 +311,7 @@ async fn transcription_admission_refuses_when_its_owned_task_limit_is_reached() 
                 mime_type: Some("audio/wav".into()),
                 file_name: None,
                 language: None,
+                scope: None,
             })
             .await
         }));
@@ -435,6 +336,7 @@ async fn transcription_admission_refuses_when_its_owned_task_limit_is_reached() 
             mime_type: Some("audio/wav".into()),
             file_name: None,
             language: None,
+            scope: None,
         })
         .await;
     assert!(refused.is_err(), "the seventeenth held callback is refused");
@@ -464,13 +366,10 @@ async fn callback_consumer_preserves_inbound_then_status_order() {
 }
 
 #[tokio::test]
-async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
+async fn module_host_exposes_typed_transcription_and_event_capabilities() {
     let (host, callback, _server) = connected_host().await;
-    let provider_host = Arc::new(crate::provider::Hooks::default()).host(
-        host.clone(),
-        "telegram".into(),
-        Some("telegram:media-v1:fixture".into()),
-    );
+    let provider_host =
+        Arc::new(crate::provider::Hooks::default()).host(host.clone(), "telegram".into(), None);
     let transcription = provider_host
         .transcriber()
         .unwrap()
@@ -484,140 +383,6 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         .unwrap();
     assert_eq!(transcription.text, "spoken words");
     assert_eq!(transcription.language.as_deref(), Some("en"));
-
-    let scope = tinychannels_bus::HostVoiceScope {
-        channel: tinychannels_bus::ChannelRef {
-            id: "provider-forged-channel".into(),
-            account_id: Some("provider-forged-account".into()),
-        },
-        conversation: tinychannels_bus::ConversationRef {
-            id: "conversation-1".into(),
-            thread_id: Some("thread-2".into()),
-            topic_id: Some("topic-3".into()),
-            ..Default::default()
-        },
-        turn_id: "message-4".into(),
-        ..Default::default()
-    };
-    let speech = provider_host
-        .synthesizer()
-        .unwrap()
-        .synthesize_scoped(
-            scope.clone(),
-            tinychannels::host::SpeechRequest {
-                text: "hello".into(),
-                voice: None,
-                format: Some("wav".into()),
-                thread_id: Some("thread-2".into()),
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(speech.mime_type, "audio/wav");
-    assert_eq!(speech.audio_base64, "UklGRg==");
-
-    let stored = provider_host
-        .voice_media_store()
-        .unwrap()
-        .store_voice(tinychannels::host::VoiceMediaRequest {
-            audio_base64: "UklGRgAAAABXQVZF".into(),
-            mime_type: "audio/wav".into(),
-            codec: Some("wav_pcm16".into()),
-            duration_ms: Some(1_250),
-            file_name: Some("voice.wav".into()),
-            direction: tinychannels_bus::HostVoiceMediaDirection::Inbound,
-            scope: scope.clone(),
-        })
-        .await
-        .unwrap();
-    let opaque_id = stored.media.opaque_id.as_deref().unwrap();
-    assert!(opaque_id.starts_with("tinychannels_media_v1_"));
-    assert_eq!(stored.media.codec.as_deref(), Some("wav_pcm16"));
-    assert_eq!(
-        stored.accessible_url.as_deref(),
-        Some(format!("https://media.example.test/authorized/{opaque_id}").as_str())
-    );
-    let resolved = provider_host
-        .voice_media_store()
-        .unwrap()
-        .read_voice(scope.clone(), opaque_id.to_owned())
-        .await
-        .unwrap();
-    assert_eq!(resolved.audio_base64, "UklGRgAAAABXQVZF");
-    let mut foreign_scope = scope.clone();
-    foreign_scope.conversation.id = "foreign-conversation".into();
-    assert!(
-        provider_host
-            .voice_media_store()
-            .unwrap()
-            .read_voice(foreign_scope, opaque_id.to_owned())
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        callback
-            .voice_requests
-            .lock()
-            .await
-            .iter()
-            .filter(|request| request["kind"] == "read")
-            .count(),
-        0,
-        "foreign namespaced media must fail before legacy callback fallback"
-    );
-    let legacy_id = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
-    assert!(
-        provider_host
-            .voice_media_store()
-            .unwrap()
-            .read_voice(scope.clone(), legacy_id.into())
-            .await
-            .is_ok()
-    );
-    assert!(
-        provider_host
-            .voice_media_store()
-            .unwrap()
-            .read_voice(scope.clone(), "tinychannels_media_v1_malformed".into())
-            .await
-            .is_err()
-    );
-    let scopes = callback.voice_scopes.lock().await;
-    assert_eq!(scopes.len(), 3);
-    for observed in scopes.iter() {
-        assert_eq!(observed.configured_instance, "telegram");
-        assert_eq!(observed.channel.id, "telegram");
-        assert_eq!(observed.channel.account_id.as_deref(), Some("telegram"));
-        assert!(
-            !observed
-                .channel
-                .account_id
-                .as_deref()
-                .unwrap()
-                .contains("media-v1")
-        );
-    }
-    for observed in &scopes[1..] {
-        assert_eq!(observed.conversation.id, "conversation-1");
-        assert_eq!(observed.conversation.thread_id.as_deref(), Some("thread-2"));
-        assert_eq!(observed.conversation.topic_id.as_deref(), Some("topic-3"));
-        assert_eq!(observed.turn_id, "message-4");
-    }
-    drop(scopes);
-    let voice_requests = callback.voice_requests.lock().await;
-    let publication = voice_requests
-        .iter()
-        .find(|request| request["kind"] == "store")
-        .unwrap();
-    assert_eq!(publication["direction"], "inbound");
-    assert_eq!(publication["codec"], "wav_pcm16");
-    assert_eq!(publication["mediaReference"]["opaqueId"], opaque_id);
-    assert!(
-        voice_requests
-            .iter()
-            .any(|request| { request["kind"] == "read" && request["opaqueId"] == legacy_id })
-    );
-    drop(voice_requests);
 
     provider_host
         .events()
@@ -633,181 +398,6 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         callback.events.lock().await.as_slice(),
         ["transcription:complete", "event:channel:reaction_sent"]
     );
-    host.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn denied_voice_publication_removes_unclaimed_shared_media() {
-    let (host, callback, _server) = connected_host().await;
-    callback
-        .voice_publication_failures
-        .store(1, Ordering::SeqCst);
-    let provider_host = Arc::new(crate::provider::Hooks::default()).host(
-        host.clone(),
-        "telegram".into(),
-        Some("telegram:media-v1:fixture".into()),
-    );
-    let store = provider_host.voice_media_store().unwrap();
-    let scope = tinychannels_bus::HostVoiceScope {
-        conversation: tinychannels_bus::ConversationRef {
-            id: "conversation-denied".into(),
-            ..Default::default()
-        },
-        turn_id: "turn-denied".into(),
-        ..Default::default()
-    };
-    assert!(
-        store
-            .store_voice(tinychannels::host::VoiceMediaRequest {
-                audio_base64: "UklGRgAAAABXQVZF".into(),
-                mime_type: "audio/wav".into(),
-                codec: Some("wav_pcm16".into()),
-                duration_ms: None,
-                file_name: Some("voice.wav".into()),
-                direction: tinychannels_bus::HostVoiceMediaDirection::Inbound,
-                scope: scope.clone(),
-            })
-            .await
-            .is_err()
-    );
-    let opaque_id = callback.projected_voice_media_ids.lock().await[0]
-        .clone()
-        .unwrap();
-    assert!(store.read_voice(scope, opaque_id).await.is_err());
-    host.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn scoped_voice_callbacks_round_trip_scope_and_enforce_media_limits() {
-    let (host, callback, _server) = connected_host().await;
-    let scope = tinychannels_bus::HostVoiceScope {
-        configured_instance: "telegram-primary".into(),
-        channel: tinychannels_bus::ChannelRef {
-            id: "telegram".into(),
-            account_id: Some("bot-7".into()),
-        },
-        conversation: tinychannels_bus::ConversationRef {
-            kind: tinychannels_bus::ConversationKind::Group,
-            id: "group-42".into(),
-            thread_id: Some("thread-9".into()),
-            topic_id: Some("topic-3".into()),
-            ..Default::default()
-        },
-        turn_id: "message-88".into(),
-    };
-    let transcription = host
-        .transcribe_voice(tinychannels_bus::HostVoiceTranscriptionRequest {
-            scope: scope.clone(),
-            audio_base64: "UklGRg==".into(),
-            mime_type: Some("audio/wav".into()),
-            file_name: Some("voice.wav".into()),
-            language: Some("en".into()),
-        })
-        .await
-        .unwrap();
-    assert_eq!(transcription.text, "spoken words");
-
-    let speech = host
-        .synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
-            scope: scope.clone(),
-            text: "hello".into(),
-            voice: Some("alloy".into()),
-            format: Some("wav".into()),
-        })
-        .await
-        .unwrap();
-    assert_eq!(speech.mime_type, "audio/wav");
-    assert_eq!(speech.audio_base64, "UklGRg==");
-
-    let stored = host
-        .store_voice_media(tinychannels_bus::HostStoreVoiceMediaRequest {
-            scope: scope.clone(),
-            direction: tinychannels_bus::HostVoiceMediaDirection::Inbound,
-            audio_base64: "UklGRg==".into(),
-            mime_type: "audio/wav".into(),
-            codec: Some("wav_pcm16".into()),
-            duration_ms: Some(1_250),
-            file_name: Some("voice.wav".into()),
-            media_reference: None,
-        })
-        .await
-        .unwrap();
-    assert_eq!(stored.media.opaque_id.as_deref(), Some("voice-1"));
-
-    let read = host
-        .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
-            scope: scope.clone(),
-            opaque_id: "voice-1".into(),
-            max_bytes: 12,
-        })
-        .await
-        .unwrap();
-    assert_eq!(read.file_name.as_deref(), Some("voice.wav"));
-    assert!(
-        host.read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
-            scope: scope.clone(),
-            opaque_id: "voice-1".into(),
-            max_bytes: 2,
-        })
-        .await
-        .is_err(),
-        "decoded bytes must respect the caller's requested maximum"
-    );
-
-    let policy = host
-        .voice_reply_policy(tinychannels_bus::HostVoiceReplyPolicyRequest {
-            scope: scope.clone(),
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        policy.mode,
-        tinychannels_bus::HostVoiceReplyMode::SpeakReply
-    );
-    assert!(policy.inbound_has_voice);
-
-    assert!(
-        host.synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
-            scope: scope.clone(),
-            text: "oversized-response".into(),
-            voice: None,
-            format: None,
-        })
-        .await
-        .is_err(),
-        "oversized callback results must be rejected after deserialization"
-    );
-    assert!(
-        host.synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
-            scope: scope.clone(),
-            text: "x".repeat(super::MAX_VOICE_CALLBACK_BYTES),
-            voice: None,
-            format: None,
-        })
-        .await
-        .is_err(),
-        "oversized callback requests must fail before reaching the host"
-    );
-
-    let scopes = callback.voice_scopes.lock().await;
-    assert_eq!(scopes.len(), 7);
-    assert!(scopes.iter().all(|observed| observed == &scope));
-    drop(scopes);
-    let calls = callback.voice_requests.lock().await;
-    assert_eq!(calls[0]["kind"], "transcribe");
-    assert_eq!(
-        calls[1],
-        serde_json::json!({"kind":"synthesize","text":"hello","format":"wav"})
-    );
-    assert_eq!(calls[2]["direction"], "inbound");
-    assert_eq!(
-        calls[3],
-        serde_json::json!({"kind":"read","opaqueId":"voice-1","maxBytes":12})
-    );
-    assert_eq!(calls[4]["kind"], "read");
-    assert_eq!(calls[5]["kind"], "policy");
-    assert_eq!(calls[6]["text"], "oversized-response");
-    drop(calls);
     host.shutdown().await.unwrap();
 }
 
@@ -972,6 +562,171 @@ async fn typed_channel_event_crosses_memory_bus_with_full_source_and_address() {
 }
 
 #[tokio::test]
+async fn module_adapter_ingress_preserves_message_and_event_order() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, callback, _server) = connected_host().await;
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    let event = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "connected".into(),
+        source_event_id: None,
+        source_timestamp: None,
+        channel: Default::default(),
+        conversation: None,
+        event: tinychannels_bus::ChannelEventKind::Lifecycle {
+            state: "connected".into(),
+            reason: None,
+        },
+    };
+
+    sink.push_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_envelope(
+        "hello",
+    )))
+    .await
+    .unwrap();
+    sink.push_ingress(tinychannels_bus::ChannelIngress::Event(event))
+        .await
+        .unwrap();
+    host.flush().await.unwrap();
+
+    assert_eq!(
+        callback.events.lock().await.as_slice(),
+        [
+            "inbound:telegram:bot-7:hello",
+            "typed_event:telegram:bot-7:connected:lifecycle"
+        ]
+    );
+    let delivered = callback.typed_events.lock().await;
+    assert_eq!(delivered[0].channel.id, "telegram");
+    assert_eq!(
+        delivered[0].channel.account_id.as_deref(),
+        Some("telegram:bot-7")
+    );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_adapter_ingress_returns_retryable_error_when_host_rejects_event() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, callback, _server) = connected_host().await;
+    callback.event_failures.store(1, Ordering::SeqCst);
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    let error = sink
+        .push_event(tinychannels_bus::ChannelEvent {
+            version: 2,
+            event_id: "event-1".into(),
+            source_event_id: None,
+            source_timestamp: None,
+            channel: Default::default(),
+            conversation: None,
+            event: tinychannels_bus::ChannelEventKind::Lifecycle {
+                state: "connected".into(),
+                reason: None,
+            },
+        })
+        .await
+        .expect_err("host callback failure must return to the adapter");
+
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Transient);
+    assert!(error.retryable);
+    assert!(!error.is_unsupported());
+    assert_eq!(error.message, "channel host ingress callback failed");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_adapter_ingress_returns_non_retryable_error_when_event_is_oversized() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, _callback, _server) = connected_host().await;
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    let error = sink
+        .push_event(tinychannels_bus::ChannelEvent {
+            version: 2,
+            event_id: "too-large".into(),
+            source_event_id: None,
+            source_timestamp: None,
+            channel: Default::default(),
+            conversation: None,
+            event: tinychannels_bus::ChannelEventKind::Lifecycle {
+                state: "connected".into(),
+                reason: Some("x".repeat(140 * 1024)),
+            },
+        })
+        .await
+        .expect_err("oversized event must be rejected without requesting retry");
+
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::BadFormat);
+    assert!(!error.retryable);
+    assert_eq!(error.message, "channel host rejected ingress payload");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_adapter_ingress_returns_non_retryable_error_when_event_host_is_closed() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, _callback, _server) = connected_host().await;
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    host.shutdown().await.unwrap();
+    let error = sink
+        .push_event(tinychannels_bus::ChannelEvent {
+            version: 2,
+            event_id: "after-shutdown".into(),
+            source_event_id: None,
+            source_timestamp: None,
+            channel: Default::default(),
+            conversation: None,
+            event: tinychannels_bus::ChannelEventKind::Lifecycle {
+                state: "connected".into(),
+                reason: None,
+            },
+        })
+        .await
+        .expect_err("closed event consumer must be reported as non-retryable");
+
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Unknown);
+    assert!(!error.retryable);
+}
+
+#[tokio::test]
+async fn module_adapter_ingress_returns_retryable_error_when_inbound_is_oversized() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, _callback, _server) = connected_host().await;
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    let error = sink
+        .push(inbound_envelope(&"x".repeat(140 * 1024)))
+        .await
+        .expect_err("oversized inbound callback must be rejected to the adapter");
+
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::BadFormat);
+    assert!(!error.retryable);
+    assert_eq!(error.message, "channel host rejected ingress payload");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_adapter_ingress_returns_retryable_error_when_host_is_closed() {
+    use tinychannels::channel::ChannelInboundSink;
+
+    let (host, _callback, _server) = connected_host().await;
+    let sink = crate::provider::ModuleEvents(host.clone(), "telegram:bot-7".into());
+    host.shutdown().await.unwrap();
+
+    let error = sink
+        .push(inbound_envelope("retry me"))
+        .await
+        .expect_err("closed host callback consumer must be reported to the adapter");
+
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Unknown);
+    assert!(!error.retryable);
+    assert_eq!(error.message, "channel host ingress consumer is closed");
+}
+
+#[tokio::test]
 async fn typed_event_callback_failure_is_returned_without_poisoning_shutdown() {
     let (host, callback, _server) = connected_host().await;
     callback.event_failures.store(1, Ordering::SeqCst);
@@ -1075,22 +830,14 @@ async fn module_event_enrichment_separates_accounts_and_overwrites_provider_auth
             expires_at: None,
         },
     };
-    crate::provider::ModuleEvents(
-        host.clone(),
-        "telegram:account-a".into(),
-        crate::provider::MediaScope::default(),
-    )
-    .publish_channel_event(source.clone())
-    .await
-    .unwrap();
-    crate::provider::ModuleEvents(
-        host.clone(),
-        "telegram:account-b".into(),
-        crate::provider::MediaScope::default(),
-    )
-    .publish_channel_event(source)
-    .await
-    .unwrap();
+    crate::provider::ModuleEvents(host.clone(), "telegram:account-a".into())
+        .publish_channel_event(source.clone())
+        .await
+        .unwrap();
+    crate::provider::ModuleEvents(host.clone(), "telegram:account-b".into())
+        .publish_channel_event(source)
+        .await
+        .unwrap();
     host.flush().await.unwrap();
 
     let events = callback.typed_events.lock().await;
@@ -1119,6 +866,54 @@ async fn module_event_enrichment_separates_accounts_and_overwrites_provider_auth
 }
 
 #[tokio::test]
+async fn legacy_module_event_ingress_preserves_host_callback_failure() {
+    use tinychannels::host::EventSink;
+
+    let (host, callback, _server) = connected_host().await;
+    callback.event_failures.store(1, Ordering::SeqCst);
+    let error = crate::provider::ModuleEvents(host.clone(), "telegram:account-a".into())
+        .publish_ingress(tinychannels_bus::ChannelIngress::Event(
+            tinychannels_bus::ChannelEvent {
+                version: 2,
+                event_id: "callback-failure".into(),
+                source_event_id: None,
+                source_timestamp: None,
+                channel: Default::default(),
+                conversation: None,
+                event: tinychannels_bus::ChannelEventKind::Lifecycle {
+                    state: "connected".into(),
+                    reason: None,
+                },
+            },
+        ))
+        .await
+        .expect_err("legacy event ingress must report the host callback failure");
+
+    assert!(error.to_string().contains("fixture event failure"));
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn legacy_module_inbound_ingress_preserves_host_rejection() {
+    use tinychannels::host::EventSink;
+
+    let (host, _callback, _server) = connected_host().await;
+    let error = crate::provider::ModuleEvents(host.clone(), "telegram:account-a".into())
+        .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_envelope(
+            &"x".repeat(140 * 1024),
+        )))
+        .await
+        .expect_err("legacy inbound ingress must report host rejection");
+
+    assert!(
+        error
+            .to_string()
+            .contains("channel host rejected ingress payload")
+    );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 #[allow(
     deprecated,
     reason = "this test covers the legacy inbound bridge ordering contract"
@@ -1127,11 +922,7 @@ async fn module_unified_ingress_acknowledges_message_before_following_event() {
     use tinychannels::host::EventSink;
 
     let (host, callback, _server) = connected_host().await;
-    let events = crate::provider::ModuleEvents(
-        host.clone(),
-        "telegram:bot-a".into(),
-        crate::provider::MediaScope::default(),
-    );
+    let events = crate::provider::ModuleEvents(host.clone(), "telegram:bot-a".into());
     let handled = events
         .publish_inbound(tinychannels_bus::ChannelMessage {
             id: "telegram_100_5".into(),
@@ -1251,7 +1042,6 @@ async fn durable_store_round_trips_records_inside_the_active_host_scope() {
         conversation_id: "room-1".into(),
         channel_ref: None,
         conversation_ref: None,
-        turn_id: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         ..Default::default()
     };
@@ -1287,7 +1077,6 @@ async fn updating_pending_delivery_does_not_read_the_full_queue() {
     let store = crate::delivery::HostDeliveryStore::from_host(&host);
     let intent = tinychannels_bus::ChannelOutboundIntent {
         idempotency_key: "op-update-only".into(),
-        turn_id: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         ..Default::default()
     };
@@ -1317,7 +1106,6 @@ async fn durable_store_rejects_invalid_and_expired_records() {
     let store = crate::delivery::HostDeliveryStore::from_host(&host);
     let intent = tinychannels_bus::ChannelOutboundIntent {
         idempotency_key: "op-validate".into(),
-        turn_id: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         ..Default::default()
     };
@@ -1443,7 +1231,6 @@ async fn host_without_a_storage_object_has_no_delivery_store_and_refuses_require
     ));
     let intent = tinychannels_bus::ChannelOutboundIntent {
         idempotency_key: "missing-store".into(),
-        turn_id: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         ..Default::default()
     };

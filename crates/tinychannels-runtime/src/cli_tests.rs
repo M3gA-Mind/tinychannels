@@ -1,22 +1,24 @@
 use super::*;
+use crate::channel::{
+    ChannelAdapter, ChannelInboundEnvelope, ChannelInboundSink, ChannelOutboundIntent,
+    ChannelSendError, SenderDmDecision,
+};
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
-use tinychannels_bus::ChannelIngress;
+use tinychannels_bus::{ChannelOutboundMessage, ContentPart, ConversationKind};
 use tokio::io::ReadBuf;
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
-struct MpscSink(tokio::sync::mpsc::Sender<tinychannels_bus::ChannelIngress>);
+struct MpscSink(tokio::sync::mpsc::Sender<ChannelInboundEnvelope>);
 
 #[async_trait]
 impl ChannelInboundSink for MpscSink {
-    async fn push(
-        &self,
-        ingress: tinychannels_bus::ChannelIngress,
-    ) -> Result<(), ChannelSendError> {
-        self.0.send(ingress).await.map_err(|_| ChannelSendError {
+    async fn push(&self, envelope: ChannelInboundEnvelope) -> Result<(), ChannelSendError> {
+        self.0.send(envelope).await.map_err(|_| ChannelSendError {
             kind: tinychannels_bus::channel::SendErrorKind::Transient,
             message: "CLI test receiver closed".into(),
             retryable: true,
@@ -27,18 +29,15 @@ impl ChannelInboundSink for MpscSink {
 
 struct NotifyingSink {
     started: Arc<Notify>,
-    sender: tokio::sync::mpsc::Sender<tinychannels_bus::ChannelIngress>,
+    sender: tokio::sync::mpsc::Sender<ChannelInboundEnvelope>,
 }
 
 #[async_trait]
 impl ChannelInboundSink for NotifyingSink {
-    async fn push(
-        &self,
-        ingress: tinychannels_bus::ChannelIngress,
-    ) -> Result<(), ChannelSendError> {
+    async fn push(&self, envelope: ChannelInboundEnvelope) -> Result<(), ChannelSendError> {
         self.started.notify_one();
         self.sender
-            .send(ingress)
+            .send(envelope)
             .await
             .map_err(|_| ChannelSendError {
                 kind: tinychannels_bus::channel::SendErrorKind::Transient,
@@ -109,10 +108,7 @@ async fn collect(input: &str) -> Vec<ChannelInboundEnvelope> {
     forward_lines(input.as_bytes(), &sink, &CancellationToken::new()).await;
     drop(sink);
     let mut out = Vec::new();
-    while let Some(ingress) = rx.recv().await {
-        let tinychannels_bus::ChannelIngress::Inbound(envelope) = ingress else {
-            panic!("CLI emits only inbound messages");
-        };
+    while let Some(envelope) = rx.recv().await {
         out.push(envelope);
     }
     out
@@ -206,10 +202,7 @@ async fn stop_cancels_blocked_reader_and_adapter_can_restart() {
 
     cli.start_with_reader("again\n".as_bytes(), sink.as_ref())
         .await;
-    let ingress = rx.recv().await.expect("restarted adapter forwards input");
-    let ChannelIngress::Inbound(envelope) = ingress else {
-        panic!("CLI emits only inbound messages");
-    };
+    let envelope = rx.recv().await.expect("restarted adapter forwards input");
     assert_eq!(envelope.text, "again");
 }
 
@@ -217,7 +210,7 @@ async fn stop_cancels_blocked_reader_and_adapter_can_restart() {
 async fn stop_cancels_blocked_inbound_sink_push() {
     let cli = CliChannel::new();
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    tx.try_send(ChannelIngress::Inbound(ChannelInboundEnvelope::default()))
+    tx.try_send(ChannelInboundEnvelope::default())
         .expect("fill the sink before starting the CLI");
     let started = Arc::new(Notify::new());
     let sink = Arc::new(NotifyingSink {

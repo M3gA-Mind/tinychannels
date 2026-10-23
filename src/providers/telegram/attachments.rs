@@ -1,6 +1,23 @@
-//! MIME inference for Telegram's downloaded media files.
+//! Telegram media MIME detection shared by inbound attachment handling.
 
 use std::path::Path;
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TelegramAttachmentKind {
+    Image,
+    Document,
+    Video,
+    Audio,
+    Voice,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TelegramAttachment {
+    pub(crate) kind: TelegramAttachmentKind,
+    pub(crate) target: String,
+}
 
 pub(crate) fn infer_attachment_mime(target: &str) -> Option<&'static str> {
     let normalized = target
@@ -11,8 +28,8 @@ pub(crate) fn infer_attachment_mime(target: &str) -> Option<&'static str> {
         .next()
         .unwrap_or(target);
     match Path::new(normalized)
-        .extension()
-        .and_then(|ext| ext.to_str())?
+        .extension()?
+        .to_str()?
         .to_ascii_lowercase()
         .as_str()
     {

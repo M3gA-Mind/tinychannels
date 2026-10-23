@@ -3,7 +3,7 @@
 //! Every observation is parsed from the requests a wiremock Discord actually
 //! received, and every message id from the responses it actually returned.
 
-use crate::channel::{ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction};
+use crate::channel::{ChannelAdapter, ChannelDelete, ChannelEdit};
 use crate::channel::{ChannelStreamingDraft, ChannelTyping};
 use crate::providers::discord::channel::DiscordChannel;
 use crate::providers::discord::support::*;
@@ -197,7 +197,10 @@ impl DiscordFixture {
         payload: OutboundPayload,
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         self.mark_start().await;
-        let outcome = self.channel.send(self.intent(feature, payload)).await?;
+        let outcome = self
+            .channel
+            .send_outcome(self.intent(feature, payload))
+            .await?;
         self.record(feature, &["send"]).await;
         Ok(Some(outcome))
     }
@@ -382,7 +385,7 @@ impl AdapterFixture for DiscordFixture {
             Feature::VoiceOut | Feature::VoiceSynthesis => {
                 let media = self.voice.seed(OGG_FIXTURE, "audio/ogg");
                 self.send_and_record(feature, OutboundPayload::Voice {
-                    voice: OutboundVoice::Media { media, audio_base64: None, codec: Some("ogg_opus".into()), duration_ms: Some(200), waveform: None },
+                    voice: OutboundVoice::Media { media, codec: Some("ogg_opus".into()), duration_ms: Some(200) },
                 })
                 .await
             }
@@ -452,16 +455,16 @@ impl AdapterFixture for DiscordFixture {
                 Ok(None)
             }
             Feature::Reactions => {
-                let sent = self.channel.send(self.intent(feature, OutboundPayload::Text { text: "react to me".into() })).await?;
+                let sent = self.channel.send_outcome(self.intent(feature, OutboundPayload::Text { text: "react to me".into() })).await?;
                 let id = sent.receipt.primary_platform_message_id.clone().ok_or_else(ChannelSendError::default)?;
                 self.mark_start().await;
                 let reaction = tinychannels_bus::ChannelReaction { value: "👍".into(), custom_emoji_id: None };
-                ChannelReaction::send_reaction(&self.channel, &account(), &self.target(), &id, &reaction, false).await?;
+                crate::channel::LegacyChannelReaction::send_reaction(&self.channel, &account(), &self.target(), &id, &reaction, false).await?;
                 self.record(feature, &["reaction_send"]).await;
                 Ok(None)
             }
             Feature::Edit => {
-                let sent = self.channel.send(self.intent(feature, OutboundPayload::Text { text: "original".into() })).await?;
+                let sent = self.channel.send_outcome(self.intent(feature, OutboundPayload::Text { text: "original".into() })).await?;
                 self.mark_start().await;
                 let edit = self.intent(feature, OutboundPayload::Text { text: "edited".into() });
                 let receipt = ChannelEdit::edit(&self.channel, &sent.receipt, edit).await?;
@@ -469,7 +472,7 @@ impl AdapterFixture for DiscordFixture {
                 Ok(Some(ChannelSendOutcome { receipt, error: None }))
             }
             Feature::Delete => {
-                let sent = self.channel.send(self.intent(feature, OutboundPayload::Text { text: "delete me".into() })).await?;
+                let sent = self.channel.send_outcome(self.intent(feature, OutboundPayload::Text { text: "delete me".into() })).await?;
                 self.mark_start().await;
                 ChannelDelete::delete(&self.channel, &sent.receipt).await?;
                 self.record(feature, &["delete"]).await;
@@ -505,7 +508,10 @@ impl DiscordFixture {
         payload: OutboundPayload,
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         let before = self.server.received_requests().await.unwrap().len();
-        let result = self.channel.send(self.intent(Feature::Text, payload)).await;
+        let result = self
+            .channel
+            .send_outcome(self.intent(Feature::Text, payload))
+            .await;
         assert_eq!(self.server.received_requests().await.unwrap().len(), before);
         result.map(Some)
     }

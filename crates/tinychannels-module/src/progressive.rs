@@ -6,18 +6,20 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::delivery::progressive::{
-    EDIT_FLUSH_INTERVAL, FILLER_INTERVAL, ProgressiveOutputContext, ProgressiveOutputDispatch,
-    ProgressiveReply, ProgressiveSendError, ProgressiveSender, TYPING_REFRESH_INTERVAL,
+    EDIT_FLUSH_INTERVAL, FILLER_INTERVAL, ProgressiveOutputContext, ProgressiveReply,
+    ProgressiveSendError, ProgressiveSender, TYPING_REFRESH_INTERVAL,
 };
+use tinychannels::factory::BuiltChannel;
 use tinychannels_bus::module_progressive::{
-    ChannelOutputEvent, ProgressiveCommand, ProgressiveResult, ProgressiveTransportRequest,
+    ProgressiveCommand, ProgressiveEvent, ProgressiveResult, ProgressiveTransportRequest,
     ProgressiveTransportResult,
 };
 use tinychannels_bus::{ChannelBackendRequest, ChannelBackendResult};
-use tokio::sync::{Mutex, mpsc, oneshot, watch};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 const MAX_ACTIVE: usize = 16;
@@ -26,110 +28,41 @@ const MAX_CONTENT: usize = 384 * 1024;
 // Both text and thinking can fill their content budget in one feed. JSON
 // escaping expands a byte to at most six bytes; retain bounded envelope space.
 const MAX_REQUEST: usize = MAX_CONTENT * 12 + 64 * 1024;
-const LEGACY_TURN_LIFETIME: Duration = Duration::from_secs(180);
+const TURN_LIFETIME: Duration = Duration::from_secs(180);
 
-struct Sender {
-    host: HostChannels,
-    media_account_scope: crate::provider::MediaScope,
-    context: Option<ProgressiveOutputContext>,
-    capabilities: tinychannels_bus::ChannelCapabilities,
-    channel: String,
-    hosted: bool,
-    send_sequence: std::sync::atomic::AtomicU64,
-}
-
-struct ProgressiveTarget {
-    channel: String,
-    media_account_scope: crate::provider::MediaScope,
-    hosted: bool,
-}
+struct Sender(HostChannels);
 
 impl Sender {
     async fn invoke(
         &self,
         request: ProgressiveTransportRequest,
     ) -> std::result::Result<Value, ProgressiveSendError> {
-        let scoped_effect = self.context.is_some()
-            && matches!(
-                &request,
-                ProgressiveTransportRequest::Send { .. }
-                    | ProgressiveTransportRequest::SendTyped { .. }
-                    | ProgressiveTransportRequest::Edit { .. }
-                    | ProgressiveTransportRequest::Delete { .. }
-            );
-        let authority = match &request {
-            ProgressiveTransportRequest::Edit {
-                receipt,
-                message_id,
-                ..
-            }
-            | ProgressiveTransportRequest::Delete {
-                receipt,
-                message_id,
-                ..
-            } => receipt.clone().or_else(|| {
-                Some(tinychannels_bus::channel::MessageReceipt {
-                    primary_platform_message_id: Some(message_id.clone()),
-                    platform_message_ids: vec![message_id.clone()],
-                    ..Default::default()
-                })
-            }),
-            _ => None,
-        };
         let result = self
-            .host
+            .0
             .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(
                 request,
             )))
             .await
-            .map_err(|_| {
-                if scoped_effect {
-                    let mut outcome = tinychannels_bus::channel::ChannelSendOutcome {
-                        receipt: authority.unwrap_or_default(),
-                        ..Default::default()
-                    };
-                    outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
-                        kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                        message: "progressive callback failed after an unknown side effect".into(),
-                        sent_before_error: true,
-                        ..Default::default()
-                    });
-                    ProgressiveSendError::PartialOutcome(Box::new(outcome))
-                } else {
-                    ProgressiveSendError::Unavailable
-                }
-            })?;
+            .map_err(|_| ProgressiveSendError::Unavailable)?;
         match result {
             ChannelBackendResult::ProgressiveTransport(result) => match *result {
-                ProgressiveTransportResult::Acknowledged => Ok(Value::Null),
-                ProgressiveTransportResult::Accepted => Err(ProgressiveSendError::Other(
-                    anyhow::anyhow!("hosted acceptance is only valid for typed sends"),
-                )),
-                ProgressiveTransportResult::Outcome(outcome) => match outcome.error {
-                    None => serde_json::to_value(outcome.receipt)
-                        .map_err(|error| ProgressiveSendError::Other(error.into())),
-                    Some(_) => Err(ProgressiveSendError::PartialOutcome(outcome)),
-                },
-                ProgressiveTransportResult::Success(value) => {
-                    if value.get("error").is_some_and(|error| !error.is_null())
-                        || value.get("success").and_then(Value::as_bool) == Some(false)
-                        || value.get("status").and_then(Value::as_str) == Some("unknown_after_send")
-                    {
-                        Err(ProgressiveSendError::Other(anyhow::anyhow!(
-                            "progressive delivery failed"
-                        )))
-                    } else {
-                        Ok(value)
-                    }
-                }
+                ProgressiveTransportResult::Success(value) => Ok(value),
                 ProgressiveTransportResult::Unavailable => Err(ProgressiveSendError::Unavailable),
                 ProgressiveTransportResult::EditUnsupported => {
                     Err(ProgressiveSendError::EditUnsupported)
                 }
                 ProgressiveTransportResult::MessageGone => Err(ProgressiveSendError::MessageGone),
-                _ => Err(ProgressiveSendError::Other(anyhow::anyhow!(
-                    "progressive transport failed"
-                ))),
+                ProgressiveTransportResult::Outcome(outcome) => {
+                    serde_json::to_value(outcome.as_ref())
+                        .map_err(|error| ProgressiveSendError::Other(anyhow::anyhow!(error)))
+                }
+                ProgressiveTransportResult::Acknowledged | ProgressiveTransportResult::Accepted => {
+                    Ok(Value::Null)
+                }
+                ProgressiveTransportResult::UnsupportedContent
+                | ProgressiveTransportResult::Failed => Err(ProgressiveSendError::Other(
+                    anyhow::anyhow!("progressive transport failed"),
+                )),
             },
             _ => Err(ProgressiveSendError::Other(anyhow::anyhow!(
                 "progressive transport failed"
@@ -140,172 +73,27 @@ impl Sender {
 
 #[async_trait]
 impl ProgressiveSender for Sender {
-    async fn output_event(
-        &self,
-        channel: &str,
-        context: Option<&ProgressiveOutputContext>,
-        sequence: u64,
-        event: &ChannelOutputEvent,
-    ) -> std::result::Result<(), ProgressiveSendError> {
-        self.invoke(ProgressiveTransportRequest::OutputEvent {
-            channel: channel.to_owned(),
-            turn_id: context.map(|context| context.turn_id.clone()),
-            channel_ref: context.map(|context| context.channel.clone()),
-            conversation: context.map(|context| context.conversation.clone()),
-            sequence,
-            event: Box::new(event.clone()),
-        })
-        .await
-        .map(drop)
-    }
     async fn send(
         &self,
         channel: &str,
         text: &str,
     ) -> std::result::Result<Value, ProgressiveSendError> {
-        let (message, sequence, idempotency_key) = if let Some(context) = &self.context {
-            let sequence = self
-                .send_sequence
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let scope = serde_json::to_vec(&(
-                &context.turn_id,
-                &context.channel,
-                &context.conversation,
-                sequence,
-                text,
-                "progressive_send",
-            ))
-            .expect("scoped progressive identity serializes");
-            (
-                serde_json::json!({"text": text}),
-                Some(sequence),
-                Some(hex::encode(Sha256::digest(scope))),
-            )
-        } else {
-            let intent = tinychannels::outbound_intent_from_legacy_message(
-                channel,
-                serde_json::json!({"text": text}),
-            );
-            (
-                tinychannels::legacy_message_value_from_outbound_intent(&intent),
-                None,
-                None,
-            )
-        };
+        let intent = tinychannels::outbound_intent_from_legacy_message(
+            channel,
+            serde_json::json!({"text": text}),
+        );
+        let message = tinychannels::legacy_message_value_from_outbound_intent(&intent);
         self.invoke(ProgressiveTransportRequest::Send {
             channel: channel.into(),
-            turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
-            channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
-            conversation: self
-                .context
-                .as_ref()
-                .map(|context| context.conversation.clone()),
-            sequence,
-            idempotency_key,
+            turn_id: None,
+            channel_ref: None,
+            conversation: None,
+            sequence: None,
+            idempotency_key: None,
             message,
         })
         .await
     }
-    async fn send_parts(
-        &self,
-        channel: &str,
-        parts: &[tinychannels_bus::OutboundContentPart],
-        text: &str,
-        context: Option<&ProgressiveOutputContext>,
-        sequence: u64,
-    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
-    {
-        send_typed_part(
-            self,
-            TypedPartRequest {
-                channel,
-                parts,
-                text,
-                context,
-                sequence,
-                segment_index: 0,
-                final_phase: false,
-            },
-        )
-        .await
-    }
-
-    async fn should_synthesize_final(
-        &self,
-        _channel: &str,
-        context: Option<&ProgressiveOutputContext>,
-        text: &str,
-    ) -> std::result::Result<bool, ProgressiveSendError> {
-        if text.trim().is_empty() || !self.capabilities.voice_out.synthesis {
-            return Ok(false);
-        }
-        let Some(context) = context else {
-            return Ok(false);
-        };
-        let scope = tinychannels_bus::HostVoiceScope {
-            configured_instance: configured_instance(context),
-            channel: context.channel.clone(),
-            conversation: context.conversation.clone(),
-            turn_id: context.turn_id.clone(),
-        };
-        let policy = self
-            .host
-            .voice_reply_policy(tinychannels_bus::HostVoiceReplyPolicyRequest { scope })
-            .await
-            .ok();
-        Ok(policy.is_some_and(|policy| policy_allows_speech(&policy)))
-    }
-
-    async fn send_parts_with_segment(
-        &self,
-        channel: &str,
-        parts: &[tinychannels_bus::OutboundContentPart],
-        text: &str,
-        context: Option<&ProgressiveOutputContext>,
-        sequence: u64,
-        segment_index: u32,
-    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
-    {
-        send_typed_part(
-            self,
-            TypedPartRequest {
-                channel,
-                parts,
-                text,
-                context,
-                sequence,
-                segment_index,
-                final_phase: false,
-            },
-        )
-        .await
-    }
-
-    async fn send_final_parts_with_segment(
-        &self,
-        channel: &str,
-        parts: &[tinychannels_bus::OutboundContentPart],
-        text: &str,
-        context: Option<&ProgressiveOutputContext>,
-        sequence: u64,
-        segment_index: u32,
-    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
-    {
-        send_typed_part(
-            self,
-            TypedPartRequest {
-                channel,
-                parts,
-                text,
-                context,
-                sequence,
-                segment_index,
-                final_phase: true,
-            },
-        )
-        .await
-    }
-
     async fn edit(
         &self,
         channel: &str,
@@ -314,12 +102,9 @@ impl ProgressiveSender for Sender {
     ) -> std::result::Result<(), ProgressiveSendError> {
         self.invoke(ProgressiveTransportRequest::Edit {
             channel: channel.into(),
-            turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
-            channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
-            conversation: self
-                .context
-                .as_ref()
-                .map(|context| context.conversation.clone()),
+            turn_id: None,
+            channel_ref: None,
+            conversation: None,
             message_id: message_id.into(),
             receipt: None,
             text: text.into(),
@@ -334,68 +119,11 @@ impl ProgressiveSender for Sender {
     ) -> std::result::Result<(), ProgressiveSendError> {
         self.invoke(ProgressiveTransportRequest::Delete {
             channel: channel.into(),
-            turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
-            channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
-            conversation: self
-                .context
-                .as_ref()
-                .map(|context| context.conversation.clone()),
+            turn_id: None,
+            channel_ref: None,
+            conversation: None,
             message_id: message_id.into(),
             receipt: None,
-        })
-        .await
-        .map(drop)
-    }
-
-    async fn edit_with_receipt(
-        &self,
-        channel: &str,
-        receipt: &tinychannels_bus::channel::MessageReceipt,
-        text: &str,
-    ) -> std::result::Result<(), ProgressiveSendError> {
-        let message_id = receipt
-            .primary_platform_message_id
-            .as_deref()
-            .ok_or_else(|| {
-                ProgressiveSendError::Other(anyhow::anyhow!("receipt has no primary message ID"))
-            })?;
-        self.invoke(ProgressiveTransportRequest::Edit {
-            channel: channel.into(),
-            turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
-            channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
-            conversation: self
-                .context
-                .as_ref()
-                .map(|context| context.conversation.clone()),
-            message_id: message_id.into(),
-            receipt: Some(receipt.clone()),
-            text: text.into(),
-        })
-        .await
-        .map(drop)
-    }
-
-    async fn delete_with_receipt(
-        &self,
-        channel: &str,
-        receipt: &tinychannels_bus::channel::MessageReceipt,
-    ) -> std::result::Result<(), ProgressiveSendError> {
-        let message_id = receipt
-            .primary_platform_message_id
-            .as_deref()
-            .ok_or_else(|| {
-                ProgressiveSendError::Other(anyhow::anyhow!("receipt has no primary message ID"))
-            })?;
-        self.invoke(ProgressiveTransportRequest::Delete {
-            channel: channel.into(),
-            turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
-            channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
-            conversation: self
-                .context
-                .as_ref()
-                .map(|context| context.conversation.clone()),
-            message_id: message_id.into(),
-            receipt: Some(receipt.clone()),
         })
         .await
         .map(drop)
@@ -403,371 +131,22 @@ impl ProgressiveSender for Sender {
     async fn typing(&self, channel: &str) -> std::result::Result<(), ProgressiveSendError> {
         self.invoke(ProgressiveTransportRequest::Typing {
             channel: channel.into(),
-            turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
-            channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
-            conversation: self
-                .context
-                .as_ref()
-                .map(|context| context.conversation.clone()),
+            turn_id: None,
+            channel_ref: None,
+            conversation: None,
         })
         .await
         .map(drop)
     }
 }
 
-struct TypedPartRequest<'a> {
-    channel: &'a str,
-    parts: &'a [tinychannels_bus::OutboundContentPart],
-    text: &'a str,
-    context: Option<&'a ProgressiveOutputContext>,
-    sequence: u64,
-    segment_index: u32,
-    final_phase: bool,
-}
-
-async fn send_typed_part(
-    sender: &Sender,
-    request: TypedPartRequest<'_>,
-) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
-    let TypedPartRequest {
-        channel,
-        parts,
-        text,
-        context,
-        sequence,
-        segment_index,
-        final_phase,
-    } = request;
-    let mut prepared_parts = parts.to_vec();
-    let mut prepared_text = text.to_owned();
-    if let Some(context) = context {
-        let synths = prepared_parts
-            .iter()
-            .filter_map(|part| match part {
-                tinychannels_bus::OutboundContentPart::Voice {
-                    voice: tinychannels_bus::OutboundVoice::Synthesize { text, voice },
-                } => Some((text.clone(), voice.clone())),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        if synths.len() > 1 {
-            return Err(ProgressiveSendError::UnsupportedContent);
-        }
-        let explicit_synthesis = !synths.is_empty();
-        let (requested_text, requested_voice) = synths
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| (prepared_text.clone(), None));
-        if (final_phase || explicit_synthesis)
-            && !requested_text.trim().is_empty()
-            && sender.capabilities.voice_out.synthesis
-        {
-            let scope = tinychannels_bus::HostVoiceScope {
-                configured_instance: configured_instance(context),
-                channel: context.channel.clone(),
-                conversation: context.conversation.clone(),
-                turn_id: context.turn_id.clone(),
-            };
-            let policy = sender
-                .host
-                .voice_reply_policy(tinychannels_bus::HostVoiceReplyPolicyRequest {
-                    scope: scope.clone(),
-                })
-                .await
-                .ok();
-            let should_speak = policy.as_ref().is_some_and(policy_allows_speech);
-            let had_synthesis = prepared_parts.iter().any(|part| {
-                matches!(
-                    part,
-                    tinychannels_bus::OutboundContentPart::Voice {
-                        voice: tinychannels_bus::OutboundVoice::Synthesize { .. }
-                    }
-                )
-            });
-            prepared_parts.retain(|part| {
-                !matches!(
-                    part,
-                    tinychannels_bus::OutboundContentPart::Voice {
-                        voice: tinychannels_bus::OutboundVoice::Synthesize { .. }
-                    }
-                )
-            });
-            if should_speak {
-                let instance = scope.configured_instance.clone();
-                let synthesizer = crate::provider::ModuleSynthesizer(
-                    sender.host.clone(),
-                    scope.configured_instance.clone(),
-                );
-                let codec = crate::provider::ModuleVoiceCodec(sender.host.clone());
-                let store = crate::provider::ModuleVoiceMediaStore(
-                    sender.host.clone(),
-                    instance,
-                    sender.media_account_scope.clone(),
-                );
-                let native_voice = sender.capabilities.voice_out.supported
-                    && !sender.capabilities.voice_out.accepted_codecs.is_empty();
-                let audio_codecs = sender
-                    .capabilities
-                    .content
-                    .audio
-                    .accepted_types
-                    .iter()
-                    .filter_map(|mime| match mime.as_str() {
-                        "audio/ogg" | "audio/opus" => Some("ogg_opus".to_owned()),
-                        "audio/mp4" => Some("m4a_aac".to_owned()),
-                        "audio/mpeg" => Some("mp3".to_owned()),
-                        "audio/wav" | "audio/wave" => Some("wav_pcm16".to_owned()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>();
-                let audio_file = !native_voice
-                    && sender.capabilities.content.audio.outbound
-                    && sender
-                        .capabilities
-                        .content
-                        .parts
-                        .iter()
-                        .any(|part| part == "audio")
-                    && !audio_codecs.is_empty();
-                // A link fallback is host-owned media and does not advertise
-                // provider codec support. Store one bounded WAV in that case.
-                let link_codec = ["wav_pcm16".to_owned()];
-                let accepted_codecs: &[String] = if native_voice {
-                    &sender.capabilities.voice_out.accepted_codecs
-                } else if audio_file {
-                    audio_codecs.as_slice()
-                } else {
-                    &link_codec
-                };
-                let (max_size_bytes, max_duration_ms) = if native_voice {
-                    (
-                        sender.capabilities.voice_out.max_size_bytes,
-                        sender.capabilities.voice_out.max_duration_ms,
-                    )
-                } else if audio_file {
-                    (
-                        sender.capabilities.content.audio.max_size_bytes,
-                        sender.capabilities.content.audio.max_duration_ms,
-                    )
-                } else {
-                    (Some(8 * 1024 * 1024), Some(5 * 60 * 1000))
-                };
-                match tinychannels::host::prepare_voice_reply(
-                    scope,
-                    requested_text.clone(),
-                    requested_voice,
-                    &synthesizer,
-                    &codec,
-                    &store,
-                    tinychannels::host::VoiceReplyConstraints {
-                        accepted_codecs,
-                        max_size_bytes,
-                        max_duration_ms,
-                    },
-                )
-                .await
-                {
-                    Ok(prepared) => {
-                        let note = prepared.note;
-                        if native_voice {
-                            prepared_parts.push(tinychannels_bus::OutboundContentPart::Voice {
-                                voice: tinychannels_bus::OutboundVoice::Media {
-                                    media: note.media,
-                                    audio_base64: None,
-                                    codec: note.codec,
-                                    duration_ms: note.duration_ms,
-                                    waveform: note.waveform,
-                                },
-                            });
-                        } else if audio_file {
-                            prepared_parts.push(tinychannels_bus::OutboundContentPart::Content {
-                                part: tinychannels_bus::ContentPart::Audio {
-                                    media: note.media,
-                                    codec: note.codec,
-                                    duration_ms: note.duration_ms,
-                                    title: None,
-                                    transcript: Some(requested_text.clone()),
-                                },
-                            });
-                        } else if let Some(url) =
-                            prepared.accessible_url.filter(|url| !url.trim().is_empty())
-                        {
-                            prepared_text.push('\n');
-                            prepared_text.push_str(&url);
-                        } else {
-                            prepared_text.push_str(
-                                "\n\nAudio could not be attached; here is the text response.",
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        let detail = error.to_string();
-                        let kind = if detail.contains("duration limit") {
-                            prepared_text.push_str(
-                                "\n\nAudio reply was too long to send; here is the text response.",
-                            );
-                            "duration_limit"
-                        } else if detail.contains("size limit") {
-                            prepared_text.push_str(
-                                "\n\nAudio reply exceeded the channel size limit; here is the text response.",
-                            );
-                            "size_limit"
-                        } else {
-                            "unavailable"
-                        };
-                        tracing::warn!(channel = %sender.channel, kind, "shared voice preparation unavailable");
-                        if prepared_text.trim().is_empty() {
-                            prepared_text = requested_text;
-                        }
-                    }
-                }
-            } else if had_synthesis {
-                // The model explicitly requested speech, but host policy denied it.
-                if prepared_text.trim().is_empty() {
-                    prepared_text = requested_text;
-                }
-            }
-            if prepared_text != text {
-                let suffix = prepared_text.strip_prefix(text).unwrap_or(&prepared_text);
-                if let Some(text_part) = prepared_parts.iter_mut().rev().find_map(|part| match part
-                {
-                    tinychannels_bus::OutboundContentPart::Content {
-                        part: tinychannels_bus::ContentPart::Text { text, .. },
-                    } => Some(text),
-                    _ => None,
-                }) {
-                    text_part.push_str(suffix);
-                } else if !prepared_text.trim().is_empty() {
-                    prepared_parts.push(tinychannels_bus::OutboundContentPart::Content {
-                        part: tinychannels_bus::ContentPart::Text {
-                            text: prepared_text.clone(),
-                            markdown_dialect: None,
-                        },
-                    });
-                }
-            }
-        }
-    }
-    let idempotency_key = context.map(|context| {
-        let scope = serde_json::to_vec(&(
-            &context.turn_id,
-            &context.channel,
-            &context.conversation,
-            sequence,
-            segment_index,
-            "provider_send",
-        ))
-        .expect("scoped channel identity serializes");
-        hex::encode(Sha256::digest(scope))
-    });
-    match sender
-        .host
-        .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(
-            ProgressiveTransportRequest::SendTyped {
-                channel: channel.into(),
-                turn_id: context.map(|context| context.turn_id.clone()),
-                channel_ref: context.map(|context| context.channel.clone()),
-                conversation: context.map(|context| context.conversation.clone()),
-                sequence: context.map(|_| sequence),
-                segment_index: context.map(|_| segment_index),
-                idempotency_key: idempotency_key.clone(),
-                parts: prepared_parts,
-                text: prepared_text,
-            },
-        )))
-        .await
-        .map_err(|_| {
-            let outcome = tinychannels_bus::channel::ChannelSendOutcome {
-                error: Some(tinychannels_bus::channel::ChannelSendError {
-                    kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                    message: "typed progressive callback failed after an unknown side effect"
-                        .into(),
-                    sent_before_error: true,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            };
-            ProgressiveSendError::PartialOutcome(Box::new(outcome))
-        })? {
-        ChannelBackendResult::ProgressiveTransport(result) => match *result {
-            ProgressiveTransportResult::Outcome(outcome) => {
-                let empty = outcome.error.is_none()
-                    && outcome.receipt.primary_platform_message_id.is_none()
-                    && outcome.receipt.platform_message_ids.is_empty()
-                    && outcome.receipt.parts.is_empty();
-                if sender.hosted && empty {
-                    Err(ProgressiveSendError::Other(anyhow::anyhow!(
-                        "hosted receiptless delivery requires explicit acceptance"
-                    )))
-                } else {
-                    Ok(*outcome)
-                }
-            }
-            ProgressiveTransportResult::Accepted if sender.hosted => {
-                let Some(context) = context else {
-                    return Err(ProgressiveSendError::Other(anyhow::anyhow!(
-                        "hosted acceptance has no scoped identity"
-                    )));
-                };
-                let Some(idempotency_key) = idempotency_key else {
-                    return Err(ProgressiveSendError::Other(anyhow::anyhow!(
-                        "hosted acceptance has no idempotency identity"
-                    )));
-                };
-                Ok(tinychannels_bus::channel::ChannelSendOutcome {
-                    receipt: tinychannels_bus::channel::MessageReceipt {
-                        idempotency_key: Some(idempotency_key),
-                        channel: Some(context.channel.clone()),
-                        conversation: Some(context.conversation.clone()),
-                        thread_id: context.conversation.thread_id.clone(),
-                        ..Default::default()
-                    },
-                    error: None,
-                })
-            }
-            ProgressiveTransportResult::Accepted => Err(ProgressiveSendError::Other(
-                anyhow::anyhow!("receiptless acceptance is only valid for hosted sends"),
-            )),
-            ProgressiveTransportResult::Unavailable => Err(ProgressiveSendError::Unavailable),
-            ProgressiveTransportResult::Failed => Err(ProgressiveSendError::Other(
-                anyhow::anyhow!("typed provider send failed with unknown outcome"),
-            )),
-            ProgressiveTransportResult::UnsupportedContent => {
-                Err(ProgressiveSendError::UnsupportedContent)
-            }
-            _ => {
-                let outcome = tinychannels_bus::channel::ChannelSendOutcome {
-                    error: Some(tinychannels_bus::channel::ChannelSendError {
-                        kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                        message: "typed progressive callback returned an invalid acknowledgement"
-                            .into(),
-                        sent_before_error: true,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                };
-                Err(ProgressiveSendError::PartialOutcome(Box::new(outcome)))
-            }
-        },
-        _ => Err(ProgressiveSendError::Other(anyhow::anyhow!(
-            "typed provider send failed with unknown outcome"
-        ))),
-    }
-}
-
-fn configured_instance(context: &ProgressiveOutputContext) -> String {
-    context.channel.account_id.clone().unwrap_or_default()
-}
-
 enum Command {
-    Feed(
-        Vec<ChannelOutputEvent>,
-        bool,
-        Option<[u8; 32]>,
+    Feed(Vec<ProgressiveEvent>, oneshot::Sender<Result<()>>),
+    FeedOutput(
+        Vec<tinychannels_bus::module_progressive::ChannelOutputEvent>,
         oneshot::Sender<Result<ProgressiveResult>>,
     ),
     Finish(String, oneshot::Sender<()>),
-    Abort(oneshot::Sender<()>),
 }
 
 struct Closing {
@@ -779,12 +158,20 @@ struct Entry {
     commands: mpsc::Sender<Command>,
     worker: Mutex<Option<JoinHandle<()>>>,
     closing: Mutex<Option<Closing>>,
-    terminal_feed: Arc<Mutex<Option<TerminalMemo>>>,
 }
-struct TerminalMemo {
-    fingerprint: [u8; 32],
-    result: Option<std::result::Result<ProgressiveResult, String>>,
-    notify: watch::Sender<Option<std::result::Result<ProgressiveResult, String>>>,
+
+enum OutputTarget {
+    Legacy,
+    Hosted(OutputScope),
+    Adapter(OutputScope, BuiltChannel),
+}
+
+#[derive(Clone)]
+struct OutputScope {
+    channel: tinychannels_bus::ChannelRef,
+    conversation: tinychannels_bus::ConversationRef,
+    turn_id: String,
+    lifetime: Duration,
 }
 struct State {
     terminal: bool,
@@ -825,8 +212,24 @@ impl Replies {
                 turn_id,
                 lifetime_ms,
             } => {
-                self.open_output(channel, conversation, turn_id, lifetime_ms, false)
-                    .await
+                let scope = output_scope(channel, conversation, turn_id, lifetime_ms)?;
+                let provider_id = tinychannels_bus::provider_id(&scope.channel.id);
+                let built = {
+                    let running = self.running.lock().await;
+                    scope
+                        .channel
+                        .account_id
+                        .as_deref()
+                        .and_then(|id| running.get(id))
+                        .or_else(|| running.get(provider_id))
+                        .map(|provider| provider.channel.clone())
+                }
+                .ok_or_else(|| Error::failed("configured channel adapter is unavailable"))?;
+                self.open_target(
+                    scope.channel.id.clone(),
+                    OutputTarget::Adapter(scope, built),
+                )
+                .await
             }
             ProgressiveCommand::OpenHostedOutput {
                 channel,
@@ -834,15 +237,48 @@ impl Replies {
                 turn_id,
                 lifetime_ms,
             } => {
-                self.open_output(channel, conversation, turn_id, lifetime_ms, true)
+                let scope = output_scope(channel, conversation, turn_id, lifetime_ms)?;
+                self.open_target(scope.channel.id.clone(), OutputTarget::Hosted(scope))
                     .await
             }
             ProgressiveCommand::Feed { handle, events } => {
-                let events = events.into_iter().map(compat_event).collect();
-                self.feed(handle, events, false).await
+                if events.len() > 32 {
+                    return Err(Error::failed("too many progressive events"));
+                }
+                let entry = self.entry(&handle).await?;
+                let closing = entry.closing.lock().await;
+                if closing.is_some() {
+                    return Err(Error::failed("progressive reply is closed"));
+                }
+                let (reply, wait) = oneshot::channel();
+                entry
+                    .commands
+                    .send(Command::Feed(events, reply))
+                    .await
+                    .map_err(|_| Error::failed("progressive reply is closed"))?;
+                drop(closing);
+                wait.await
+                    .map_err(|_| Error::failed("progressive worker stopped"))??;
+                Ok(ProgressiveResult::Updated)
             }
             ProgressiveCommand::FeedOutput { handle, events } => {
-                self.feed(handle, events, true).await
+                if events.len() > 32 {
+                    return Err(Error::failed("too many progressive output events"));
+                }
+                let entry = self.entry(&handle).await?;
+                let closing = entry.closing.lock().await;
+                if closing.is_some() {
+                    return Err(Error::failed("progressive reply is closed"));
+                }
+                let (reply, wait) = oneshot::channel();
+                entry
+                    .commands
+                    .send(Command::FeedOutput(events, reply))
+                    .await
+                    .map_err(|_| Error::failed("progressive reply is closed"))?;
+                drop(closing);
+                wait.await
+                    .map_err(|_| Error::failed("progressive worker stopped"))?
             }
             ProgressiveCommand::Finish { handle, text } => {
                 if text.len() > MAX_CONTENT {
@@ -855,146 +291,11 @@ impl Replies {
             ProgressiveCommand::Close { handle } => {
                 let entry = self.state.lock().await.entries.get(&handle).cloned();
                 if let Some(entry) = entry {
-                    abort_entry(entry).await?;
+                    close_entry(entry, "Cancelled.".into(), true).await?;
                 }
                 Ok(ProgressiveResult::Closed)
             }
         }
-    }
-
-    async fn feed(
-        &self,
-        handle: String,
-        events: Vec<ChannelOutputEvent>,
-        forward: bool,
-    ) -> Result<ProgressiveResult> {
-        if events.len() > 32 {
-            return Err(Error::failed("too many progressive events"));
-        }
-        let terminal_positions = events
-            .iter()
-            .enumerate()
-            .filter_map(|(index, event)| {
-                matches!(
-                    event,
-                    ChannelOutputEvent::FinalMessage { .. }
-                        | ChannelOutputEvent::Cancellation { .. }
-                )
-                .then_some(index)
-            })
-            .collect::<Vec<_>>();
-        if terminal_positions.len() > 1
-            || terminal_positions
-                .first()
-                .is_some_and(|position| *position + 1 != events.len())
-        {
-            return Err(Error::failed(
-                "terminal progressive event must be unique and last",
-            ));
-        }
-        let entry = self.entry(&handle).await?;
-        let terminal = events.iter().any(|event| {
-            matches!(
-                event,
-                ChannelOutputEvent::FinalMessage { .. } | ChannelOutputEvent::Cancellation { .. }
-            )
-        });
-        let fingerprint = if terminal {
-            Some(
-                Sha256::digest(
-                    serde_json::to_vec(&events)
-                        .map_err(|_| Error::failed("terminal event could not be encoded"))?,
-                )
-                .into(),
-            )
-        } else {
-            None
-        };
-        if let Some(fingerprint) = fingerprint {
-            let wait = {
-                let mut memo = entry.terminal_feed.lock().await;
-                match memo.as_mut() {
-                    Some(memo) if memo.fingerprint != fingerprint => {
-                        return Err(Error::failed("progressive terminal content differs"));
-                    }
-                    Some(memo) => {
-                        if let Some(result) = memo.result.clone() {
-                            return result.map_err(Error::failed);
-                        }
-                        Some(memo.notify.subscribe())
-                    }
-                    None => {
-                        let (notify, _) = watch::channel(None);
-                        *memo = Some(TerminalMemo {
-                            fingerprint,
-                            result: None,
-                            notify,
-                        });
-                        None
-                    }
-                }
-            };
-            if let Some(mut wait) = wait {
-                loop {
-                    if let Some(result) = wait.borrow().clone() {
-                        return result.map_err(Error::failed);
-                    }
-                    if wait.changed().await.is_err() {
-                        return Err(Error::failed("progressive terminal result was lost"));
-                    }
-                }
-            }
-        } else if entry.terminal_feed.lock().await.is_some() {
-            return Err(Error::failed("progressive reply is terminal"));
-        }
-        let (reply, wait) = oneshot::channel();
-        if let Some(fingerprint) = fingerprint {
-            let retained = entry.clone();
-            let (owner_tx, owner_rx) = oneshot::channel();
-            tokio::spawn(async move {
-                let result = async {
-                    let closing = retained.closing.lock().await;
-                    if closing.is_some() {
-                        return Err(Error::failed("progressive reply is closed"));
-                    }
-                    if retained
-                        .commands
-                        .send(Command::Feed(events, forward, Some(fingerprint), reply))
-                        .await
-                        .is_err()
-                    {
-                        drop(closing);
-                        return Err(Error::failed("progressive reply is closed"));
-                    }
-                    drop(closing);
-                    wait.await
-                        .map_err(|_| Error::failed("progressive worker stopped"))?
-                }
-                .await;
-                record_terminal(&retained.terminal_feed, Some(fingerprint), &result).await;
-                let _ = owner_tx.send(result);
-            });
-            // The spawned owner continues admission and delivery even if this caller disconnects.
-            // Identical retries observe the retained watch result rather than sending again.
-            return owner_rx
-                .await
-                .map_err(|_| Error::failed("terminal delivery owner stopped"))?;
-        }
-        let closing = entry.closing.lock().await;
-        if closing.is_some() {
-            return Err(Error::failed("progressive reply is closed"));
-        }
-        if entry
-            .commands
-            .send(Command::Feed(events, forward, None, reply))
-            .await
-            .is_err()
-        {
-            return Err(Error::failed("progressive reply is closed"));
-        }
-        drop(closing);
-        wait.await
-            .map_err(|_| Error::failed("progressive worker stopped"))?
     }
 
     async fn entry(&self, handle: &str) -> Result<Arc<Entry>> {
@@ -1010,107 +311,28 @@ impl Replies {
     }
 
     async fn open(&self, channel: String) -> Result<ProgressiveResult> {
-        self.open_inner(channel, None, LEGACY_TURN_LIFETIME, false)
-            .await
+        self.open_target(channel, OutputTarget::Legacy).await
     }
 
-    async fn open_output(
-        &self,
-        channel: tinychannels_bus::ChannelRef,
-        conversation: tinychannels_bus::ConversationRef,
-        turn_id: String,
-        lifetime_ms: u64,
-        hosted: bool,
-    ) -> Result<ProgressiveResult> {
-        if channel.id.is_empty()
-            || (hosted
-                && channel
-                    .account_id
-                    .as_deref()
-                    .is_none_or(|account| account.trim().is_empty()))
-            || conversation.id.is_empty()
-            || turn_id.is_empty()
-            || lifetime_ms == 0
-            || channel.id.len() > 4096
-            || conversation.id.len() > 4096
-            || turn_id.len() > 256
-        {
-            return Err(Error::failed("invalid scoped progressive target"));
-        }
-        let lifetime = Duration::from_millis(lifetime_ms);
-        tokio::time::Instant::now()
-            .checked_add(lifetime)
-            .ok_or_else(|| Error::failed("scoped progressive lease is out of range"))?;
-        let route = format!("{}:{}", channel.id, conversation.id);
-        self.open_inner(
-            route,
-            Some(ProgressiveOutputContext {
-                turn_id,
-                channel,
-                conversation,
-            }),
-            lifetime,
-            hosted,
-        )
-        .await
-    }
-
-    async fn open_inner(
+    async fn open_target(
         &self,
         channel: String,
-        context: Option<ProgressiveOutputContext>,
-        lifetime: Duration,
-        hosted: bool,
+        target: OutputTarget,
     ) -> Result<ProgressiveResult> {
         if channel.is_empty() || channel.len() > 4096 {
             return Err(Error::failed("invalid progressive target"));
         }
         let provider_id = tinychannels_bus::provider_id(&channel);
-        let running = self.running.lock().await;
-        let (capabilities, media_account_scope) = if hosted {
-            // Hosted output is authorized by this object's captured callback,
-            // not by a model- or caller-supplied provider capability claim.
-            // Keep the engine conservative; the host still validates the full
-            // scoped address before it emits any delivery effect.
-            (
-                tinychannels_bus::ChannelCapabilities::unknown(),
-                crate::provider::MediaScope::default(),
-            )
-        } else if let Some(context) = context.as_ref() {
-            let configured_instance = context
-                .channel
-                .account_id
-                .as_deref()
-                .unwrap_or(&context.channel.id);
-            if tinychannels_bus::provider_id(configured_instance) != context.channel.id {
-                return Err(Error::failed(
-                    "scoped channel identity does not match its configured account",
-                ));
-            }
-            let provider = running
-                .get(configured_instance)
-                .ok_or_else(|| Error::failed("scoped channel instance is not configured"))?;
-            (
-                provider.declared_capabilities(),
-                provider.media_account_scope.clone(),
-            )
-        } else {
-            running.get(provider_id).map_or_else(
-                || {
-                    (
-                        tinychannels_bus::ChannelCapabilities::unknown(),
-                        crate::provider::MediaScope::default(),
-                    )
-                },
-                |provider| {
-                    (
-                        provider.declared_capabilities(),
-                        provider.media_account_scope.clone(),
-                    )
-                },
-            )
+        let capabilities = match &target {
+            OutputTarget::Adapter(_, built) => built.capabilities(),
+            _ => self
+                .running
+                .lock()
+                .await
+                .get(provider_id)
+                .map(|provider| provider.channel.capabilities())
+                .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown),
         };
-        drop(running);
         let mut state = self.state.lock().await;
         if state.terminal {
             return Err(Error::failed("progressive replies are shutting down"));
@@ -1150,18 +372,23 @@ impl Replies {
         let handle = uuid::Uuid::new_v4().simple().to_string();
         let (commands, inbox) = mpsc::channel(16);
         let host = self.host.clone();
-        let terminal_feed = Arc::new(Mutex::new(None));
+        let lifetime = match &target {
+            OutputTarget::Legacy => TURN_LIFETIME,
+            OutputTarget::Hosted(scope) | OutputTarget::Adapter(scope, _) => scope.lifetime,
+        };
+        let worker_target = match &target {
+            OutputTarget::Legacy => WorkerTarget::Legacy,
+            OutputTarget::Hosted(scope) => WorkerTarget::Hosted(scope.clone()),
+            OutputTarget::Adapter(scope, built) => {
+                WorkerTarget::Adapter(scope.clone(), built.clone())
+            }
+        };
         let worker = tokio::spawn(run(
             host,
-            ProgressiveTarget {
-                channel,
-                media_account_scope,
-                hosted,
-            },
+            channel,
             capabilities,
-            context,
+            worker_target,
             lifetime,
-            terminal_feed.clone(),
             inbox,
         ));
         state.entries.insert(
@@ -1170,7 +397,6 @@ impl Replies {
                 commands,
                 worker: Mutex::new(Some(worker)),
                 closing: Mutex::new(None),
-                terminal_feed,
             }),
         );
         Ok(ProgressiveResult::Opened { handle })
@@ -1187,7 +413,7 @@ impl Replies {
         // delivery must not prevent unrelated reply workers from draining.
         let mut closes = tokio::task::JoinSet::new();
         for entry in entries {
-            closes.spawn(abort_entry(entry));
+            closes.spawn(close_entry(entry, "Cancelled.".into(), true));
         }
         let mut failure = None;
         while let Some(result) = closes.join_next().await {
@@ -1204,40 +430,6 @@ impl Replies {
         }
         self.state.lock().await.entries.clear();
         Ok(())
-    }
-}
-
-fn compat_event(
-    event: tinychannels_bus::module_progressive::ProgressiveEvent,
-) -> ChannelOutputEvent {
-    use tinychannels_bus::module_progressive::ProgressiveEvent as Legacy;
-    match event {
-        Legacy::TextDelta(text) => ChannelOutputEvent::TextDelta {
-            text,
-            iteration: None,
-        },
-        Legacy::ThinkingDelta(text) => ChannelOutputEvent::ThinkingDelta {
-            text,
-            iteration: None,
-        },
-        Legacy::ToolCall(tool_name) => ChannelOutputEvent::ToolProgress {
-            label: tool_name,
-            message: None,
-        },
-        Legacy::ToolResult { tool_name, success } => ChannelOutputEvent::ToolCallCompleted {
-            call_id: String::new(),
-            tool_name,
-            success,
-            output_chars: 0,
-            output: String::new(),
-            arguments: None,
-            elapsed_ms: 0,
-            iteration: 0,
-            failure: None,
-            display_label: None,
-            display_detail: None,
-            structured: None,
-        },
     }
 }
 
@@ -1293,93 +485,50 @@ async fn close_entry(entry: Arc<Entry>, text: String, retain_existing: bool) -> 
         .map_err(|_| Error::failed("progressive cleanup failed"))
 }
 
-async fn abort_entry(entry: Arc<Entry>) -> Result<()> {
-    let fingerprint: [u8; 32] = Sha256::digest(b"abort").into();
-    let mut closing = entry.closing.lock().await;
-    if closing.is_none() {
-        let retained = entry.clone();
-        let task = tokio::spawn(async move {
-            let (reply, wait) = oneshot::channel();
-            if retained.commands.send(Command::Abort(reply)).await.is_ok() {
-                let _ = wait.await;
-            }
-            if let Some(worker) = retained.worker.lock().await.take() {
-                worker
-                    .await
-                    .map_err(|_| "progressive worker failed".to_string())?;
-            }
-            Ok(())
-        });
-        *closing = Some(Closing {
-            fingerprint,
-            task: Some(task),
-            outcome: None,
-        });
-    }
-    let closing = closing.as_mut().expect("abort work was installed");
-    if closing.outcome.is_none() {
-        let task = closing
-            .task
-            .as_mut()
-            .expect("unfinished abort task is retained");
-        let result = tokio::time::timeout(Duration::from_secs(10), task)
-            .await
-            .map_err(|_| Error::failed("progressive cleanup is pending"))?
-            .map_err(|_| Error::failed("progressive cleanup worker failed"))?;
-        closing.outcome = Some(result);
-        closing.task = None;
-    }
-    closing
-        .outcome
-        .clone()
-        .expect("abort result was retained")
-        .map_err(|_| Error::failed("progressive cleanup failed"))
+enum WorkerTarget {
+    Legacy,
+    Hosted(OutputScope),
+    Adapter(OutputScope, BuiltChannel),
 }
 
 async fn run(
     host: HostChannels,
-    target: ProgressiveTarget,
+    channel: String,
     capabilities: tinychannels_bus::ChannelCapabilities,
-    context: Option<ProgressiveOutputContext>,
+    target: WorkerTarget,
     lifetime: Duration,
-    terminal_feed: Arc<Mutex<Option<TerminalMemo>>>,
     mut inbox: mpsc::Receiver<Command>,
 ) {
-    let ProgressiveTarget {
-        channel,
-        media_account_scope,
-        hosted,
-    } = target;
-    let mut reply = if let Some(context) = context {
-        let sender = Arc::new(Sender {
-            host,
-            media_account_scope: media_account_scope.clone(),
-            context: Some(context.clone()),
-            capabilities: capabilities.clone(),
-            channel: channel.clone(),
-            hosted,
-            send_sequence: std::sync::atomic::AtomicU64::new(0),
-        });
-        if hosted {
-            ProgressiveReply::new_hosted_scoped(sender, channel, capabilities, context)
-        } else {
-            ProgressiveReply::new_scoped(sender, channel, capabilities, context)
-        }
-    } else {
-        ProgressiveReply::new(
-            Arc::new(Sender {
-                host,
-                media_account_scope,
-                context: None,
-                capabilities: capabilities.clone(),
-                channel: channel.clone(),
-                hosted,
-                send_sequence: std::sync::atomic::AtomicU64::new(0),
-            }),
-            channel,
-            capabilities,
-        )
+    let (sender, context, hosted) = match &target {
+        WorkerTarget::Legacy => (
+            Arc::new(Sender(host.clone())) as Arc<dyn ProgressiveSender>,
+            None,
+            false,
+        ),
+        WorkerTarget::Hosted(scope) => (
+            Arc::new(Sender(host.clone())) as Arc<dyn ProgressiveSender>,
+            Some(output_context(scope)),
+            true,
+        ),
+        WorkerTarget::Adapter(scope, built) => (
+            Arc::new(AdapterSender {
+                built: built.clone(),
+                scope: scope.clone(),
+            }) as Arc<dyn ProgressiveSender>,
+            Some(output_context(scope)),
+            false,
+        ),
     };
+    let mut reply = match context {
+        Some(context) if hosted => {
+            ProgressiveReply::new_hosted_scoped(sender, channel.clone(), capabilities, context)
+        }
+        Some(context) => {
+            ProgressiveReply::new_scoped(sender, channel.clone(), capabilities, context)
+        }
+        None => ProgressiveReply::new(sender, channel.clone(), capabilities),
+    };
+    let next_sequence = AtomicU64::new(0);
     let mut edits = tokio::time::interval(EDIT_FLUSH_INTERVAL);
     let mut typing = tokio::time::interval(TYPING_REFRESH_INTERVAL);
     let mut fillers = tokio::time::interval(FILLER_INTERVAL);
@@ -1393,127 +542,343 @@ async fn run(
     loop {
         tokio::select! {
             command = inbox.recv() => match command {
-                Some(Command::Feed(events, forward, fingerprint, response)) => {
-                    let processing = async {
-                        let cancellation = events
-                            .iter()
-                            .any(|event| matches!(event, ChannelOutputEvent::Cancellation { .. }));
-                        let final_message = events.iter().find_map(|event| {
-                            matches!(event, ChannelOutputEvent::FinalMessage { .. })
-                                .then(|| event.clone())
-                        });
-                        let mut result = apply(&mut reply, events, forward).await;
-                        let mut terminal = false;
-                        if result.is_err() {
-                            reply.abort().await;
-                            terminal = true;
-                        } else if cancellation {
-                            reply.abort().await;
-                            if matches!(result, Ok(ProgressiveResult::Updated)) {
-                                result = Ok(ProgressiveResult::Closed);
-                            }
-                            terminal = true;
-                        } else if delivery_has_failure(&result) {
-                            reply.abort().await;
-                            terminal = true;
-                        } else if let Some(
-                            ref final_event @ ChannelOutputEvent::FinalMessage { ref text, .. },
-                        ) = final_message
-                        {
-                            let mut dispatch = match &result {
-                                Ok(result) => ProgressiveOutputDispatch::from_result(result),
-                                Err(_) => ProgressiveOutputDispatch::default(),
-                            };
-                            if forward {
-                                match reply.finalize_output_event(final_event).await {
-                                    Ok(final_dispatch) => dispatch.absorb(final_dispatch),
-                                    Err(error) => {
-                                        reply.abort().await;
-                                        absorb_progressive_error(&mut dispatch, error);
-                                    }
-                                }
-                                result = Ok(dispatch.into_result());
-                            } else {
-                                reply.finalize(text).await;
-                                result = Ok(ProgressiveResult::Closed);
-                            }
-                            terminal = true;
-                        }
-                        (result, terminal)
+                Some(Command::Feed(events, response)) => {
+                    let result = apply(&mut reply, events);
+                    let _ = response.send(result);
+                }
+                Some(Command::FeedOutput(events, response)) => {
+                    let result = match &target {
+                        WorkerTarget::Hosted(scope) => feed_output(&host, &channel, Some(scope), &next_sequence, events).await,
+                        WorkerTarget::Adapter(_, _) => feed_adapter_output(&mut reply, events).await,
+                        WorkerTarget::Legacy => Err(Error::failed("canonical output requires an opened output scope")),
                     };
-                    tokio::select! {
-                        (result, terminal) = processing => {
-                            if terminal {
-                                record_terminal(&terminal_feed, fingerprint, &result).await;
-                                let _ = response.send(result);
-                                break;
-                            }
-                            let _ = response.send(result);
-                        }
-                        _ = &mut expiry => {
-                            reply.abort().await;
-                            let result = Err(Error::failed("progressive reply lease expired"));
-                            record_terminal(&terminal_feed, fingerprint, &result).await;
-                            let _ = response.send(result);
-                            break;
-                        }
-                    }
+                    let _ = response.send(result);
                 }
                 Some(Command::Finish(text, response)) => {
                     reply.finalize(&text).await;
                     let _ = response.send(());
                     break;
                 }
-                Some(Command::Abort(response)) => {
-                    reply.abort().await;
-                    let _ = response.send(());
-                    break;
-                }
-                None => { reply.abort().await; break; }
+                None => { reply.finalize("Cancelled.").await; break; }
             },
             _ = edits.tick() => reply.edit_tick().await,
             _ = typing.tick() => reply.typing_tick().await,
             _ = fillers.tick() => reply.filler_tick().await,
-            _ = &mut expiry => { reply.abort().await; break; }
+            _ = &mut expiry => { reply.finalize("Sorry, the request timed out.").await; break; }
         }
     }
 }
 
-async fn record_terminal(
-    terminal_feed: &Mutex<Option<TerminalMemo>>,
-    fingerprint: Option<[u8; 32]>,
-    result: &Result<ProgressiveResult>,
-) {
-    let Some(fingerprint) = fingerprint else {
-        return;
-    };
-    let mut memo = terminal_feed.lock().await;
-    if let Some(memo) = memo.as_mut().filter(|memo| memo.fingerprint == fingerprint) {
-        let result = match result {
-            Ok(value) => Ok(value.clone()),
-            Err(error) => Err(error.to_string()),
-        };
-        memo.result = Some(result.clone());
-        memo.notify.send_replace(Some(result));
+fn output_context(scope: &OutputScope) -> ProgressiveOutputContext {
+    ProgressiveOutputContext {
+        turn_id: scope.turn_id.clone(),
+        channel: scope.channel.clone(),
+        conversation: scope.conversation.clone(),
     }
 }
 
-async fn apply(
+async fn feed_adapter_output(
     reply: &mut ProgressiveReply,
-    events: Vec<ChannelOutputEvent>,
-    forward: bool,
+    events: Vec<tinychannels_bus::module_progressive::ChannelOutputEvent>,
 ) -> Result<ProgressiveResult> {
+    let mut dispatch = tinychannels::delivery::progressive::ProgressiveOutputDispatch::default();
+    for event in events {
+        let current = if matches!(
+            event,
+            tinychannels_bus::module_progressive::ChannelOutputEvent::FinalMessage { .. }
+        ) {
+            reply.finalize_output_event(&event).await
+        } else {
+            reply.apply_output_event(&event, true).await
+        }
+        .map_err(|error| Error::failed(error.to_string()))?;
+        dispatch.outcomes.extend(current.outcomes);
+        dispatch.unsupported.extend(current.unsupported);
+        dispatch.failure = dispatch.failure.or(current.failure);
+    }
+    Ok(dispatch.into_result())
+}
+
+struct AdapterSender {
+    built: BuiltChannel,
+    scope: OutputScope,
+}
+
+impl AdapterSender {
+    fn intent(&self, text: &str, key: String) -> tinychannels_bus::ChannelOutboundIntent {
+        tinychannels_bus::ChannelOutboundIntent {
+            idempotency_key: key,
+            channel_id: self.scope.channel.id.clone(),
+            conversation_id: self.scope.conversation.id.clone(),
+            channel_ref: Some(self.scope.channel.clone()),
+            conversation_ref: Some(self.scope.conversation.clone()),
+            turn_id: Some(self.scope.turn_id.clone()),
+            payload: tinychannels_bus::OutboundPayload::Text {
+                text: text.to_owned(),
+            },
+            ..Default::default()
+        }
+    }
+
+    async fn send_parts_inner(
+        &self,
+        parts: &[tinychannels_bus::OutboundContentPart],
+        text: &str,
+        sequence: u64,
+        segment: u32,
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
+    {
+        let mut intent = self.intent(
+            text,
+            format!("{}:{}:{}", self.scope.turn_id, sequence, segment),
+        );
+        intent.payload = tinychannels_bus::OutboundPayload::NativeChannelData {
+            data: serde_json::json!({"parts": parts}),
+        };
+        let mut message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
+        message.parts = parts.to_vec();
+        self.built
+            .adapter()
+            .send_typed(&message)
+            .await
+            .map_err(map_send_error)
+    }
+}
+
+fn map_send_error(error: tinychannels::channel::ChannelSendError) -> ProgressiveSendError {
+    if error.is_unsupported() {
+        ProgressiveSendError::UnsupportedContent
+    } else if error.retryable {
+        ProgressiveSendError::Unavailable
+    } else {
+        ProgressiveSendError::Other(anyhow::anyhow!(error.message))
+    }
+}
+
+#[async_trait]
+impl ProgressiveSender for AdapterSender {
+    async fn send(
+        &self,
+        _channel: &str,
+        text: &str,
+    ) -> std::result::Result<Value, ProgressiveSendError> {
+        let outcome = self
+            .send_parts_inner(
+                &[tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text: text.to_owned(),
+                        markdown_dialect: None,
+                    },
+                }],
+                text,
+                0,
+                0,
+            )
+            .await?;
+        if outcome.error.is_some() {
+            return Err(ProgressiveSendError::PartialOutcome(Box::new(outcome)));
+        }
+        serde_json::to_value(outcome)
+            .map_err(|error| ProgressiveSendError::Other(anyhow::anyhow!(error)))
+    }
+
+    async fn send_parts(
+        &self,
+        _channel: &str,
+        parts: &[tinychannels_bus::OutboundContentPart],
+        text: &str,
+        _context: Option<&ProgressiveOutputContext>,
+        sequence: u64,
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
+    {
+        self.send_parts_inner(parts, text, sequence, 0).await
+    }
+
+    async fn send_parts_with_segment(
+        &self,
+        _channel: &str,
+        parts: &[tinychannels_bus::OutboundContentPart],
+        text: &str,
+        _context: Option<&ProgressiveOutputContext>,
+        sequence: u64,
+        segment_index: u32,
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
+    {
+        self.send_parts_inner(parts, text, sequence, segment_index)
+            .await
+    }
+
+    async fn edit(
+        &self,
+        _channel: &str,
+        message_id: &str,
+        text: &str,
+    ) -> std::result::Result<(), ProgressiveSendError> {
+        let receipt = tinychannels_bus::channel::MessageReceipt {
+            primary_platform_message_id: Some(message_id.into()),
+            ..Default::default()
+        };
+        self.edit_with_receipt("", &receipt, text).await
+    }
+
+    async fn edit_with_receipt(
+        &self,
+        _channel: &str,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+        text: &str,
+    ) -> std::result::Result<(), ProgressiveSendError> {
+        let edit = self
+            .built
+            .edit()
+            .ok_or(ProgressiveSendError::EditUnsupported)?;
+        let intent = self.intent(text, format!("{}:edit", self.scope.turn_id));
+        edit.edit(receipt, intent)
+            .await
+            .map(|_| ())
+            .map_err(map_send_error)
+    }
+
+    async fn delete(
+        &self,
+        _channel: &str,
+        _message_id: &str,
+    ) -> std::result::Result<(), ProgressiveSendError> {
+        Err(ProgressiveSendError::EditUnsupported)
+    }
+
+    async fn typing(&self, _channel: &str) -> std::result::Result<(), ProgressiveSendError> {
+        Ok(())
+    }
+}
+
+fn output_scope(
+    channel: tinychannels_bus::ChannelRef,
+    conversation: tinychannels_bus::ConversationRef,
+    turn_id: String,
+    lifetime_ms: u64,
+) -> Result<OutputScope> {
+    if channel.id.trim().is_empty()
+        || conversation.id.trim().is_empty()
+        || turn_id.trim().is_empty()
+        || lifetime_ms == 0
+        || lifetime_ms > TURN_LIFETIME.as_millis() as u64
+    {
+        return Err(Error::failed("invalid progressive output scope"));
+    }
+    Ok(OutputScope {
+        channel,
+        conversation,
+        turn_id,
+        lifetime: Duration::from_millis(lifetime_ms),
+    })
+}
+
+async fn feed_output(
+    host: &HostChannels,
+    channel: &str,
+    scope: Option<&OutputScope>,
+    next_sequence: &AtomicU64,
+    events: Vec<tinychannels_bus::module_progressive::ChannelOutputEvent>,
+) -> Result<ProgressiveResult> {
+    let scope =
+        scope.ok_or_else(|| Error::failed("canonical output requires an opened output scope"))?;
+    let mut outcomes = Vec::new();
+    let mut unsupported = Vec::new();
+    let mut failure = None;
+    let mut hosted_accepted = false;
+    for event in events {
+        let sequence = next_sequence.fetch_add(1, Ordering::SeqCst);
+        let request = ProgressiveTransportRequest::OutputEvent {
+            channel: channel.to_owned(),
+            turn_id: Some(scope.turn_id.clone()),
+            channel_ref: Some(scope.channel.clone()),
+            conversation: Some(scope.conversation.clone()),
+            sequence,
+            event: Box::new(event.clone()),
+        };
+        let callback = host
+            .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(
+                request,
+            )))
+            .await;
+        let result = match callback {
+            Ok(ChannelBackendResult::ProgressiveTransport(result)) => *result,
+            _ => {
+                failure = Some(tinychannels_bus::module_progressive::ProgressiveOutputFailure::ObservationCallback);
+                break;
+            }
+        };
+        match result {
+            ProgressiveTransportResult::Acknowledged => {}
+            ProgressiveTransportResult::Accepted => hosted_accepted = true,
+            ProgressiveTransportResult::Outcome(outcome) => outcomes.push(*outcome),
+            ProgressiveTransportResult::Success(value) => {
+                if let Ok(outcome) =
+                    serde_json::from_value::<tinychannels_bus::channel::ChannelSendOutcome>(value)
+                {
+                    outcomes.push(outcome);
+                }
+            }
+            ProgressiveTransportResult::UnsupportedContent => {
+                if let tinychannels_bus::module_progressive::ChannelOutputEvent::FinalMessage {
+                    parts,
+                    ..
+                } = event
+                {
+                    unsupported.extend(parts);
+                } else {
+                    failure = Some(tinychannels_bus::module_progressive::ProgressiveOutputFailure::ProviderTransport);
+                    break;
+                }
+            }
+            ProgressiveTransportResult::Unavailable
+            | ProgressiveTransportResult::EditUnsupported
+            | ProgressiveTransportResult::MessageGone
+            | ProgressiveTransportResult::Failed => {
+                failure = Some(tinychannels_bus::module_progressive::ProgressiveOutputFailure::ProviderTransport);
+                break;
+            }
+        }
+    }
+    Ok(
+        match (
+            outcomes.len(),
+            unsupported.is_empty(),
+            failure,
+            hosted_accepted,
+        ) {
+            (0, true, None, false) => ProgressiveResult::Updated,
+            (1, true, None, false) => ProgressiveResult::DeliveryOutcome {
+                outcome: Box::new(outcomes.into_iter().next().expect("one outcome")),
+            },
+            (0, false, None, false) => {
+                ProgressiveResult::DeliveryUnsupported { parts: unsupported }
+            }
+            (count, true, None, false) if count > 1 => {
+                ProgressiveResult::DeliveryOutcomes { outcomes }
+            }
+            (_, _, failure, hosted_accepted) => ProgressiveResult::DeliveryBatch {
+                outcomes,
+                unsupported,
+                failure,
+                hosted_accepted,
+            },
+        },
+    )
+}
+
+fn apply(reply: &mut ProgressiveReply, events: Vec<ProgressiveEvent>) -> Result<()> {
     let text = events
         .iter()
         .filter_map(|event| match event {
-            ChannelOutputEvent::TextDelta { text, .. } => Some(text.len()),
+            ProgressiveEvent::TextDelta(value) => Some(value.len()),
             _ => None,
         })
         .sum::<usize>();
     let thinking = events
         .iter()
         .filter_map(|event| match event {
-            ChannelOutputEvent::ThinkingDelta { text, .. } => Some(text.len()),
+            ProgressiveEvent::ThinkingDelta(value) => Some(value.len()),
             _ => None,
         })
         .sum::<usize>();
@@ -1527,118 +892,17 @@ async fn apply(
     {
         return Err(Error::failed("progressive content exceeds its limit"));
     }
-    let mut dispatch = ProgressiveOutputDispatch::default();
     for event in events {
-        if forward && reply.on_output_event(&event).await.is_err() {
-            dispatch.failure = Some(
-                tinychannels_bus::module_progressive::ProgressiveOutputFailure::ObservationCallback,
-            );
-            break;
-        }
-        match reply.apply_output_event(&event, forward).await {
-            Ok(dispatched) => dispatch.absorb(dispatched),
-            Err(error) => {
-                absorb_progressive_error(&mut dispatch, error);
-                break;
+        match event {
+            ProgressiveEvent::TextDelta(value) => reply.on_text_delta(&value),
+            ProgressiveEvent::ThinkingDelta(value) => reply.on_thinking_delta(&value),
+            ProgressiveEvent::ToolCall(name) => reply.on_tool_call(&name),
+            ProgressiveEvent::ToolResult { tool_name, success } => {
+                reply.on_tool_result(&tool_name, success)
             }
         }
-        if dispatch.failure.is_some()
-            || dispatch
-                .outcomes
-                .iter()
-                .any(|outcome| outcome.error.is_some())
-        {
-            break;
-        }
     }
-    Ok(dispatch.into_result())
-}
-
-fn absorb_progressive_error(dispatch: &mut ProgressiveOutputDispatch, error: ProgressiveSendError) {
-    use tinychannels_bus::module_progressive::ProgressiveOutputFailure;
-    match error {
-        ProgressiveSendError::PartialOutcome(mut outcome) => {
-            outcome
-                .error
-                .get_or_insert_with(|| tinychannels_bus::channel::ChannelSendError {
-                    kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                    message: "progressive provider returned a partial or uncertain outcome".into(),
-                    sent_before_error: true,
-                    ..Default::default()
-                });
-            dispatch.outcomes.push(*outcome);
-            dispatch.failure = Some(ProgressiveOutputFailure::ProviderTransport);
-        }
-        ProgressiveSendError::UnsupportedContent => {}
-        ProgressiveSendError::Unavailable => {
-            dispatch.outcomes.push(progressive_error_outcome(
-                "progressive provider transport unavailable",
-                !dispatch.outcomes.is_empty(),
-            ));
-            dispatch.failure = Some(ProgressiveOutputFailure::ProviderTransport);
-        }
-        _error => {
-            dispatch.outcomes.push(progressive_error_outcome(
-                "progressive provider send failed with an unknown outcome",
-                true,
-            ));
-            dispatch.failure = Some(ProgressiveOutputFailure::ProviderTransport);
-        }
-    }
-}
-
-fn progressive_error_outcome(
-    message: &str,
-    sent_before_error: bool,
-) -> tinychannels_bus::channel::ChannelSendOutcome {
-    tinychannels_bus::channel::ChannelSendOutcome {
-        error: Some(tinychannels_bus::channel::ChannelSendError {
-            kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-            message: message.to_owned(),
-            sent_before_error,
-            ..Default::default()
-        }),
-        ..Default::default()
-    }
-}
-
-fn delivery_has_failure(result: &Result<ProgressiveResult>) -> bool {
-    matches!(
-        result,
-        Ok(ProgressiveResult::DeliveryOutcome { outcome }) if outcome.error.is_some()
-    ) || matches!(
-        result,
-        Ok(ProgressiveResult::DeliveryOutcomes { outcomes })
-            if outcomes.iter().any(|outcome| outcome.error.is_some())
-    ) || matches!(
-        result,
-        Ok(ProgressiveResult::DeliveryBatch { outcomes, .. })
-            if outcomes.iter().any(|outcome| outcome.error.is_some())
-    ) || matches!(
-        result,
-        Ok(ProgressiveResult::DeliveryBatch {
-            failure: Some(_),
-            ..
-        })
-    )
-}
-
-/// Map the host's wire policy onto the shared reply-mode decision so the
-/// mirror/always/never/speak_reply rule lives in one place.
-fn policy_allows_speech(policy: &tinychannels_bus::HostVoiceReplyPolicy) -> bool {
-    let mode = match policy.mode {
-        tinychannels_bus::HostVoiceReplyMode::Mirror => tinychannels::host::VoiceReplyMode::Mirror,
-        tinychannels_bus::HostVoiceReplyMode::Always => tinychannels::host::VoiceReplyMode::Always,
-        tinychannels_bus::HostVoiceReplyMode::Never => tinychannels::host::VoiceReplyMode::Never,
-        tinychannels_bus::HostVoiceReplyMode::SpeakReply => {
-            tinychannels::host::VoiceReplyMode::SpeakReply
-        }
-    };
-    tinychannels::host::should_synthesize_reply(
-        mode,
-        policy.inbound_has_voice,
-        policy.explicitly_requested,
-    )
+    Ok(())
 }
 
 #[cfg(test)]

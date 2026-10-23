@@ -16,8 +16,9 @@
 //! Depend on `tinychannels-bus` alone if you only need to *name* channel types
 //! — an envelope in an event enum or the config schema.
 //! That costs serde and little else. Depend on this crate when you need to
-//! actually open a socket, which pulls `reqwest`, `rusqlite`, `rustls` and
-//! `tokio-tungstenite`.
+//! actually open a socket, which pulls `reqwest`, `rustls` and
+//! `tokio-tungstenite`. The read-only iMessage system-database provider is
+//! optional behind the `imessage` feature and is the only user of `rusqlite`.
 
 // Re-export the WebSocket transport crate so downstream consumers (and their
 // tests that exercise provider WS seams) can construct version-matched
@@ -33,6 +34,7 @@ pub use tinychannels_bus;
 // `ChannelInboundEnvelope` in the build.
 pub use tinychannels_bus::{capabilities, error, names, version};
 
+pub use tinychannels_runtime::WebhookRejected;
 pub use tinychannels_runtime::{
     adapters, channel, config, context, controllers, security, text, traits,
 };
@@ -51,8 +53,6 @@ pub mod delivery;
 pub mod factory;
 pub mod harness;
 pub mod host;
-#[cfg(test)]
-mod provider_test_support;
 #[allow(
     deprecated,
     reason = "provider implementations migrate to typed sends in issue #103"
@@ -64,28 +64,20 @@ pub mod routes;
 pub mod runtime;
 pub mod storage;
 
-pub use delivery::progressive::{
-    ProgressiveOutputContext, ProgressiveOutputDispatch, ProgressiveReply, ProgressiveSendError,
-    ProgressiveSender,
-};
-
 pub use backend::{ChannelBackend, ChannelManager};
-#[cfg(feature = "email")]
-pub use factory::build_email_channel;
-#[cfg(feature = "whatsapp-web")]
-pub use factory::build_whatsapp_web_channel;
 pub use factory::{
-    BuiltChannel, ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
-    build_discord_channel, build_imessage_channel, build_linq_channel, build_long_tail_channel,
-    build_long_tail_channel_with_host, build_signal_channel, build_slack_channel,
-    build_telegram_channel, build_whatsapp_cloud_channel,
+    ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
+    build_long_tail_channel,
 };
 pub use host::{ChannelHost, ChannelHostBuilder, HostCapabilities, NoopHost, ProviderContext};
-pub use providers::long_tail::LongTailNative;
+#[cfg(feature = "imessage")]
+pub use providers::IMessageChannel;
+#[cfg(test)]
+pub(crate) use providers::long_tail::LongTailNative;
 pub use providers::{
-    CliChannel, DingTalkChannel, DiscordChannel, IMessageChannel, IrcChannel, IrcChannelConfig,
-    LinqChannel, MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel,
-    WhatsAppChannel, WhatsAppWebChannel, YuanbaoChannel,
+    CliChannel, DingTalkChannel, DiscordChannel, IrcChannel, IrcChannelConfig, LinqChannel,
+    MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel, WhatsAppChannel,
+    WhatsAppWebChannel, YuanbaoChannel,
 };
 #[allow(deprecated, reason = "re-export one-release v21 compatibility DTOs")]
 pub use tinychannels_bus::{
@@ -93,20 +85,20 @@ pub use tinychannels_bus::{
     ChannelCapabilities, ChannelControllerRequest, ChannelControllerResult, ChannelDefinition,
     ChannelInboundEnvelope, ChannelMessage, ChannelOutboundIntent, ChannelsConfig,
     DeliveryDurability, HOST_BUS_NAME, HOST_OBJECT_PATH, HostEventPublication,
-    HostTranscriptionRequest, HostTranscriptionResult, HttpProxyPolicy, METHODS, OBJECT_PATH,
-    OutboundPayload, Result, SendMessage, TinyChannelsError, is_compatible, methods,
+    HostTranscriptionRequest, HostTranscriptionResult, HttpProxyPolicy, METHODS, MODULE_ID,
+    OBJECT_PATH, OutboundPayload, ReplyContext, Result, SendMessage, TinyChannelsError,
+    is_compatible, methods,
+};
+pub use tinychannels_runtime::channel::{
+    build_session_key_for_inbound_envelope, inbound_envelope_from_legacy_message,
+    legacy_message_from_inbound_envelope, legacy_message_value_from_outbound_intent,
+    outbound_intent_from_legacy_message, outbound_intent_from_send_message,
 };
 #[allow(
     deprecated,
     reason = "re-export one-release v21 send compatibility adapter"
 )]
-pub use tinychannels_runtime::WebhookRejected;
-pub use tinychannels_runtime::channel::{
-    build_session_key_for_inbound_envelope, inbound_envelope_from_legacy_message,
-    legacy_message_from_inbound_envelope, legacy_message_value_from_outbound_intent,
-    outbound_intent_from_legacy_message, outbound_intent_from_send_message,
-    typed_message_from_inbound_envelope,
-};
+pub use tinychannels_runtime::{Channel, ChannelSendExt, SendMessageExt};
 // Re-exported separately so each can follow its provider's feature gate.
 #[cfg(feature = "email-send")]
 pub use providers::EmailChannel;
@@ -120,3 +112,6 @@ mod email_feature_smoke_tests;
 #[cfg(all(test, feature = "lark"))]
 #[path = "lib_lark_feature_smoke_tests.rs"]
 mod lark_feature_smoke_tests;
+
+#[cfg(test)]
+mod provider_test_support;

@@ -434,10 +434,11 @@ impl crate::channel::ChannelAdapter for WhatsAppChannel {
     async fn send(
         &self,
         intent: tinychannels_bus::ChannelOutboundIntent,
-    ) -> Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError> {
+    ) -> Result<crate::channel::MessageReceipt, crate::channel::ChannelSendError> {
         let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
         self.send_v2(&message)
             .await
+            .map(|outcome| outcome.receipt)
             .map_err(WaFailure::into_send_error)
     }
 
@@ -508,7 +509,7 @@ impl crate::channel::ChannelTyping for WhatsAppChannel {
 }
 
 #[async_trait]
-impl crate::channel::ChannelReaction for WhatsAppChannel {
+impl crate::channel::LegacyChannelReaction for WhatsAppChannel {
     async fn send_reaction(
         &self,
         channel: &tinychannels_bus::channel::ChannelRef,

@@ -1,103 +1,106 @@
 use super::*;
-use serde_json::json;
 
 #[test]
-fn public_controller_requests_preserve_camel_case_wire_fields_and_defaults() {
-    let connect: ChannelConnectRequest = serde_json::from_value(json!({
-        "channel": "telegram",
-        "authMode": "bot_token"
-    }))
-    .unwrap();
-    assert_eq!(connect.auth_mode, ChannelAuthMode::BotToken);
-    assert_eq!(connect.credentials, None);
+fn connect_request_uses_the_public_camel_case_wire_shape() {
+    let request = ChannelConnectRequest {
+        channel: "telegram".into(),
+        auth_mode: ChannelAuthMode::BotToken,
+        credentials: Some(serde_json::json!({"bot_token":"secret"})),
+    };
+
     assert_eq!(
-        serde_json::to_value(connect).unwrap(),
-        json!({
+        serde_json::to_value(request).unwrap(),
+        serde_json::json!({
             "channel": "telegram",
             "authMode": "bot_token",
-            "credentials": null
+            "credentials": {"bot_token":"secret"}
         })
     );
+}
 
-    let disconnect: ChannelDisconnectRequest = serde_json::from_value(json!({
-        "channel": "discord",
+#[test]
+fn optional_controller_inputs_default_when_omitted() {
+    let status: ChannelStatusRequest = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(status.channel, None);
+
+    let disconnect: ChannelDisconnectRequest = serde_json::from_value(serde_json::json!({
+        "channel": "telegram",
         "authMode": "bot_token"
     }))
     .unwrap();
     assert!(!disconnect.clear_memory);
-
-    let status: ChannelStatusRequest = serde_json::from_value(json!({})).unwrap();
-    assert_eq!(status.channel, None);
-    assert_eq!(
-        serde_json::to_value(status).unwrap(),
-        json!({"channel": null})
-    );
-
-    let threads: ChannelListThreadsRequest = serde_json::from_value(json!({
-        "channel": "discord"
-    }))
-    .unwrap();
-    assert_eq!(threads.active, None);
 }
 
 #[test]
-fn message_and_thread_requests_keep_existing_controller_shapes() {
-    let message: ChannelSendMessageRequest = serde_json::from_value(json!({
-        "channel": "telegram",
-        "message": {"text": "hello", "thread_ts": "topic-1"}
-    }))
-    .unwrap();
-    assert_eq!(message.message["thread_ts"], "topic-1");
-    assert_eq!(
-        serde_json::to_value(message).unwrap()["message"]["text"],
-        "hello"
-    );
+fn all_controller_request_shapes_round_trip() {
+    let cases = [
+        serde_json::json!({"channel":"telegram"}),
+        serde_json::json!({"channel":"telegram","authMode":"oauth","credentials":null}),
+        serde_json::json!({"channel":"telegram","authMode":"oauth","clearMemory":true}),
+        serde_json::json!({"channel":"telegram","authMode":"bot_token","credentials":{"x":1}}),
+        serde_json::json!({"channel":"telegram"}),
+        serde_json::json!({"guildId":"g"}),
+        serde_json::json!({"guildId":"g","channelId":"c"}),
+        serde_json::json!({"channel":"telegram","message":{"text":"hi"}}),
+        serde_json::json!({"channel":"telegram","reaction":{"emoji":"✅"}}),
+        serde_json::json!({"channel":"telegram","title":"topic"}),
+        serde_json::json!({"channel":"telegram","threadId":"t","action":"close"}),
+        serde_json::json!({"channel":"telegram","active":false}),
+    ];
+    let decoders: [fn(serde_json::Value) -> serde_json::Value; 12] = [
+        |v| {
+            serde_json::to_value(serde_json::from_value::<ChannelDescribeRequest>(v).unwrap())
+                .unwrap()
+        },
+        |v| {
+            serde_json::to_value(serde_json::from_value::<ChannelConnectRequest>(v).unwrap())
+                .unwrap()
+        },
+        |v| {
+            serde_json::to_value(serde_json::from_value::<ChannelDisconnectRequest>(v).unwrap())
+                .unwrap()
+        },
+        |v| serde_json::to_value(serde_json::from_value::<ChannelTestRequest>(v).unwrap()).unwrap(),
+        |v| {
+            serde_json::to_value(serde_json::from_value::<ChannelSetDefaultRequest>(v).unwrap())
+                .unwrap()
+        },
+        |v| {
+            serde_json::to_value(serde_json::from_value::<DiscordListChannelsRequest>(v).unwrap())
+                .unwrap()
+        },
+        |v| {
+            serde_json::to_value(
+                serde_json::from_value::<DiscordCheckPermissionsRequest>(v).unwrap(),
+            )
+            .unwrap()
+        },
+        |v| {
+            serde_json::to_value(serde_json::from_value::<ChannelSendMessageRequest>(v).unwrap())
+                .unwrap()
+        },
+        |v| {
+            serde_json::to_value(serde_json::from_value::<ChannelSendReactionRequest>(v).unwrap())
+                .unwrap()
+        },
+        |v| {
+            serde_json::to_value(serde_json::from_value::<ChannelCreateThreadRequest>(v).unwrap())
+                .unwrap()
+        },
+        |v| {
+            serde_json::to_value(serde_json::from_value::<ChannelUpdateThreadRequest>(v).unwrap())
+                .unwrap()
+        },
+        |v| {
+            serde_json::to_value(serde_json::from_value::<ChannelListThreadsRequest>(v).unwrap())
+                .unwrap()
+        },
+    ];
 
-    let update: ChannelUpdateThreadRequest = serde_json::from_value(json!({
-        "channel": "telegram",
-        "threadId": "topic-1",
-        "action": "close"
-    }))
-    .unwrap();
-    assert_eq!(update.thread_id, "topic-1");
-    assert_eq!(update.action, "close");
-}
-
-#[test]
-fn remaining_controller_request_fields_match_the_public_schema() {
-    let describe: ChannelDescribeRequest =
-        serde_json::from_value(json!({"channel": "telegram"})).unwrap();
-    assert_eq!(describe.channel, "telegram");
-
-    let test: ChannelTestRequest = serde_json::from_value(json!({
-        "channel": "discord",
-        "authMode": "bot_token",
-        "credentials": {"token": "secret"}
-    }))
-    .unwrap();
-    assert_eq!(test.auth_mode, ChannelAuthMode::BotToken);
-    assert_eq!(test.credentials["token"], "secret");
-
-    let discord: DiscordListChannelsRequest =
-        serde_json::from_value(json!({"guildId": "guild-1"})).unwrap();
-    assert_eq!(discord.guild_id, "guild-1");
-    let permissions: DiscordCheckPermissionsRequest = serde_json::from_value(json!({
-        "guildId": "guild-1",
-        "channelId": "channel-2"
-    }))
-    .unwrap();
-    assert_eq!(permissions.channel_id, "channel-2");
-
-    let reaction: ChannelSendReactionRequest = serde_json::from_value(json!({
-        "channel": "discord",
-        "reaction": {"messageId": "message-1", "emoji": "👍"}
-    }))
-    .unwrap();
-    assert_eq!(reaction.reaction["emoji"], "👍");
-    let thread: ChannelCreateThreadRequest = serde_json::from_value(json!({
-        "channel": "discord",
-        "title": "topic"
-    }))
-    .unwrap();
-    assert_eq!(thread.title, "topic");
+    for (input, decode) in cases.into_iter().zip(decoders) {
+        let output = decode(input.clone());
+        for key in input.as_object().unwrap().keys() {
+            assert_eq!(output.get(key), input.get(key), "field {key}");
+        }
+    }
 }

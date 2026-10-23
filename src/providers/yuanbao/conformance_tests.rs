@@ -1,8 +1,7 @@
 //! Shared conformance checks against the factory-built Yuanbao adapter.
 
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
-    ChannelTyping,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelStreamingDraft, ChannelTyping,
 };
 use crate::factory::{
     build_yuanbao_channel_with_media_http_for_test, build_yuanbao_channel_with_voice_http_for_test,
@@ -194,7 +193,9 @@ impl Fixture {
         let send = {
             let channel = self.channel.clone();
             let intent = self.intent(feature, payload);
-            tokio::spawn(async move { ChannelAdapter::send(channel.as_ref(), intent).await })
+            tokio::spawn(
+                async move { ChannelAdapter::send_outcome(channel.as_ref(), intent).await },
+            )
         };
         let mut session = self.session.lock().await;
         let request = tokio::time::timeout(std::time::Duration::from_secs(3), session.recv_frame())
@@ -327,7 +328,8 @@ impl Fixture {
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         *self.active_feature.lock() = feature;
         let result =
-            ChannelAdapter::send(self.channel.as_ref(), self.intent(feature, payload)).await;
+            ChannelAdapter::send_outcome(self.channel.as_ref(), self.intent(feature, payload))
+                .await;
         assert_no_wire_request(&self.session).await;
         result.map(|_| None)
     }
@@ -503,6 +505,14 @@ struct IngressSink(tokio::sync::mpsc::UnboundedSender<tinychannels_bus::ChannelI
 #[async_trait]
 impl crate::channel::ChannelInboundSink for IngressSink {
     async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
         &self,
         ingress: tinychannels_bus::ChannelIngress,
     ) -> Result<(), ChannelSendError> {
@@ -793,10 +803,8 @@ impl AdapterFixture for Fixture {
                         OutboundPayload::Voice {
                             voice: OutboundVoice::Media {
                                 media: media(MediaKind::Audio),
-                                audio_base64: None,
                                 codec: Some("ogg_opus".into()),
                                 duration_ms: None,
-                                waveform: None,
                             },
                         },
                     )
@@ -830,12 +838,12 @@ impl AdapterFixture for Fixture {
                     },
                 );
                 intent.thread_id = Some("thread-root".into());
-                let result = ChannelAdapter::send(self.channel.as_ref(), intent).await;
+                let result = ChannelAdapter::send_outcome(self.channel.as_ref(), intent).await;
                 assert_no_wire_request(&self.session).await;
                 result.map(|_| None)
             }
             Feature::Reactions => {
-                let result = ChannelReaction::send_reaction(
+                let result = crate::channel::LegacyChannelReaction::send_reaction(
                     self.channel.as_ref(),
                     &channel_ref(),
                     &group_ref(),

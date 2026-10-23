@@ -1042,6 +1042,7 @@ async fn unsupported_notice_and_media_remain_ordered_when_later_final_succeeds()
     let result = batch.into_result();
     let ProgressiveResult::DeliveryBatch {
         outcomes,
+        hosted_accepted,
         unsupported,
         failure,
     } = &result
@@ -1049,6 +1050,7 @@ async fn unsupported_notice_and_media_remain_ordered_when_later_final_succeeds()
         panic!("mixed facts need a batch")
     };
     assert_eq!(failure, &None);
+    assert!(!hosted_accepted);
     assert_eq!(outcomes, &vec![delivered("final")]);
     assert_eq!(
         unsupported,
@@ -1116,6 +1118,7 @@ fn public_result_roundtrips_preserve_receipts_unsupported_parts_and_transport_fa
     });
     let ProgressiveResult::DeliveryBatch {
         outcomes,
+        hosted_accepted,
         unsupported,
         failure,
     } = batch.into_result()
@@ -1123,6 +1126,7 @@ fn public_result_roundtrips_preserve_receipts_unsupported_parts_and_transport_fa
         panic!("expected batch")
     };
     assert_eq!(outcomes, vec![failed, delivered("later")]);
+    assert!(!hosted_accepted);
     assert_eq!(unsupported, vec![text_part("keep")]);
     assert_eq!(
         failure,
@@ -1488,8 +1492,6 @@ async fn approvals_and_voice_notes_are_delivered_as_ordered_typed_content() {
                     media: voice.media.clone(),
                     codec: voice.codec.clone(),
                     duration_ms: voice.duration_ms,
-                    audio_base64: None,
-                    waveform: None,
                 },
             }
         );

@@ -809,6 +809,14 @@ struct PublicAdapterSink(tokio::sync::mpsc::UnboundedSender<tinychannels_bus::Ch
 impl crate::channel::ChannelInboundSink for PublicAdapterSink {
     async fn push(
         &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
+        &self,
         ingress: tinychannels_bus::ChannelIngress,
     ) -> Result<(), crate::channel::ChannelSendError> {
         self.0
@@ -1221,6 +1229,14 @@ async fn public_adapter_retries_a_message_after_the_supplied_sink_rejects_it() {
     #[async_trait::async_trait]
     impl crate::channel::ChannelInboundSink for RejectFirstSink {
         async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), crate::channel::ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(
             &self,
             ingress: ChannelIngress,
         ) -> Result<(), crate::channel::ChannelSendError> {

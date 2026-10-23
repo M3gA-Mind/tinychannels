@@ -2,6 +2,36 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn route_control_accepts_legacy_wire_without_host_capabilities() {
+    let request = module_control::ChannelControlRequest::Route {
+        workspace_dir: "workspace".into(),
+        message: Box::new(ChannelMessage::default()),
+        capabilities: None,
+        route: module_remote::RemoteRoute {
+            provider: "fixture".into(),
+            model: "fixture".into(),
+        },
+        history_len: 0,
+        session_scope: None,
+        configured_channel: None,
+        providers: vec![],
+    };
+    let mut wire = serde_json::to_value(request).unwrap();
+    wire["request"]
+        .as_object_mut()
+        .unwrap()
+        .remove("capabilities");
+
+    assert!(matches!(
+        serde_json::from_value::<module_control::ChannelControlRequest>(wire).unwrap(),
+        module_control::ChannelControlRequest::Route {
+            capabilities: None,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn relay_passthrough_body_preserves_base64_wire_and_legacy_invalid_input() {
     let wire = json!({"platform":"test", "botId":"bot", "method":"POST", "path":"/fixture", "headers":[], "bodyB64":"AP8q"});
     let decoded: relay::PassthroughForward = serde_json::from_value(wire.clone()).unwrap();
@@ -82,6 +112,7 @@ fn host_capability_payloads_keep_typed_snake_case_wire() {
         mime_type: Some("audio/wav".into()),
         file_name: Some("voice.wav".into()),
         language: Some("en".into()),
+        scope: None,
     };
     assert_eq!(
         serde_json::to_value(&request).unwrap(),

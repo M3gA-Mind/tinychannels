@@ -133,7 +133,18 @@ async fn gateway_lookup_failures_are_mapped_and_release_listener_ownership() {
     struct Sink;
     #[async_trait::async_trait]
     impl ChannelInboundSink for Sink {
-        async fn push(&self, _: tinychannels_bus::ChannelIngress) -> Result<(), ChannelSendError> {
+        async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(
+            &self,
+            _: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), ChannelSendError> {
             Ok(())
         }
     }
@@ -174,7 +185,18 @@ async fn gateway_listener_cleans_up_after_aborted_start_and_restarts_once() {
     struct Sink;
     #[async_trait::async_trait]
     impl ChannelInboundSink for Sink {
-        async fn push(&self, _: tinychannels_bus::ChannelIngress) -> Result<(), ChannelSendError> {
+        async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(
+            &self,
+            _: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), ChannelSendError> {
             Ok(())
         }
     }
@@ -372,7 +394,15 @@ async fn typed_gateway_delivers_the_original_rich_ingress_to_its_sink() {
     struct IngressSink(tokio::sync::mpsc::Sender<ChannelIngress>);
     #[async_trait::async_trait]
     impl ChannelInboundSink for IngressSink {
-        async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+        async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
             self.0
                 .send(ingress)
                 .await
@@ -456,7 +486,18 @@ async fn blocked_typed_delivery_does_not_stop_gateway_heartbeat_handling() {
     }
     #[async_trait::async_trait]
     impl ChannelInboundSink for BlockingSink {
-        async fn push(&self, _: tinychannels_bus::ChannelIngress) -> Result<(), ChannelSendError> {
+        async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(
+            &self,
+            _: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), ChannelSendError> {
             if let Some(entered) = self.entered.lock().take() {
                 let _ = entered.send(());
             }
@@ -585,7 +626,7 @@ async fn every_extension_trait_reaches_discord_through_the_adapter() {
     .unwrap();
     assert_eq!(typed.receipt.platform_message_ids.len(), 1);
 
-    ChannelReaction::send_reaction(
+    crate::channel::LegacyChannelReaction::send_reaction(
         &channel,
         &account(),
         &conversation(),
@@ -598,7 +639,7 @@ async fn every_extension_trait_reaches_discord_through_the_adapter() {
     )
     .await
     .unwrap();
-    ChannelEdit::edit(&channel, &sent.receipt, intent("edited"))
+    ChannelEdit::edit(&channel, &sent, intent("edited"))
         .await
         .unwrap();
     ChannelTyping::start_typing(&channel, CHANNEL)
@@ -611,9 +652,7 @@ async fn every_extension_trait_reaches_discord_through_the_adapter() {
     ChannelStreamingDraft::upsert_draft(&channel, Some(&draft), intent("more"))
         .await
         .unwrap();
-    ChannelDelete::delete(&channel, &sent.receipt)
-        .await
-        .unwrap();
+    ChannelDelete::delete(&channel, &sent).await.unwrap();
 }
 
 #[tokio::test]
@@ -625,7 +664,7 @@ async fn other_providers_cannot_drive_the_discord_extensions() {
         account_id: None,
     };
 
-    let reaction = ChannelReaction::send_reaction(
+    let reaction = crate::channel::LegacyChannelReaction::send_reaction(
         &channel,
         &slack,
         &ConversationRef {
@@ -682,9 +721,16 @@ async fn typed_operations_preserve_errors_and_receipts() {
         value: "👍".into(),
         custom_emoji_id: None,
     };
-    ChannelReaction::send_reaction(&channel, &account(), &conversation(), "800", &thumbs, false)
-        .await
-        .unwrap();
+    crate::channel::LegacyChannelReaction::send_reaction(
+        &channel,
+        &account(),
+        &conversation(),
+        "800",
+        &thumbs,
+        false,
+    )
+    .await
+    .unwrap();
     crate::channel::ChannelEdit::edit(&channel, &receipt, intent("again"))
         .await
         .unwrap();
@@ -720,9 +766,16 @@ async fn typed_operations_preserve_errors_and_receipts() {
     );
     let empty = tinychannels_bus::ChannelReaction::default();
     assert!(
-        ChannelReaction::send_reaction(&channel, &account(), &conversation(), "x", &empty, false)
-            .await
-            .is_err()
+        crate::channel::LegacyChannelReaction::send_reaction(
+            &channel,
+            &account(),
+            &conversation(),
+            "x",
+            &empty,
+            false
+        )
+        .await
+        .is_err()
     );
 }
 
@@ -749,7 +802,8 @@ async fn the_factory_wires_every_host_service_into_the_discord_account() {
         ..Default::default()
     };
 
-    let built = crate::build_discord_channel(&config, &host, &crate::DefaultHttpClients).unwrap();
+    let built =
+        crate::factory::build_discord_channel(&config, &host, &crate::DefaultHttpClients).unwrap();
 
     let caps = built.v2_capabilities();
     assert!(caps.content.image.outbound && caps.voice_in.supported);
@@ -760,8 +814,12 @@ async fn the_factory_wires_every_host_service_into_the_discord_account() {
         Some(CHANNEL)
     );
     assert!(
-        crate::build_discord_channel(&Default::default(), &host, &crate::DefaultHttpClients)
-            .is_none()
+        crate::factory::build_discord_channel(
+            &Default::default(),
+            &host,
+            &crate::DefaultHttpClients
+        )
+        .is_none()
     );
     assert_eq!(
         crate::build_channels(&config, &host, &crate::DefaultHttpClients).len(),

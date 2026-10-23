@@ -86,8 +86,8 @@ impl DeliveryResultStore for HostDeliveryStore {
     }
 }
 
-fn storage_error(error: tinystoragedrivers_core::StorageError) -> DeliveryQueueError {
-    if error.kind() == tinystoragedrivers_core::ErrorKind::Unavailable {
+fn storage_error(error: tinystoragedrivers_types::StorageError) -> DeliveryQueueError {
+    if error.kind() == tinystoragedrivers_types::ErrorKind::Unavailable {
         // The host serves no storage object: an absent capability, not a
         // broken store. Required delivery still refuses Unsupported before any
         // provider I/O, and nothing is substituted in memory.

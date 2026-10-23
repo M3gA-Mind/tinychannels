@@ -101,9 +101,10 @@ impl crate::channel::ChannelAdapter for SlackChannel {
     async fn send(
         &self,
         intent: ChannelOutboundIntent,
-    ) -> Result<ChannelSendOutcome, ChannelSendError> {
+    ) -> Result<MessageReceipt, ChannelSendError> {
         self.send_v2_with_receipt(&ChannelOutboundMessage::from_intent(&intent))
             .await
+            .map(|outcome| outcome.receipt)
     }
 
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError> {
@@ -146,7 +147,7 @@ impl crate::channel::ChannelTyping for SlackChannel {
 }
 
 #[async_trait]
-impl crate::channel::ChannelReaction for SlackChannel {
+impl crate::channel::LegacyChannelReaction for SlackChannel {
     async fn send_reaction(
         &self,
         channel: &ChannelRef,

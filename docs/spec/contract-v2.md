@@ -1,10 +1,10 @@
 # TinyChannels Channel Contract v2
 
-**Status: proposed contract.** This document defines the target portable channel
-boundary for TinyChannels and OpenHuman. It is a specification, not a claim
-that every field or behavior is implemented. Existing Rust types and wire
-surfaces are inventoried in [Current implementation](#current-implementation).
-The owning implementations and adapters may land in later changes.
+**Status: v2 contract in migration.** This document defines the portable
+channel boundary for TinyChannels and OpenHuman. Shared bus and runtime types
+for several v2 surfaces are implemented, but this is not a claim that every
+field, behavior, or provider conforms. Existing Rust types and wire surfaces
+are inventoried in [Current implementation](#current-implementation).
 
 ## Goals and boundaries
 
@@ -294,7 +294,7 @@ account/conversation scope.
 ## Migration and compatibility window
 
 The v2 content model advances the current TinyBus wire contract revision 21 to
-revision 22 and the module operation version 1.21 to 1.25. v21 is the prior
+revision 22 and the module operation version 1.21 to 1.23. v21 is the prior
 wire revision, not a Cargo semver major version. Keep existing member names,
 arities, and serialized meaning unchanged; additive v2 relay operations use
 new names and preserve v1 relay frames.
@@ -339,7 +339,7 @@ every capability; query the configured descriptor.
 | Lark/Feishu | lark | Text, media/files, threads, cards/native content, receipts | Optional provider dependency. |
 | IRC, iMessage, Mattermost, QQ, Yuanbao/DingTalk, Linq | always-on (Cargo default is empty) | Text and the provider-supported subset of addressing/events/receipts | Capability is reported per provider/account; no blanket rich-media promise. |
 | Web surface adapter | tinychannels-runtime adapter using host-supplied transport | All portable content/events, subject to host authorization | Host supplies transport, authentication, authorization, and application event wiring. |
-| Relay connector | WebSocket I/O (always built) | Projection of portable events, content and capability facts | Existing descriptor wire v1 remains frozen. |
+| Relay connector | relay-websocket for WebSocket I/O | Projection of portable events, content and capability facts | Existing descriptor wire v1 remains frozen. |
 
 Contract feature coverage is summarized separately from build features:
 
@@ -359,17 +359,26 @@ descriptor at runtime rather than inferring account support from build flags.
 
 ## Current implementation
 
-The contract crate currently exposes ChannelInboundEnvelope with text/media,
-ChannelOutboundIntent with text/media/voice/files/poll/presentation/native
-variants, MessageReceipt, separate static and presentation capability structs
-plus durable-final keys, legacy Channel, and relay CapabilityDescriptor v1.
-The harness exposes turn admission, inbound lifecycle stages, and output
-events. Provider voice paths may transcribe audio before legacy dispatch. The
-full ordered ContentPart model, first-class voice-note metadata, unified
-descriptor, normalized provider event family, and shared web event wire
-described above remain v2 requirements. Wire revision 22 and module operation
-version 1.25 are current contract facts. Legacy provider rich-content support
-remains limited until the provider migration leaf completes.
+The bus exports `ChannelInboundEnvelope` with typed ordered `ContentPart` values
+(including `VoiceNote`) and compatibility `text`/`media` fields;
+`ChannelOutboundIntent` with typed outbound content and voice variants;
+`MessageReceipt`; unified `ChannelCapabilities` v2; normalized
+`ChannelEventKind`; and the tagged, schema-bearing `WebChannelEvent` wire enum.
+The runtime exposes the `ChannelAdapter` contract and optional extension
+traits. The module contains a `LocalChannelAdapter` implementation and a
+versioned relay capability exchange. The harness exposes turn admission,
+inbound lifecycle stages, and output events. Wire revision 22 and module
+operation version 1.23 are current contract facts.
+
+The provider implementation has not caught up with those shared surfaces. At
+this revision, the built-in direct providers still implement the legacy
+`Channel` trait; no built-in provider implements `ChannelAdapter` with a v2
+descriptor. Provider voice paths may transcribe audio before legacy dispatch,
+and legacy paths still contain textual media markers. Therefore typed bus
+types, event schemas, and the unified descriptor are implemented, while
+provider adoption, marker removal, and conformance for every declared
+capability remain migration requirements. See the provider migration snapshot
+in the [wiki](https://github.com/tinyhumansai/tinychannels/wiki/Providers).
 
 Track implementation status in code changes and release notes, not by editing
 this normative vocabulary to imply that a partially migrated producer has

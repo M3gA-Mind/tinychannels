@@ -485,14 +485,12 @@ async fn only_webp_images_can_be_stickers() {
 
 // --- voice -------------------------------------------------------------------
 
-fn voice(id: &str, waveform: Option<Vec<f32>>) -> OutboundContentPart {
+fn voice(id: &str, _waveform: Option<Vec<f32>>) -> OutboundContentPart {
     OutboundContentPart::Voice {
         voice: OutboundVoice::Media {
             media: reference(id),
-            audio_base64: None,
             codec: Some("ogg_opus".into()),
             duration_ms: Some(1500),
-            waveform,
         },
     }
 }
@@ -501,7 +499,17 @@ fn voice(id: &str, waveform: Option<Vec<f32>>) -> OutboundContentPart {
 async fn voice_notes_are_read_through_the_voice_store_with_a_resampled_waveform() {
     let voices = MemoryVoices::default();
     voices.seed("v1", "audio/ogg", &ogg_bytes());
-    let m = message(vec![voice("v1", Some(vec![0.0, 0.5, 1.0, 2.0]))]);
+    let m = message(vec![OutboundContentPart::Content {
+        part: ContentPart::VoiceNote {
+            voice_note: VoiceNote {
+                media: reference("v1"),
+                codec: Some("ogg_opus".into()),
+                duration_ms: Some(1500),
+                waveform: Some(vec![0.0, 0.5, 1.0, 2.0]),
+                ..Default::default()
+            },
+        },
+    }]);
     let planned = plan(&m, None, Some(&voices)).await.unwrap();
     let PlannedPart::Voice {
         bytes,
@@ -545,10 +553,8 @@ async fn voice_failures_are_classified() {
     let blank = message(vec![OutboundContentPart::Voice {
         voice: OutboundVoice::Media {
             media: MediaReference::default(),
-            audio_base64: None,
             codec: None,
             duration_ms: None,
-            waveform: None,
         },
     }]);
     assert!(matches!(

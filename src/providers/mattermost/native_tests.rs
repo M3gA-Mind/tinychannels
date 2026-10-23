@@ -58,7 +58,6 @@ fn channel(server: &MockServer, media: Arc<StubMedia>) -> MattermostChannel {
 
 #[tokio::test]
 async fn configured_mattermost_reaction_uses_authenticated_native_v4_requests() {
-    use crate::channel::ChannelReaction;
     use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef};
     use wiremock::matchers::{body_json, header, method, path};
 
@@ -99,7 +98,7 @@ async fn configured_mattermost_reaction_uses_authenticated_native_v4_requests() 
         false,
         reqwest::Client::builder().no_proxy().build().unwrap(),
     );
-    let result = ChannelReaction::send_reaction(
+    let result = crate::channel::LegacyChannelReaction::send_reaction(
         &channel,
         &ChannelRef {
             id: "mattermost".into(),
@@ -135,7 +134,6 @@ async fn configured_mattermost_reaction_uses_authenticated_native_v4_requests() 
 
 #[tokio::test]
 async fn mattermost_reaction_removal_uses_the_post_reaction_route() {
-    use crate::channel::ChannelReaction;
     use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef};
     use wiremock::matchers::{header, method, path};
 
@@ -157,7 +155,7 @@ async fn mattermost_reaction_removal_uses_the_post_reaction_route() {
         .await;
 
     let channel = channel(&server, Arc::new(StubMedia::default()));
-    ChannelReaction::send_reaction(
+    crate::channel::LegacyChannelReaction::send_reaction(
         &channel,
         &ChannelRef {
             id: "mattermost".into(),
@@ -182,7 +180,6 @@ async fn mattermost_reaction_removal_uses_the_post_reaction_route() {
 
 #[tokio::test]
 async fn mattermost_rejects_invalid_reactions_before_any_http_request() {
-    use crate::channel::ChannelReaction;
     use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef};
 
     let server = MockServer::start().await;
@@ -219,7 +216,7 @@ async fn mattermost_rejects_invalid_reactions_before_any_http_request() {
             },
         ),
     ] {
-        let error = ChannelReaction::send_reaction(
+        let error = crate::channel::LegacyChannelReaction::send_reaction(
             &channel,
             &channel_ref,
             &conversation,
@@ -237,7 +234,6 @@ async fn mattermost_rejects_invalid_reactions_before_any_http_request() {
 
 #[tokio::test]
 async fn mattermost_identity_json_errors_never_submit_a_reaction() {
-    use crate::channel::ChannelReaction;
     use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef};
     use wiremock::matchers::{method, path};
 
@@ -250,7 +246,7 @@ async fn mattermost_identity_json_errors_never_submit_a_reaction() {
             .mount(&server)
             .await;
         let channel = channel(&server, Arc::new(StubMedia::default()));
-        let error = ChannelReaction::send_reaction(
+        let error = crate::channel::LegacyChannelReaction::send_reaction(
             &channel,
             &ChannelRef {
                 id: "mattermost".into(),
@@ -367,7 +363,7 @@ async fn mattermost_native_edit_and_delete_report_ambiguous_server_failures() {
 
 #[tokio::test]
 async fn mattermost_transport_failures_preserve_send_edit_delete_and_identity_semantics() {
-    use crate::channel::{ChannelDelete, ChannelEdit, ChannelReaction, ChannelTypedSend};
+    use crate::channel::{ChannelDelete, ChannelEdit, ChannelTypedSend};
     use crate::providers::native::NativeProvider;
     use tinychannels_bus::channel::{
         ChannelRef, ConversationKind, ConversationRef, MessageReceipt,
@@ -470,7 +466,7 @@ async fn mattermost_transport_failures_preserve_send_edit_delete_and_identity_se
     assert!(delete_error.sent_before_error);
     assert!(!delete_error.retryable);
 
-    let identity_error = ChannelReaction::send_reaction(
+    let identity_error = crate::channel::LegacyChannelReaction::send_reaction(
         &channel,
         receipt.channel.as_ref().unwrap(),
         receipt.conversation.as_ref().unwrap(),
@@ -491,7 +487,6 @@ async fn mattermost_transport_failures_preserve_send_edit_delete_and_identity_se
 
 #[tokio::test]
 async fn mattermost_reaction_errors_distinguish_safe_retry_from_unknown_mutation() {
-    use crate::channel::ChannelReaction;
     use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef, SendErrorKind};
     use wiremock::matchers::{body_json, header, method, path};
 
@@ -551,7 +546,7 @@ async fn mattermost_reaction_errors_distinguish_safe_retry_from_unknown_mutation
         custom_emoji_id: None,
     };
 
-    let identity_error = ChannelReaction::send_reaction(
+    let identity_error = crate::channel::LegacyChannelReaction::send_reaction(
         &channel,
         &channel_ref,
         &conversation,
@@ -565,7 +560,7 @@ async fn mattermost_reaction_errors_distinguish_safe_retry_from_unknown_mutation
     assert!(identity_error.retryable);
     assert!(!identity_error.sent_before_error);
 
-    let mutation_error = ChannelReaction::send_reaction(
+    let mutation_error = crate::channel::LegacyChannelReaction::send_reaction(
         &channel,
         &channel_ref,
         &conversation,
@@ -579,7 +574,7 @@ async fn mattermost_reaction_errors_distinguish_safe_retry_from_unknown_mutation
     assert!(!mutation_error.retryable);
     assert!(mutation_error.sent_before_error);
 
-    let rate_limit = ChannelReaction::send_reaction(
+    let rate_limit = crate::channel::LegacyChannelReaction::send_reaction(
         &channel,
         &channel_ref,
         &conversation,
@@ -791,10 +786,8 @@ async fn typed_voice_upload_uses_host_audio_and_returns_voice_receipt() {
                 kind: MediaKind::Audio,
                 ..Default::default()
             },
-            audio_base64: None,
             codec: Some("m4a_aac".into()),
             duration_ms: Some(1500),
-            waveform: None,
         },
     }];
 
@@ -879,6 +872,14 @@ struct RecordingInboundSink(tokio::sync::mpsc::UnboundedSender<tinychannels_bus:
 #[async_trait::async_trait]
 impl crate::channel::ChannelInboundSink for RecordingInboundSink {
     async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
         &self,
         ingress: tinychannels_bus::ChannelIngress,
     ) -> Result<(), crate::channel::ChannelSendError> {

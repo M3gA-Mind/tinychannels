@@ -21,6 +21,14 @@ struct RecordingInboundSink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
 impl ChannelInboundSink for RecordingInboundSink {
     async fn push(
         &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
+        &self,
         ingress: ChannelIngress,
     ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
         self.0
@@ -834,10 +842,8 @@ async fn host_voice_store_uploads_native_voice_and_sends_its_opaque_file_info() 
                     content_type: Some("audio/ogg".into()),
                     ..Default::default()
                 },
-                audio_base64: None,
                 codec: None,
                 duration_ms: None,
-                waveform: None,
             },
         }],
     };
@@ -1485,6 +1491,14 @@ async fn public_adapter_stop_cancels_a_blocked_typed_sink() {
     impl ChannelInboundSink for BlockingSink {
         async fn push(
             &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(
+            &self,
             _ingress: ChannelIngress,
         ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
             self.0.notify_one();
@@ -1606,6 +1620,14 @@ async fn public_adapter_retries_a_message_after_typed_sink_rejection() {
     #[async_trait::async_trait]
     impl ChannelInboundSink for RejectOnceSink {
         async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(
             &self,
             ingress: ChannelIngress,
         ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {

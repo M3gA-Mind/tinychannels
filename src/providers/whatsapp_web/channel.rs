@@ -150,7 +150,7 @@ async fn deliver_typed_ingress(
             biased;
             _ = shutdown.notified() => return Err(TypedDeliveryFailure::Cancelled),
             _ = cancellation.wait_for(|value| *value) => return Err(TypedDeliveryFailure::Cancelled),
-            result = sink.push(ingress.clone()) => result,
+            result = sink.push_ingress(ingress.clone()) => result,
         };
         match result {
             Ok(()) => return Ok(()),
@@ -977,11 +977,11 @@ impl crate::channel::ChannelAdapter for WhatsAppWebChannel {
     async fn send(
         &self,
         intent: tinychannels_bus::ChannelOutboundIntent,
-    ) -> std::result::Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError>
-    {
+    ) -> std::result::Result<crate::channel::MessageReceipt, crate::channel::ChannelSendError> {
         let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
         self.send_v2(&message)
             .await
+            .map(|outcome| outcome.receipt)
             .map_err(WaFailure::into_send_error)
     }
 

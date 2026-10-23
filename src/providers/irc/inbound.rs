@@ -503,7 +503,7 @@ impl IrcChannel {
                         ..Default::default()
                     };
 
-                    sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                    sink.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
                         .await
                         .map_err(|error| anyhow::anyhow!(error.message))?;
                 }

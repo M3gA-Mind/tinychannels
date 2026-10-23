@@ -10,8 +10,6 @@ fn acknowledgement_selection_is_stable_and_contextual() {
         select_acknowledgment_reaction("thanks"),
         select_acknowledgment_reaction("thanks")
     );
-    assert!(jitter_millis(1) < MAX_JITTER_MS);
-    assert_eq!(jitter_millis(0), 0);
     assert_eq!(compute_max_in_flight_messages(100), 64);
 }
 
@@ -38,13 +36,22 @@ fn acknowledgement_categories_keep_their_context_and_priority() {
     assert_eq!(compute_max_in_flight_messages(0), 8);
     assert_eq!(compute_max_in_flight_messages(3), 12);
     assert_eq!(compute_max_in_flight_messages(usize::MAX), 64);
-    assert!(jitter_millis(u64::MAX) < MAX_JITTER_MS);
+}
+
+#[test]
+fn jitter_millis_is_bounded_for_short_and_capped_backoffs() {
+    for _ in 0..256 {
+        assert!(jitter_millis(1) < 1_000);
+        assert!(jitter_millis(60) < MAX_JITTER_MS);
+    }
+    assert_eq!(jitter_millis(0), 0);
 }
 
 #[tokio::test]
 async fn worker_join_logging_accepts_success_and_panic() {
     log_worker_join_result(Ok(()));
-    let failure = tokio::spawn(async { panic!("worker failed") }).await;
-    assert!(failure.as_ref().unwrap_err().is_panic());
-    log_worker_join_result(failure);
+    let task = tokio::spawn(async { panic!("fixture panic") });
+    let result = task.await;
+    assert!(result.is_err());
+    log_worker_join_result(result.map(|_| ()));
 }

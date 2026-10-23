@@ -1,6 +1,6 @@
 use super::{
-    BUS_NAME, HOST_BUS_NAME, HOST_METHODS, HOST_OBJECT_PATH, METHODS, OBJECT_PATH, host_methods,
-    methods,
+    BUS_NAME, HOST_BUS_NAME, HOST_METHODS, HOST_OBJECT_PATH, METHODS, MODULE_ID, OBJECT_PATH,
+    host_methods, methods,
 };
 
 /// `METHODS` is what a host iterates to build its interface, so a member
@@ -80,7 +80,7 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
     assert_eq!(METHODS[7], methods::START_RELAY_V2);
     assert_eq!(METHODS[10], methods::RELAY_CAPABILITIES_V2);
     assert_eq!(
-        &METHODS[13..37],
+        &METHODS[13..],
         &[
             methods::SEND_CHANNEL_INTENT,
             methods::SEND_EMAIL,
@@ -106,20 +106,10 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::PREPARE_CHANNEL_CONTROL,
             methods::START_RUNTIME_WITH_DISPATCH,
             methods::PREPARE_RUNTIME_COMMAND,
-        ]
-    );
-    assert_eq!(
-        &METHODS[37..41],
-        &[
             methods::BEGIN_MEDIA_UPLOAD,
             methods::APPEND_MEDIA_UPLOAD_CHUNK,
             methods::FINISH_MEDIA_UPLOAD,
             methods::ABORT_MEDIA_UPLOAD,
-        ]
-    );
-    assert_eq!(
-        &METHODS[41..],
-        &[
             methods::BEGIN_MEDIA_READ,
             methods::READ_MEDIA_CHUNK,
             methods::ABORT_MEDIA_READ,
@@ -145,6 +135,11 @@ fn member_names_are_unique_within_each_object() {
 fn the_module_and_host_objects_are_distinct() {
     assert_ne!(BUS_NAME, HOST_BUS_NAME);
     assert_ne!(OBJECT_PATH, HOST_OBJECT_PATH);
+}
+
+#[test]
+fn module_id_is_the_registry_identity_for_the_module() {
+    assert_eq!(MODULE_ID, "tinychannels");
 }
 
 /// Bus names are dotted and object paths are their slashed form. A host

@@ -10,7 +10,18 @@ struct RejectingTypedSink;
 
 #[async_trait]
 impl crate::channel::ChannelInboundSink for RejectingTypedSink {
-    async fn push(&self, _ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
+    async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
+        &self,
+        _ingress: ChannelIngress,
+    ) -> Result<(), crate::channel::ChannelSendError> {
         Err(crate::channel::ChannelSendError {
             message: "test event rejection".into(),
             ..Default::default()
@@ -23,7 +34,18 @@ struct RecordingTypedSink(std::sync::Mutex<Vec<ChannelIngress>>);
 
 #[async_trait]
 impl crate::channel::ChannelInboundSink for RecordingTypedSink {
-    async fn push(&self, ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
+    async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
+        &self,
+        ingress: ChannelIngress,
+    ) -> Result<(), crate::channel::ChannelSendError> {
         self.0.lock().unwrap().push(ingress);
         Ok(())
     }
@@ -36,7 +58,18 @@ struct BlockingTypedSink {
 
 #[async_trait]
 impl crate::channel::ChannelInboundSink for BlockingTypedSink {
-    async fn push(&self, _ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
+    async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
+        &self,
+        _ingress: ChannelIngress,
+    ) -> Result<(), crate::channel::ChannelSendError> {
         self.started.notify_one();
         std::future::pending().await
     }

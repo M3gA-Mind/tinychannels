@@ -140,6 +140,14 @@ struct InboundSink(mpsc::UnboundedSender<tinychannels_bus::ChannelIngress>);
 impl crate::channel::ChannelInboundSink for InboundSink {
     async fn push(
         &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
+        &self,
         ingress: tinychannels_bus::ChannelIngress,
     ) -> Result<(), crate::channel::ChannelSendError> {
         self.0
@@ -234,7 +242,8 @@ impl AdapterFixture for IrcConformanceFixture {
 
         if feature == ConformanceFeature::Text {
             let outcome =
-                crate::channel::ChannelAdapter::send(self.channel.as_ref(), intent(text())).await?;
+                crate::channel::ChannelAdapter::send_outcome(self.channel.as_ref(), intent(text()))
+                    .await?;
             let line = self.peer.lock().await.next_line().await;
             assert_eq!(line, "PRIVMSG #ops :conformance");
             self.observations.lock().unwrap().push(WireObservation {
@@ -256,7 +265,7 @@ impl AdapterFixture for IrcConformanceFixture {
                 crate::channel::ChannelTyping::start_typing(self.channel.as_ref(), "#ops").await?;
             }
             ConformanceFeature::Reactions => {
-                crate::channel::ChannelReaction::send_reaction(
+                crate::channel::LegacyChannelReaction::send_reaction(
                     self.channel.as_ref(),
                     &expected.channel,
                     &expected.conversation,
@@ -374,10 +383,8 @@ impl AdapterFixture for IrcConformanceFixture {
                     ConformanceFeature::VoiceOut => tinychannels_bus::OutboundPayload::Voice {
                         voice: tinychannels_bus::OutboundVoice::Media {
                             media: media(MediaKind::Audio),
-                            audio_base64: None,
                             codec: Some("ogg_opus".into()),
                             duration_ms: Some(1000),
-                            waveform: None,
                         },
                     },
                     ConformanceFeature::VoiceSynthesis => {
@@ -390,9 +397,11 @@ impl AdapterFixture for IrcConformanceFixture {
                     }
                     _ => unreachable!("handled as an optional operation above"),
                 };
-                let outcome =
-                    crate::channel::ChannelAdapter::send(self.channel.as_ref(), intent(payload))
-                        .await?;
+                let outcome = crate::channel::ChannelAdapter::send_outcome(
+                    self.channel.as_ref(),
+                    intent(payload),
+                )
+                .await?;
                 return Ok(Some(outcome));
             }
         }
@@ -474,6 +483,14 @@ struct RejectingSink;
 #[async_trait::async_trait]
 impl crate::channel::ChannelInboundSink for RejectingSink {
     async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
         &self,
         _: tinychannels_bus::ChannelIngress,
     ) -> Result<(), crate::channel::ChannelSendError> {
@@ -763,7 +780,7 @@ async fn listen_registers_authenticates_and_forwards_allowed_privmsgs() {
     assert_ne!(dm.message_id, channel_msg.message_id);
 
     // Typed send writes through the connection the adapter listener registered.
-    crate::channel::ChannelAdapter::send(
+    crate::channel::ChannelAdapter::send_outcome(
         channel.as_ref(),
         tinychannels_bus::ChannelOutboundIntent {
             channel_id: "irc".into(),
@@ -866,7 +883,7 @@ async fn listen_ends_sasl_on_failure_and_stops_when_the_receiver_is_gone() {
 #[tokio::test]
 async fn send_fails_before_listen_has_connected() {
     let channel = IrcChannel::new(config(1));
-    let error = crate::channel::ChannelAdapter::send(
+    let error = crate::channel::ChannelAdapter::send_outcome(
         &channel,
         tinychannels_bus::ChannelOutboundIntent {
             channel_id: "irc".into(),
@@ -928,7 +945,7 @@ async fn typed_send_uses_the_scoped_conversation_on_an_active_connection() {
     peer.expect("USER botuser 0 * :OpenHuman").await;
     peer.say(":srv 001 bot :Welcome").await;
 
-    let outcome = crate::channel::ChannelAdapter::send(
+    let outcome = crate::channel::ChannelAdapter::send_outcome(
         channel.as_ref(),
         tinychannels_bus::ChannelOutboundIntent {
             idempotency_key: "irc-connected-send".into(),

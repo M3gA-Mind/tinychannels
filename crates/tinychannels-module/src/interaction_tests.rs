@@ -70,7 +70,7 @@ impl tinychannels::channel::ChannelAdapter for NativeDescribeAdapter {
     async fn send(
         &self,
         _: tinychannels_bus::ChannelOutboundIntent,
-    ) -> Result<tinychannels::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError>
+    ) -> Result<tinychannels::channel::MessageReceipt, tinychannels::channel::ChannelSendError>
     {
         Ok(Default::default())
     }

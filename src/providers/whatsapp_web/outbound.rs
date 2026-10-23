@@ -555,7 +555,7 @@ impl crate::channel::ChannelTyping for WhatsAppWebChannel {
 
 #[cfg(feature = "whatsapp-web")]
 #[async_trait]
-impl crate::channel::ChannelReaction for WhatsAppWebChannel {
+impl crate::channel::LegacyChannelReaction for WhatsAppWebChannel {
     async fn send_reaction(
         &self,
         channel: &tinychannels_bus::channel::ChannelRef,

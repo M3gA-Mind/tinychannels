@@ -9,59 +9,30 @@
  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3" /></a>
 </p>
 
-**TinyChannels owns channel provider behavior and portable messaging
-contracts.** The `tinychannels-bus` crate defines the typed host/module
-boundary; `tinychannels-module` runs configured providers and relays, while
-`tinychannels-runtime` contains shared provider algorithms. OpenHuman loads
-the module and retains application policy, credentials, authorization, agent
-execution, and durable conversation sessions.
+**TinyChannels is a Rust library for OpenHuman channel and messaging
+primitives.** It provides the portable channel contract, channel configuration
+schema, connection metadata, route helpers, and backend delegation layer used to
+connect channel surfaces to OpenHuman harnesses without coupling this crate to
+the OpenHuman application crate.
 
 > **Channel contract:** the normative v2 target and migration rules are in
 > [docs/spec/contract-v2.md](docs/spec/contract-v2.md). This README describes
 > the current crate and implementation; it does not define the v2 wire
 > contract.
 
-Architecture and contract references:
-[architecture](docs/channel-architecture.md),
-[capabilities](docs/channel-capabilities.md),
-[channel contracts](docs/channel-contracts.md),
-[delivery](docs/channel-delivery.md), and
-[provider conformance](docs/channel-providers.md).
+The v2 bus types, unified configured-account capabilities, adapter traits,
+relay transport, and progressive delivery primitives are available. The
+built-in provider migration is still in progress: most direct providers remain
+on the legacy `Channel` trait, so v2 support must be checked per provider and
+must not be inferred from these shared types. See the
+[contract specification](docs/spec/contract-v2.md) for its implementation
+inventory and compatibility rules.
 
 Configured provider discovery, legacy intent normalization, and external-webhook
 outbound startup are confidential module operations. The catalog returns provider
 facts without listening; outbound-only startup preserves Linq and WhatsApp Cloud
-sends while keeping their ingress explicitly external. Linq webhooks work like
-WhatsApp Cloud's: the host forwards each raw POST through `DeliverWebhook` with
-`t=<X-Webhook-Timestamp>,v1=<X-Webhook-Signature>` as the signature, and the
-module verifies it against the configured `webhook_secret` (a channel without
-one refuses every delivery) before it downloads media and publishes typed
-envelopes.
-
-WhatsApp Cloud webhooks are the exception: the host serves the HTTP route, but
-the module owns everything that decides whether a POST is believed. The host
-forwards the raw body and the `X-Hub-Signature-256` header through the
-`DeliverWebhook` channel interaction (and the `hub.*` subscription handshake
-through `VerifyWebhook`). The module checks the HMAC against the exact bytes with
-the configured `app_secret` (a verify token is not a POST signature, and a
-channel without an app secret refuses every delivery), binds the delivery to the
-configured `phone_number_id`, bounds the body, suppresses Meta's redeliveries,
-downloads and persists attachments through the host's scoped media ports, and
-publishes typed envelopes and events on the ordered ingress path. A refused
-delivery fails with `ai.tinyhumans.tinychannels.Error.WebhookRejected` (answer
-with a client error); a failure after authentication fails with
-`...Error.WebhookFailed` (answer with a retryable error so Meta redelivers).
-
-Both WhatsApp adapters are native v2: text, image, video, audio, document,
-sticker, location and contact cards in both directions; push-to-talk voice notes
-in (stored, then transcribed by the module) and out (OGG/Opus, with WhatsApp's
-waveform on Web); reactions both ways; quoted replies; read receipts (outbound
-`MarkRead`, inbound delivered/read events); typing. WhatsApp Web additionally
-edits and unsends. Buttons, polls, presentations, native data, thread
-addressing and streaming drafts are reported as unsupported rather than faked.
-WhatsApp Web scopes durable media by the linked account's JID, learned from the
-session once it is linked and withdrawn permanently if the session later reports
-a different account.
+sends while keeping their ingress explicitly external. Existing listener start
+methods retain their refusal when no webhook ingress is available.
 
 Inbound preparation and hosted identity projection are confidential module
 operations. They return stable history, thread, client, and session keys using
@@ -99,11 +70,9 @@ preparation payload limit and fail after module shutdown.
 - adapters for OpenHuman channel surfaces
 - observability and lifecycle hooks around channel traffic
 
-Provider behavior is reached through the module's TinyBus operations. OpenHuman
-implements only the host capabilities that the module contract requests, such
-as scoped media access, speech services, event publication, and relay delivery.
-Host authorization, account policy, agent execution, and durable session
-storage remain in OpenHuman.
+Runtime side effects are pluggable through `ChannelBackend`. OpenHuman owns the
+actual backend implementation for REST/JWT/config storage, while this crate
+validates channel metadata and delegates operations through that trait.
 
 ## Provider Features
 
@@ -149,9 +118,9 @@ helpers on `lettre` alone, without the IMAP receive stack (18 fewer packages):
 tinychannels = { git = "https://github.com/tinyhumansai/tinychannels", features = ["email-send"] }
 ```
 
-`email-send` supplies the send-only provider helper. It does not configure an
-inbound listener; use the full `email` feature when the module must receive
-mail over IMAP as well as send through SMTP.
+`email-send` carries no `Channel` impl — a send-only build cannot `listen`, so
+the trait is gated on the full `email` feature rather than promising a
+half-working channel.
 
 All other providers (Telegram, Discord, Slack, Signal, iMessage, IRC, Yuanbao/钉钉, etc.) are included in the default build.
 
@@ -172,14 +141,14 @@ cargo test --features email,lark
 
 ## Repository Layout
 
-- `crates/tinychannels-bus/` holds typed message/envelope DTOs, module operation
-  requests and results, serialized channel configuration, capabilities,
-  controller schemas, relay frames, and errors.
+- `crates/tinychannels-bus/` holds shared message/envelope DTOs, serialized
+  channel configuration, capabilities, controller schemas/response types,
+  relay frames and errors.
 - `crates/tinychannels-runtime/` owns provider/adapter callbacks, listener and
-  dispatch supervision, pairing and relay crypto, provider normalization,
-  history/context preparation, and text segmentation.
-- `crates/tinychannels-module/` is the loadable TinyBus module that exposes
-  configured provider and web-output operations.
+  dispatch supervision, pairing and relay crypto, persisted key/idempotency
+  algorithms, history/context processing, configuration preparation and text
+  segmentation. It re-exports the same bus DTOs.
+- `crates/tinychannels-module/` is the loadable TinyBus module.
 - The module keeps its original `StartChannel`, `StopChannel`, `SendMessage`,
   `ListChannels` and `ChannelStatus` members, and adds relay reservation/start/
   stop/status/send plus `Shutdown`, typed `SendChannelIntent`, and send-only
@@ -193,20 +162,12 @@ cargo test --features email,lark
   Legacy `SendEmail` remains available for small requests; larger attachments
   use the confidential `BeginEmailUpload` / `AppendEmailUploadChunk` /
   `SendEmailUpload` protocol, with bounded chunks and a replayable terminal
-  result keyed by the opaque upload handle. The confidential web-output
-  operations `BeginWebTurn`, `ProjectWebOutput`, and `EndWebTurn` give each
-  host-owned turn a bounded module-side projection state and opaque handle;
-  the module stamps ordered sequence numbers and timestamps, then closes state
-  on terminal output or explicit end. The host retains authoritative tenant
-  and profile routing stamps.
+  result keyed by the opaque upload handle.
 - `src/lib.rs` exports the crate surface and re-exports the contract.
 - `src/providers/` holds the provider transports.
 - `src/delivery/` holds the durable outbound queue and `progressive/`, the
-  shared turn-progress engine (event projection, draft/edit or configured-limit
-  segmentation, typed content, receipt retention, and ephemeral cleanup) over
-  a host-supplied `ProgressiveSender`. See
-  [`src/delivery/progressive/README.md`](src/delivery/progressive/README.md).
-  The legacy reply splitter
+  streaming reply driver (draft, thinking and filler bubbles) over a
+  host-supplied `ProgressiveSender`. The reply splitter
   (`segment_for_delivery`) lives in `tinychannels-runtime` (`delivery::segment`) and
   is re-exported here.
 - `src/remote/` implements `/status`, `/sessions`, `/new` and `/help` for every
@@ -216,11 +177,9 @@ cargo test --features email,lark
   `chat_approvals` capability.
 - `src/relay/` holds the relay transport loop, the WebSocket dialer and the
   process-wide transport registry.
-- `src/backend.rs` retains compatibility `ChannelBackend` and `ChannelManager`
-  APIs. OpenHuman's host integration uses typed controller operations through
-  `tinychannels-bus` and `tinychannels-module`; `src/host/` contains the module's
-  host-capability boundary, and `src/routes.rs` and `src/runtime.rs` hold
-  portable runtime helpers.
+- `src/backend.rs` owns `ChannelBackend` and `ChannelManager`; `src/host/` is
+  the host service boundary; `src/routes.rs` and `src/runtime.rs` hold portable
+  runtime helpers.
 
 The [pure-contract relocation specification](docs/spec/pure-contract-relocation.md)
 records extension-trait source migrations and subsequent module-operation work.

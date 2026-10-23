@@ -1,7 +1,7 @@
 use super::*;
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
-    ChannelTypedSend, ChannelTyping,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelStreamingDraft, ChannelTypedSend,
+    ChannelTyping,
 };
 use crate::factory::{DefaultHttpClients, build_long_tail_channel};
 use std::sync::Arc;
@@ -347,7 +347,7 @@ async fn unimplemented_operations_are_explicitly_unsupported() {
             ]
         } else {
             vec![
-                ChannelReaction::send_reaction(
+                crate::channel::LegacyChannelReaction::send_reaction(
                     channel.as_ref(),
                     &ChannelRef {
                         id: id.into(),
@@ -431,7 +431,7 @@ async fn mattermost_typed_text_is_posted_with_the_thread_root_packed() {
         .await;
     let channel = build(&config(&server.uri()), "mattermost");
 
-    let outcome = ChannelAdapter::send(
+    let outcome = ChannelAdapter::send_outcome(
         channel.as_ref(),
         text_intent("mattermost", "chan1", Some("root9")),
     )
@@ -479,9 +479,10 @@ async fn a_rejected_post_is_reported_as_possibly_delivered() {
         .mount(&server)
         .await;
     let channel = build(&config(&server.uri()), "mattermost");
-    let error = ChannelAdapter::send(channel.as_ref(), text_intent("mattermost", "c", None))
-        .await
-        .unwrap_err();
+    let error =
+        ChannelAdapter::send_outcome(channel.as_ref(), text_intent("mattermost", "c", None))
+            .await
+            .unwrap_err();
     assert_eq!(error.kind, SendErrorKind::Unknown);
     assert!(error.sent_before_error && !error.retryable);
     assert!(
@@ -495,7 +496,7 @@ async fn sends_for_another_channel_or_without_a_conversation_never_reach_the_pro
     let server = MockServer::start().await;
     let channel = build(&config(&server.uri()), "mattermost");
 
-    let wrong_id = ChannelAdapter::send(channel.as_ref(), text_intent("irc", "c", None))
+    let wrong_id = ChannelAdapter::send_outcome(channel.as_ref(), text_intent("irc", "c", None))
         .await
         .unwrap_err();
     assert_eq!(wrong_id.kind, SendErrorKind::Forbidden);
@@ -506,16 +507,17 @@ async fn sends_for_another_channel_or_without_a_conversation_never_reach_the_pro
         account_id: None,
     });
     assert_eq!(
-        ChannelAdapter::send(channel.as_ref(), wrong_ref)
+        ChannelAdapter::send_outcome(channel.as_ref(), wrong_ref)
             .await
             .unwrap_err()
             .kind,
         SendErrorKind::Forbidden
     );
 
-    let empty = ChannelAdapter::send(channel.as_ref(), text_intent("mattermost", "  ", None))
-        .await
-        .unwrap_err();
+    let empty =
+        ChannelAdapter::send_outcome(channel.as_ref(), text_intent("mattermost", "  ", None))
+            .await
+            .unwrap_err();
     assert_eq!(empty.kind, SendErrorKind::BadFormat);
     assert!(!empty.unsupported);
 
@@ -540,7 +542,7 @@ async fn non_text_content_is_refused_before_any_request() {
             },
         }],
     };
-    let error = ChannelAdapter::send(channel.as_ref(), intent)
+    let error = ChannelAdapter::send_outcome(channel.as_ref(), intent)
         .await
         .unwrap_err();
     assert!(error.unsupported);

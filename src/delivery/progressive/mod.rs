@@ -36,6 +36,7 @@ pub struct ProgressiveOutputDispatch {
     pub outcomes: Vec<tinychannels_bus::channel::ChannelSendOutcome>,
     pub unsupported: Vec<tinychannels_bus::OutboundContentPart>,
     pub failure: Option<tinychannels_bus::module_progressive::ProgressiveOutputFailure>,
+    pub hosted_accepted: bool,
 }
 
 impl ProgressiveOutputDispatch {
@@ -55,6 +56,7 @@ impl ProgressiveOutputDispatch {
         self.outcomes.append(&mut other.outcomes);
         self.unsupported.append(&mut other.unsupported);
         self.failure = self.failure.or(other.failure);
+        self.hosted_accepted |= other.hosted_accepted;
     }
 
     /// Normalize accumulated engine facts into the public module result DTO.
@@ -64,21 +66,23 @@ impl ProgressiveOutputDispatch {
             self.outcomes.len(),
             self.unsupported.is_empty(),
             self.failure,
+            self.hosted_accepted,
         ) {
-            (0, true, None) => Result::Updated,
-            (1, true, None) => Result::DeliveryOutcome {
+            (0, true, None, false) => Result::Updated,
+            (1, true, None, false) => Result::DeliveryOutcome {
                 outcome: Box::new(self.outcomes.into_iter().next().expect("one outcome")),
             },
-            (0, false, None) => Result::DeliveryUnsupported {
+            (0, false, None, false) => Result::DeliveryUnsupported {
                 parts: self.unsupported,
             },
-            (outcomes, true, None) if outcomes > 1 => Result::DeliveryOutcomes {
+            (outcomes, true, None, false) if outcomes > 1 => Result::DeliveryOutcomes {
                 outcomes: self.outcomes,
             },
-            (_, _, failure) => Result::DeliveryBatch {
+            (_, _, failure, _) => Result::DeliveryBatch {
                 outcomes: self.outcomes,
                 unsupported: self.unsupported,
                 failure,
+                hosted_accepted: self.hosted_accepted,
             },
         }
     }
@@ -103,10 +107,12 @@ impl ProgressiveOutputDispatch {
                 outcomes,
                 unsupported,
                 failure,
+                hosted_accepted,
             } => Self {
                 outcomes: outcomes.clone(),
                 unsupported: unsupported.clone(),
                 failure: *failure,
+                hosted_accepted: *hosted_accepted,
             },
             _ => Self::default(),
         }

@@ -794,7 +794,7 @@ impl ChannelBackend for HostBackend {
                 value: request.emoji.unwrap_or_default(),
                 custom_emoji_id: request.custom_emoji_id,
             };
-            tinychannels::channel::ChannelReaction::send_reaction(
+            tinychannels::channel::LegacyChannelReaction::send_reaction(
                 &slack,
                 &tinychannels_bus::channel::ChannelRef {
                     id: "slack".into(),
@@ -824,7 +824,7 @@ impl ChannelBackend for HostBackend {
                 value: request.emoji.unwrap_or_default(),
                 custom_emoji_id: request.custom_emoji_id,
             };
-            tinychannels::channel::ChannelReaction::send_reaction(
+            tinychannels::channel::LegacyChannelReaction::send_reaction(
                 &mattermost,
                 &tinychannels_bus::channel::ChannelRef {
                     id: "mattermost".into(),

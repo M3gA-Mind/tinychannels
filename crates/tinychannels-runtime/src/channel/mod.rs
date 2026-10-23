@@ -1,6 +1,3 @@
-// Scoped allowance for the one-release v21 wire DTO compatibility surface.
-#![allow(deprecated)]
-
 //! Channel-side messaging abstractions and portable channel layer types.
 
 pub mod adapter;
@@ -12,11 +9,12 @@ pub mod receipt;
 pub mod session;
 pub use tinychannels_bus::channel::types;
 
-pub use crate::traits::{ChannelMessage, SendMessage};
+#[allow(deprecated)]
+pub use crate::traits::{Channel, ChannelMessage, ChannelSendExt, SendMessage, SendMessageExt};
 pub use adapter::{
     ChannelAdapter, ChannelDelete, ChannelDirectory, ChannelEdit, ChannelInboundSink,
     ChannelReaction, ChannelReceiveAckPolicy, ChannelResolver, ChannelSetup, ChannelStreamingDraft,
-    ChannelTypedSend, ChannelTyping,
+    ChannelTypedSend, ChannelTyping, LegacyChannelReaction,
 };
 pub use capabilities::{
     CHANNEL_MESSAGE_ACTION_NAMES, ChannelPresentationCapabilities, ChannelStaticCapabilities,
@@ -27,7 +25,6 @@ pub use envelope::{
     AccessContext, ChannelInboundEnvelope, GroupAccessPolicy, InboundMediaPayload,
     InboundMediaPayloadExt, MediaKind, MediaReference, MentionGate, SenderDmDecision,
     inbound_envelope_from_legacy_message, legacy_message_from_inbound_envelope,
-    typed_message_from_inbound_envelope,
 };
 pub use error::{
     ChannelSendError, ChannelSendErrorExt, SendErrorKind, classify_send_error,
@@ -47,6 +44,7 @@ pub use session::{
     LegacySessionKeys, SessionKeyPolicy, build_session_key, build_session_key_for_inbound_envelope,
     conversation_history_key_candidates, derive_inbound_client_id, derive_inbound_thread_id,
 };
+pub use tinychannels_bus::{ChannelCapabilities, ChannelIngress};
 pub use types::{
     ChannelDescriptor, ChannelRef, ConversationKind, ConversationRef, SecretRef, SenderRef,
 };

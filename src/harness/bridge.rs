@@ -135,10 +135,8 @@ pub fn translate_output_event(
             parts.push(tinychannels_bus::OutboundContentPart::Voice {
                 voice: tinychannels_bus::OutboundVoice::Media {
                     media: voice.media,
-                    audio_base64: None,
                     codec: voice.codec,
                     duration_ms: voice.duration_ms,
-                    waveform: voice.waveform,
                 },
             });
             OutboundPayload::Parts { parts }

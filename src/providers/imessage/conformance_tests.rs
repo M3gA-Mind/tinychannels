@@ -266,10 +266,8 @@ impl AdapterFixture for IMessageFixture {
                 self.send(intent(OutboundPayload::Voice {
                     voice: OutboundVoice::Media {
                         media: media_ref(MediaKind::Audio),
-                        audio_base64: None,
                         codec: Some("m4a_aac".into()),
                         duration_ms: None,
-                        waveform: None,
                     },
                 }))
                 .await

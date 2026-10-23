@@ -3,12 +3,10 @@
 use std::sync::Mutex as StdMutex;
 
 use async_trait::async_trait;
-use tinychannels_bus::channel::{
-    ChannelDescriptor, ChannelOutboundIntent, ChannelSendError, ChannelSendOutcome, SendErrorKind,
-};
+use tinychannels_bus::channel::ChannelOutboundIntent;
+use tinychannels_bus::{Channel, ChannelMessage, SendMessage};
 
 use super::*;
-use crate::channel::ChannelInboundSink;
 
 struct RecordingAdapter {
     name: String,
@@ -31,65 +29,37 @@ impl RecordingAdapter {
 }
 
 #[async_trait]
-impl ChannelAdapter for RecordingAdapter {
-    fn descriptor(&self) -> ChannelDescriptor {
-        ChannelDescriptor {
-            id: self.name.clone(),
-            account_id: Some(format!("{}/account", self.name)),
-            ..Default::default()
-        }
+impl Channel for RecordingAdapter {
+    fn name(&self) -> &str {
+        &self.name
     }
 
-    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        tinychannels_bus::ChannelCapabilities {
-            chat_approvals: self.name != "email",
-            ..Default::default()
-        }
+    fn supports_chat_approvals(&self) -> bool {
+        self.name != "email"
     }
 
-    async fn start(
-        &self,
-        _sink: &(dyn ChannelInboundSink + Send + Sync),
-    ) -> Result<(), ChannelSendError> {
+    async fn listen(&self, _tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         Ok(())
     }
 
-    async fn stop(&self) -> Result<(), ChannelSendError> {
-        Ok(())
-    }
-
-    async fn send(
-        &self,
-        intent: ChannelOutboundIntent,
-    ) -> Result<ChannelSendOutcome, ChannelSendError> {
+    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         if self.fail {
-            return Err(ChannelSendError {
-                kind: SendErrorKind::Unknown,
-                message: "send refused".into(),
-                ..Default::default()
-            });
+            anyhow::bail!("send refused");
         }
-        self.sent.lock().unwrap().push(intent);
-        Ok(ChannelSendOutcome::default())
-    }
-
-    async fn status(
-        &self,
-    ) -> Result<tinychannels_bus::controllers::ChannelAccountSnapshot, ChannelSendError> {
-        Ok(tinychannels_bus::controllers::ChannelAccountSnapshot {
-            channel_id: self.name.clone(),
-            ..Default::default()
-        })
+        self.sent.lock().unwrap().push(
+            tinychannels_runtime::channel::outbound_intent_from_send_message(&self.name, message),
+        );
+        Ok(())
     }
 }
 
 fn surface(channels: &[Arc<RecordingAdapter>]) -> ApprovalSurface {
-    let map: HashMap<String, Arc<dyn ChannelAdapter>> = channels
+    let map: HashMap<String, Arc<dyn Channel>> = channels
         .iter()
         .map(|channel| {
             (
                 channel.name.clone(),
-                Arc::clone(channel) as Arc<dyn ChannelAdapter>,
+                Arc::clone(channel) as Arc<dyn Channel>,
             )
         })
         .collect();
@@ -141,18 +111,17 @@ async fn every_chat_provider_gets_its_prompt_in_the_originating_chat() {
                 .and_then(|conversation| conversation.thread_id.as_deref()),
             thread_ts
         );
-        assert_eq!(
-            sent[0]
-                .channel_ref
-                .as_ref()
-                .and_then(|channel| channel.account_id.as_deref()),
-            Some(format!("{channel}/account").as_str())
-        );
+        assert_eq!(sent[0].channel_ref, None);
         assert!(matches!(
             &sent[0].payload,
-            tinychannels_bus::OutboundPayload::Text { text } if text.contains("file_write")
+            tinychannels_bus::OutboundPayload::NativeChannelData { data }
+                if data["content"].as_str().is_some_and(|text| text.contains("file_write"))
         ));
-        assert_eq!(sent[0].idempotency_key, "approval:req-1");
+        assert!(
+            sent[0]
+                .idempotency_key
+                .starts_with(&format!("legacy-send:{channel}:"))
+        );
     }
 }
 

@@ -31,8 +31,8 @@ impl ChannelAdapter for FixtureAdapter {
         Ok(())
     }
 
-    async fn send(&self, _: ChannelOutboundIntent) -> Result<ChannelSendOutcome, ChannelSendError> {
-        Ok(ChannelSendOutcome::default())
+    async fn send(&self, _: ChannelOutboundIntent) -> Result<MessageReceipt, ChannelSendError> {
+        Ok(MessageReceipt::default())
     }
 
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError> {

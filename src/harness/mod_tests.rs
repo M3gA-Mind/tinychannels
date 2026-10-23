@@ -607,8 +607,6 @@ fn voice_without_transcript_is_an_audio_part_without_an_invented_caption() {
                     media: voice.media,
                     codec: voice.codec,
                     duration_ms: voice.duration_ms,
-                    audio_base64: None,
-                    waveform: None,
                 },
             }],
         }

@@ -1,15 +1,15 @@
 //! Durable scoped media references backed by the host's existing blob store.
 
 use std::{
-    io::Cursor,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tinystoragedrivers_core::{BlobReader, BlobStore, DocumentStore, Filter, Precondition, Query};
-use tokio::io::AsyncReadExt;
+use tinystoragedrivers_api::{BlobReader, BlobStore, DocumentStore};
+use tinystoragedrivers_types::{Filter, Precondition, Query, Version};
 
 use tinychannels_bus::storage::{
     MEDIA_BLOB_PREFIX, MEDIA_METADATA as MEDIA_COLLECTION, media_metadata_spec,
@@ -185,7 +185,7 @@ impl ScopedMediaStore {
             .blobs
             .put_stream(
                 &storage_key,
-                Box::pin(Cursor::new(bytes)),
+                Box::pin(futures_util::stream::once(async move { Ok(bytes.into()) })),
                 record.media.size_bytes.unwrap_or_default(),
                 Some(&content_type),
             )
@@ -256,16 +256,12 @@ impl ScopedMediaStore {
         if !is_allowed_content_type(kind, &normalized) {
             anyhow::bail!("media content type or body is not allowed");
         }
-        let bounded = max_bytes.saturating_add(1);
-        let capacity = usize::try_from(bounded.min(64 * 1024)).unwrap_or(64 * 1024);
-        let mut bytes = Vec::with_capacity(capacity);
-        tokio::time::timeout(
+        let bytes = tokio::time::timeout(
             std::time::Duration::from_secs(60),
-            reader.take(bounded).read_to_end(&mut bytes),
+            collect_limited(reader, max_bytes),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("media download timed out"))?
-        .map_err(|_| anyhow::anyhow!("media download could not be read"))?;
+        .map_err(|_| anyhow::anyhow!("media download timed out"))??;
         if bytes.is_empty() || bytes.len() as u64 > max_bytes {
             anyhow::bail!("media exceeds the configured size limit");
         }
@@ -302,7 +298,7 @@ impl ScopedMediaStore {
             anyhow::bail!("media reference is outside the configured channel scope");
         }
         let key = record.storage_key.clone();
-        let mut stream = self
+        let stream = self
             .blobs
             .get_stream(&key)
             .await
@@ -311,10 +307,7 @@ impl ScopedMediaStore {
         if stream.meta.len == 0 || stream.meta.len > max_bytes {
             anyhow::bail!("media exceeds the configured read limit");
         }
-        let mut bytes = Vec::with_capacity(stream.meta.len as usize);
-        (&mut stream.reader)
-            .take(max_bytes.saturating_add(1))
-            .read_to_end(&mut bytes)
+        let bytes = collect_limited(stream.reader, max_bytes)
             .await
             .map_err(|_| anyhow::anyhow!("media blob could not be read"))?;
         if bytes.len() as u64 != stream.meta.len
@@ -452,10 +445,7 @@ impl ScopedMediaStore {
         Ok(cleaned)
     }
 
-    async fn record(
-        &self,
-        opaque_id: &str,
-    ) -> anyhow::Result<Option<(MediaRecord, tinystoragedrivers_core::Version)>> {
+    async fn record(&self, opaque_id: &str) -> anyhow::Result<Option<(MediaRecord, Version)>> {
         blob_key(opaque_id)?;
         let Some(document) = self
             .documents
@@ -488,6 +478,17 @@ impl super::MediaRepository for ScopedMediaStore {
     ) -> anyhow::Result<StoredMedia> {
         self.read(scope, &opaque_id, max_bytes).await
     }
+
+    async fn store_media_stream(
+        &self,
+        request: MediaStreamRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        self.store_stream(request).await
+    }
+
+    async fn delete_media(&self, scope: MediaScope, opaque_id: String) -> anyhow::Result<bool> {
+        self.delete(scope, &opaque_id).await
+    }
 }
 
 fn validate_scope(scope: &MediaScope) -> anyhow::Result<()> {
@@ -504,6 +505,18 @@ fn validate_scope(scope: &MediaScope) -> anyhow::Result<()> {
         anyhow::bail!("media storage requires configured account, conversation, and turn scope");
     }
     Ok(())
+}
+
+async fn collect_limited(mut reader: BlobReader, max_bytes: u64) -> anyhow::Result<Vec<u8>> {
+    let capacity = usize::try_from(max_bytes.min(64 * 1024)).unwrap_or(64 * 1024);
+    let mut bytes = Vec::with_capacity(capacity);
+    while let Some(chunk) = reader.try_next().await? {
+        if (bytes.len() as u64).saturating_add(chunk.len() as u64) > max_bytes {
+            anyhow::bail!("media exceeds the configured size limit");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 fn scoped_id(scope: &MediaScope, dedupe_key: &str) -> anyhow::Result<String> {
@@ -623,7 +636,7 @@ fn content_matches(content_type: &str, bytes: &[u8]) -> bool {
         "video/mp4" | "video/quicktime" => bytes.get(4..8) == Some(b"ftyp"),
         "video/webm" | "audio/webm" => bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]),
         "audio/ogg" => bytes.starts_with(b"OggS"),
-        "audio/mpeg" => bytes.starts_with(b"ID3") || bytes.starts_with(&[0xff, 0xfb]),
+        "audio/mpeg" => bytes.starts_with(b"ID3") || valid_mpeg_audio_header(bytes),
         "audio/mp4" => bytes.get(4..8) == Some(b"ftyp"),
         "audio/wav" => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WAVE"),
         "application/pdf" => bytes.starts_with(b"%PDF-"),
@@ -637,6 +650,23 @@ fn content_matches(content_type: &str, bytes: &[u8]) -> bool {
         }
         _ => false,
     }
+}
+
+fn valid_mpeg_audio_header(bytes: &[u8]) -> bool {
+    let Some(header) = bytes.get(..4) else {
+        return false;
+    };
+    let [sync, second, third, _] = [header[0], header[1], header[2], header[3]];
+    let version = (second >> 3) & 0b11;
+    let layer = (second >> 1) & 0b11;
+    let bitrate_index = third >> 4;
+    let sample_rate_index = (third >> 2) & 0b11;
+    sync == 0xff
+        && second & 0b1110_0000 == 0b1110_0000
+        && version != 0b01
+        && layer != 0
+        && bitrate_index != 0b1111
+        && sample_rate_index != 0b11
 }
 
 #[cfg(test)]

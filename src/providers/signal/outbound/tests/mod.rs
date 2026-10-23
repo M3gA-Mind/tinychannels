@@ -1,7 +1,7 @@
 use super::*;
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelInboundSink,
-    ChannelReaction as ReactionPort, ChannelTypedSend, ChannelTyping,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelInboundSink, ChannelTypedSend,
+    ChannelTyping, LegacyChannelReaction as ReactionPort,
 };
 use crate::providers::native::fixtures::stored_media;
 use crate::providers::signal::fixtures::*;
@@ -22,7 +22,15 @@ struct InboundRecorder(Mutex<Vec<ChannelIngress>>);
 
 #[async_trait]
 impl ChannelInboundSink for InboundRecorder {
-    async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+    async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
         self.0.lock().unwrap().push(ingress);
         Ok(())
     }
@@ -32,7 +40,15 @@ struct BlockingInboundSink(Notify);
 
 #[async_trait]
 impl ChannelInboundSink for BlockingInboundSink {
-    async fn push(&self, _ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+    async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(&self, _ingress: ChannelIngress) -> Result<(), ChannelSendError> {
         self.0.notify_one();
         std::future::pending().await
     }
@@ -42,7 +58,15 @@ struct RejectingInboundSink;
 
 #[async_trait]
 impl ChannelInboundSink for RejectingInboundSink {
-    async fn push(&self, _ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+    async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(&self, _ingress: ChannelIngress) -> Result<(), ChannelSendError> {
         Err(ChannelSendError {
             message: "test ingress rejection".into(),
             ..Default::default()

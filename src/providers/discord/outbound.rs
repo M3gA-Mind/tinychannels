@@ -490,10 +490,8 @@ impl DiscordChannel {
                     acc.take(&mut batches);
                     let OutboundVoice::Media {
                         media,
-                        audio_base64,
                         codec,
                         duration_ms,
-                        waveform,
                     } = voice
                     else {
                         return Err(pre_dispatch(
@@ -505,10 +503,10 @@ impl DiscordChannel {
                             message,
                             target,
                             media,
-                            audio_base64.as_deref(),
+                            None,
                             codec.as_deref(),
                             *duration_ms,
-                            waveform.as_deref(),
+                            None,
                         )
                         .await?,
                     ));

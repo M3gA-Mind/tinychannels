@@ -387,10 +387,8 @@ impl AdapterFixture for WebKit {
                         opaque_id: Some("voice-kit".into()),
                         ..Default::default()
                     },
-                    audio_base64: None,
                     codec: Some("ogg_opus".into()),
                     duration_ms: Some(1000),
-                    waveform: Some(vec![0.5; 8]),
                 },
             },
             Feature::VoiceSynthesis => OutboundPayload::Voice {
@@ -408,7 +406,7 @@ impl AdapterFixture for WebKit {
                     .await
                     .map(|()| None)
             }
-            Feature::Reactions => crate::channel::ChannelReaction::send_reaction(
+            Feature::Reactions => crate::channel::LegacyChannelReaction::send_reaction(
                 self.channel.as_ref(),
                 &self.scope.channel,
                 &self.scope.conversation,
@@ -427,7 +425,7 @@ impl AdapterFixture for WebKit {
                         .await?;
                 let edited = crate::channel::ChannelEdit::edit(
                     self.channel.as_ref(),
-                    &sent.receipt,
+                    &sent,
                     ChannelOutboundIntent {
                         payload: text("edited kit"),
                         ..intent
@@ -442,7 +440,7 @@ impl AdapterFixture for WebKit {
             Feature::Delete => {
                 let sent =
                     crate::channel::ChannelAdapter::send(self.channel.as_ref(), intent).await?;
-                crate::channel::ChannelDelete::delete(self.channel.as_ref(), &sent.receipt)
+                crate::channel::ChannelDelete::delete(self.channel.as_ref(), &sent)
                     .await
                     .map(|()| None)
             }
@@ -570,7 +568,7 @@ impl AdapterFixture for WebKit {
                 self.observed.lock().push(observation);
                 Ok(None)
             }
-            _ => crate::channel::ChannelAdapter::send(self.channel.as_ref(), intent)
+            _ => crate::channel::ChannelAdapter::send_outcome(self.channel.as_ref(), intent)
                 .await
                 .map(Some),
         };

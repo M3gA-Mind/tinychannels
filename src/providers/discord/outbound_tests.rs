@@ -685,10 +685,8 @@ async fn a_voice_message_uploads_with_the_voice_flag_duration_and_waveform() {
         OutboundContentPart::Voice {
             voice: OutboundVoice::Media {
                 media,
-                audio_base64: None,
                 codec: Some("ogg_opus".into()),
                 duration_ms: Some(1000),
-                waveform: None,
             },
         },
     ]);

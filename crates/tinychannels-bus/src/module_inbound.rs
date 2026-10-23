@@ -65,6 +65,10 @@ pub struct PreparedChannelInbound {
     pub message: ChannelMessage,
     pub envelope: ChannelInboundEnvelope,
     pub history_key: String,
+    /// Whether the configured provider treats its thread identifier as a
+    /// reply target rather than a distinct persisted conversation.
+    #[serde(default)]
+    pub history_key_ignores_thread: bool,
     pub thread_id: String,
     pub client_id: String,
     pub session_key: String,

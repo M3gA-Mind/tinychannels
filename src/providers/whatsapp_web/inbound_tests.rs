@@ -304,6 +304,14 @@ struct BlockingSink {
 impl crate::channel::ChannelInboundSink for BlockingSink {
     async fn push(
         &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
+        &self,
         _ingress: tinychannels_bus::ChannelIngress,
     ) -> Result<(), crate::channel::ChannelSendError> {
         self.entered.notify_one();
@@ -314,6 +322,14 @@ impl crate::channel::ChannelInboundSink for BlockingSink {
 #[async_trait::async_trait]
 impl crate::channel::ChannelInboundSink for RetryOnceSink {
     async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
         &self,
         ingress: tinychannels_bus::ChannelIngress,
     ) -> Result<(), crate::channel::ChannelSendError> {

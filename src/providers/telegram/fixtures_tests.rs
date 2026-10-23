@@ -5,9 +5,113 @@
 use super::*;
 use crate::host::{AllowlistStore, EventSink, Transcriber, TranscriptionRequest};
 use async_trait::async_trait;
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// In-process loopback Bot API for provider tests that need to inject polls
+/// and inspect the messages the channel sends back.
+#[derive(Clone)]
+pub(super) struct BotApiFake {
+    base: String,
+    state: Arc<BotApiFakeState>,
+}
+
+#[derive(Default)]
+struct BotApiFakeState {
+    updates: Mutex<VecDeque<serde_json::Value>>,
+    poll_failures: Mutex<VecDeque<(u16, serde_json::Value)>>,
+    sent: Mutex<Vec<(String, serde_json::Value)>>,
+}
+
+impl BotApiFake {
+    pub(super) async fn start() -> Self {
+        use axum::{Json, Router, body::Bytes, extract::State, http::StatusCode, routing::post};
+
+        async fn handle(
+            State(state): State<Arc<BotApiFakeState>>,
+            uri: axum::http::Uri,
+            headers: axum::http::HeaderMap,
+            body: Bytes,
+        ) -> (StatusCode, Json<serde_json::Value>) {
+            let method = uri
+                .path()
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            if method == "getUpdates" {
+                if let Some((status, body)) = state.poll_failures.lock().unwrap().pop_front() {
+                    return (StatusCode::from_u16(status).unwrap(), Json(body));
+                }
+                let updates = state.updates.lock().unwrap().drain(..).collect::<Vec<_>>();
+                return (
+                    StatusCode::OK,
+                    Json(serde_json::json!({ "ok": true, "result": updates })),
+                );
+            }
+
+            let request = serde_json::from_slice(&body).unwrap_or_else(|_| {
+                serde_json::json!({
+                    "content_type": headers
+                        .get(axum::http::header::CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok()),
+                    "raw_body": String::from_utf8_lossy(&body).into_owned()
+                })
+            });
+            state.sent.lock().unwrap().push((method, request));
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "ok": true, "result": { "message_id": 900 } })),
+            )
+        }
+
+        let state = Arc::new(BotApiFakeState::default());
+        let app = Router::new()
+            .route("/{*path}", post(handle))
+            .with_state(Arc::clone(&state));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind Bot API fake");
+        let address = listener.local_addr().expect("Bot API fake address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve Bot API fake");
+        });
+        Self {
+            base: format!("http://{address}"),
+            state,
+        }
+    }
+
+    pub(super) fn channel(&self, allowed: &[&str]) -> TelegramChannel {
+        let mut channel = TelegramChannel::new(
+            TOKEN.into(),
+            allowed.iter().map(|value| (*value).to_string()).collect(),
+            false,
+        );
+        channel.api_base = self.base.clone();
+        channel
+    }
+
+    pub(super) fn inject(&self, update: serde_json::Value) {
+        self.state.updates.lock().unwrap().push_back(update);
+    }
+
+    pub(super) fn fail_next_poll(&self, status: u16, body: serde_json::Value) {
+        self.state
+            .poll_failures
+            .lock()
+            .unwrap()
+            .push_back((status, body));
+    }
+
+    pub(super) fn sent(&self) -> Vec<(String, serde_json::Value)> {
+        self.state.sent.lock().unwrap().clone()
+    }
+}
 
 pub(super) const TOKEN: &str = "test-token";
 

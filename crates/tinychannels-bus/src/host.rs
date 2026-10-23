@@ -1,12 +1,55 @@
 //! Portable payloads for the host callback object.
-use crate::channel::{ChannelRef, ConversationRef, MediaReference};
+use crate::{ChannelRef, ConversationRef, MediaReference};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+/// Authenticated scope for media operations owned by one configured channel.
+/// The module fills provider identity from its active runtime; callers must
+/// supply the conversation and originating turn.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostVoiceScope {
+    pub configured_instance: String,
+    pub channel: ChannelRef,
+    pub conversation: ConversationRef,
+    pub turn_id: String,
+}
+
+/// One-release compatibility result for legacy voice stores.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HostStoreVoiceMediaResult {
+    pub media: MediaReference,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accessible_url: Option<String>,
+}
+
+/// One-release compatibility result for legacy voice reads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HostReadVoiceMediaResult {
+    pub audio_base64: String,
+    pub mime_type: String,
+    pub file_name: Option<String>,
+}
+
+/// Whether stored channel media arrived from a provider or was prepared for
+/// outbound delivery.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HostVoiceMediaDirection {
+    #[default]
+    Inbound,
+    Outbound,
+}
 
 /// Request speech recognition through the host's configured voice provider.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct HostTranscriptionRequest {
+    /// Authenticated provider, conversation and turn scope for the request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<HostVoiceScope>,
     /// Base64-encoded audio bytes.
     pub audio_base64: String,
     /// MIME hint such as `audio/ogg` or `audio/mp4`.
@@ -17,8 +60,7 @@ pub struct HostTranscriptionRequest {
     pub language: Option<String>,
 }
 
-/// Scoped STT callback used by the shared voice pipeline. The module fills the
-/// configured instance from its runtime instead of accepting it from a caller.
+/// Scoped speech recognition request for module to host calls.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
 pub struct HostVoiceTranscriptionRequest {
@@ -29,18 +71,71 @@ pub struct HostVoiceTranscriptionRequest {
     pub language: Option<String>,
 }
 
-/// Module-authenticated scope for a host voice operation.
+/// Scoped text-to-speech request for module to host calls.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
-pub struct HostVoiceScope {
-    /// Configured channel instance selected by the module at runtime start.
-    pub configured_instance: String,
-    /// Full provider account address, overwritten by the module.
-    pub channel: ChannelRef,
-    /// Full conversation address, including thread and topic.
-    pub conversation: ConversationRef,
-    /// Stable identity of the originating turn or inbound message.
-    pub turn_id: String,
+pub struct HostSpeechSynthesisRequest {
+    pub scope: HostVoiceScope,
+    pub text: String,
+    pub voice: Option<String>,
+    pub format: Option<String>,
+}
+
+/// Synthesized audio returned by a scoped host callback.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostSpeechSynthesisResult {
+    pub audio_base64: String,
+    pub mime_type: String,
+    pub duration_ms: Option<u64>,
+    pub visemes: Option<serde_json::Value>,
+}
+
+/// Scoped request to persist provider audio through the host.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostStoreVoiceMediaRequest {
+    pub scope: HostVoiceScope,
+    pub audio_base64: String,
+    pub mime_type: String,
+    pub file_name: Option<String>,
+    pub direction: HostVoiceMediaDirection,
+}
+
+/// Scoped request to read previously stored voice bytes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostReadVoiceMediaRequest {
+    pub scope: HostVoiceScope,
+    pub media: MediaReference,
+    pub max_bytes: u64,
+}
+
+/// Host-selected policy for whether the current turn should have a spoken reply.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HostVoiceReplyMode {
+    #[default]
+    Mirror,
+    Always,
+    Never,
+    SpeakReply,
+}
+
+/// Scoped request for host voice reply policy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostVoiceReplyPolicyRequest {
+    pub scope: HostVoiceScope,
+    pub inbound_has_voice: bool,
+    pub explicitly_requested: bool,
+}
+
+/// Voice reply policy returned by the host.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostVoiceReplyPolicy {
+    pub mode: HostVoiceReplyMode,
 }
 
 /// Speech recognition result returned by the host.
@@ -55,112 +150,6 @@ pub struct HostTranscriptionResult {
     pub duration_secs: Option<f64>,
 }
 
-/// Request speech synthesis through the host's configured voice provider.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct HostSpeechSynthesisRequest {
-    pub scope: HostVoiceScope,
-    pub text: String,
-    pub voice: Option<String>,
-    pub format: Option<String>,
-}
-
-/// Synthesized speech bytes returned by the host.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct HostSpeechSynthesisResult {
-    pub audio_base64: String,
-    pub mime_type: String,
-    pub duration_ms: Option<u64>,
-}
-
-/// Direction of media being persisted by the host.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum HostVoiceMediaDirection {
-    Inbound,
-    Outbound,
-}
-
-/// Request durable host storage for voice bytes before the module forwards a
-/// normalized envelope or a public media link.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct HostStoreVoiceMediaRequest {
-    pub scope: HostVoiceScope,
-    pub direction: HostVoiceMediaDirection,
-    pub audio_base64: String,
-    pub mime_type: String,
-    pub codec: Option<String>,
-    pub duration_ms: Option<u64>,
-    pub file_name: Option<String>,
-    /// Existing shared-pipeline media to materialize or authorize for a link.
-    /// Hosts that support this projection reuse the blob instead of storing a
-    /// second copy. Older hosts may ignore the field and retain compatibility.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub media_reference: Option<MediaReference>,
-}
-
-/// Opaque durable media reference authorized by the host.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct HostStoreVoiceMediaResult {
-    /// Durable opaque reference used in history and normalized envelopes.
-    pub media: MediaReference,
-    /// Optional host-authorized URL that another peer can actually open.
-    /// Omit it unless link access is intentionally granted for this media.
-    pub accessible_url: Option<String>,
-}
-
-/// Resolve authorized stored bytes for a native provider upload.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct HostReadVoiceMediaRequest {
-    pub scope: HostVoiceScope,
-    pub opaque_id: String,
-    /// Maximum decoded audio bytes the host may return for a provider upload.
-    pub max_bytes: u64,
-}
-
-/// Bounded media returned only for the requested conversation and turn.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct HostReadVoiceMediaResult {
-    pub audio_base64: String,
-    pub mime_type: String,
-    pub file_name: Option<String>,
-}
-
-/// Host-selected speech policy and verified facts for one active turn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum HostVoiceReplyMode {
-    Mirror,
-    Always,
-    Never,
-    SpeakReply,
-}
-
-/// Resolve voice reply policy from the host's authoritative turn state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct HostVoiceReplyPolicyRequest {
-    pub scope: HostVoiceScope,
-}
-
-/// Host-authoritative policy and turn facts; codec constraints come from the
-/// provider's advertised voice capabilities and are applied by the module.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct HostVoiceReplyPolicy {
-    pub mode: HostVoiceReplyMode,
-    pub inbound_has_voice: bool,
-    pub explicitly_requested: bool,
-}
-
-/// Host reply-policy callback name.
-pub const GET_VOICE_REPLY_POLICY: &str = "GetVoiceReplyPolicy";
-
 /// An event published by a provider through the host's event sink.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HostEventPublication {
@@ -171,3 +160,7 @@ pub struct HostEventPublication {
     /// Domain-specific JSON payload.
     pub payload: serde_json::Value,
 }
+
+#[cfg(test)]
+#[path = "host_tests.rs"]
+mod tests;

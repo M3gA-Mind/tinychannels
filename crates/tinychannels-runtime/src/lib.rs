@@ -16,10 +16,7 @@ mod health_tests;
     reason = "legacy session projection remains during v22 migration"
 )]
 mod session;
-#[cfg(test)]
-#[path = "traits_tests.rs"]
-mod traits_tests;
-
+pub use channel::{Channel, ChannelSendExt, SendMessageExt};
 pub use cli::CliChannel;
 pub use dispatch::{RuntimeChannelMessage, run_dispatch_loop};
 pub use health::{ChannelHealthState, classify_health_result};

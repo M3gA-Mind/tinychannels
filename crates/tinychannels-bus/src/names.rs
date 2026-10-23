@@ -9,6 +9,9 @@
 /// Well-known bus name exported by the TinyChannels module.
 pub const BUS_NAME: &str = "ai.tinyhumans.tinychannels.Channels";
 
+/// Stable module registry identifier for the TinyChannels module.
+pub const MODULE_ID: &str = "tinychannels";
+
 /// Object path served by the TinyChannels module.
 pub const OBJECT_PATH: &str = "/ai/tinyhumans/tinychannels/Channels";
 
@@ -17,6 +20,104 @@ pub const HOST_BUS_NAME: &str = "ai.tinyhumans.tinychannels.ChannelsHost";
 
 /// Object path the host serves for module-to-host callbacks.
 pub const HOST_OBJECT_PATH: &str = "/ai/tinyhumans/tinychannels/ChannelsHost";
+
+/// One constant per method name on [`BUS_NAME`].
+pub mod methods {
+    /// Parse model/provider commands and render help without changing host state.
+    pub const PREPARE_RUNTIME_COMMAND: &str = "PrepareRuntimeCommand";
+    /// Prepare module-owned channel facts and runtime command responses.
+    pub const PREPARE_CHANNEL_CONTROL: &str = "PrepareChannelControl";
+    /// Run module-owned remote commands and persisted turn state.
+    pub const EXECUTE_REMOTE: &str = "ExecuteRemote";
+    /// Drive a module-owned progressive reply through an opaque handle.
+    pub const EXECUTE_PROGRESSIVE: &str = "ExecuteProgressive";
+    /// Prepare normalized inbound facts and persisted keys inside the module.
+    pub const PREPARE_CHANNEL_INBOUND: &str = "PrepareChannelInbound";
+    /// Derive hosted-ingress thread and client identities inside the module.
+    pub const PREPARE_CHANNEL_IDENTITY: &str = "PrepareChannelIdentity";
+    /// Resolve provider facts from confidential hydrated configuration without listening.
+    pub const DESCRIBE_CONFIGURED_CHANNELS: &str = "DescribeConfiguredChannels";
+    /// Keep an external-webhook provider available for outbound operations.
+    pub const START_OUTBOUND_CHANNEL: &str = "StartOutboundChannel";
+    /// Normalize legacy messages and produce deterministic intent keys in the module.
+    pub const PREPARE_OUTBOUND_INTENT: &str = "PrepareOutboundIntent";
+    /// Reserve one inert identity-scoped runtime with immutable callback paths.
+    pub const RESERVE_RUNTIME: &str = "ReserveRuntime";
+    /// Activate the private provider object for a known runtime handle.
+    pub const START_RUNTIME: &str = "StartRuntime";
+    /// Activate an identity runtime with bounded `ProcessInbound` turn callbacks.
+    pub const START_RUNTIME_WITH_DISPATCH: &str = "StartRuntimeWithDispatch";
+    /// Stop and join all resources belonging to one runtime handle.
+    pub const STOP_RUNTIME: &str = "StopRuntime";
+    /// Start a provider with module-owned reconnect supervision and host-selected timing.
+    pub const START_CHANNEL_SUPERVISED: &str = "StartChannelSupervised";
+    /// Check configured providers without starting listeners; inputs are confidential.
+    pub const CHECK_CHANNEL_HEALTH: &str = "CheckChannelHealth";
+    /// Reserve one idle relay handle before native startup.
+    pub const RESERVE_RELAY: &str = "ReserveRelay";
+    /// Start a reserved relay using confidential hydrated configuration.
+    pub const START_RELAY: &str = "StartRelay";
+    /// Start a relay using the canonical v2 identity-scoped capability handshake.
+    pub const START_RELAY_V2: &str = "StartRelayV2";
+    /// Stop and join one reserved relay, including pending startup.
+    pub const STOP_RELAY: &str = "StopRelay";
+    /// Return safe lifecycle facts for one relay reservation.
+    pub const RELAY_STATUS: &str = "RelayStatus";
+    /// Query negotiated canonical v2 relay capabilities by reservation.
+    pub const RELAY_CAPABILITIES_V2: &str = "RelayCapabilitiesV2";
+    /// Submit an ordered relay outbound intent.
+    pub const SEND_RELAY_INTENT: &str = "SendRelayIntent";
+    /// Freeze publication and drain every owned provider, relay and callback.
+    pub const SHUTDOWN: &str = "Shutdown";
+    /// `SendChannelIntent` — deliver one typed intent through a running provider.
+    pub const SEND_CHANNEL_INTENT: &str = "SendChannelIntent";
+    /// `SendEmail` — send host-configured MIME mail without starting IMAP.
+    pub const SEND_EMAIL: &str = "SendEmail";
+    /// Begin an attachment upload whose chunks remain below TinyBus frame limits.
+    pub const BEGIN_EMAIL_UPLOAD: &str = "BeginEmailUpload";
+    /// Append one bounded confidential attachment chunk idempotently.
+    pub const APPEND_EMAIL_UPLOAD_CHUNK: &str = "AppendEmailUploadChunk";
+    /// Send a completed upload once and replay its terminal result by handle.
+    pub const SEND_EMAIL_UPLOAD: &str = "SendEmailUpload";
+    /// Abort an upload that has not entered SMTP delivery.
+    pub const ABORT_EMAIL_UPLOAD: &str = "AbortEmailUpload";
+    /// `StartChannel` — connect and begin receiving on one configured provider.
+    pub const START_CHANNEL: &str = "StartChannel";
+    /// `StopChannel` — disconnect one running provider.
+    pub const STOP_CHANNEL: &str = "StopChannel";
+    /// `SendMessage` — deliver one outbound intent through a running provider.
+    pub const SEND_MESSAGE: &str = "SendMessage";
+    /// `ListChannels` — report every provider this build can serve.
+    pub const LIST_CHANNELS: &str = "ListChannels";
+    /// `ChannelStatus` — report connection state for one provider.
+    pub const CHANNEL_STATUS: &str = "ChannelStatus";
+    /// Start a provider with host-selected HTTP proxy policy.
+    pub const START_CHANNEL_CONFIGURED: &str = "StartChannelConfigured";
+    /// Dispatch typed controller work through TinyChannels' owning manager.
+    pub const CHANNEL_CONTROLLER: &str = "ChannelController";
+    /// Run typing, draft and capability operations on one running provider.
+    pub const CHANNEL_INTERACTION: &str = "ChannelInteraction";
+    /// Begin a bounded host-owned media upload.
+    pub const BEGIN_MEDIA_UPLOAD: &str = "BeginMediaUpload";
+    /// Append a confidential, ordered chunk to a media upload.
+    pub const APPEND_MEDIA_UPLOAD_CHUNK: &str = "AppendMediaUploadChunk";
+    /// Finalize a media upload and return an opaque scoped reference.
+    pub const FINISH_MEDIA_UPLOAD: &str = "FinishMediaUpload";
+    /// Abort a buffered media upload; retries are idempotent.
+    pub const ABORT_MEDIA_UPLOAD: &str = "AbortMediaUpload";
+    /// Resolve a scoped opaque reference into a bounded read handle.
+    pub const BEGIN_MEDIA_READ: &str = "BeginMediaRead";
+    /// Read the next bounded chunk from a media handle.
+    pub const READ_MEDIA_CHUNK: &str = "ReadMediaChunk";
+    /// Abort a media read and release its temporary bytes.
+    pub const ABORT_MEDIA_READ: &str = "AbortMediaRead";
+    /// Begin module-owned projection state for one host-authorized web turn.
+    pub const BEGIN_WEB_TURN: &str = "BeginWebTurn";
+    /// Project a canonical provider output event into ordered web events.
+    pub const PROJECT_WEB_OUTPUT: &str = "ProjectWebOutput";
+    /// Retire module-owned state for one web turn.
+    pub const END_WEB_TURN: &str = "EndWebTurn";
+}
 
 /// One constant per method name on [`HOST_BUS_NAME`].
 pub mod host_methods {
@@ -33,14 +134,15 @@ pub mod host_methods {
     pub const PERSIST_ALLOWED_IDENTITY: &str = "PersistAllowedIdentity";
     /// `Transcribe` — use the host's configured speech recognition provider.
     pub const TRANSCRIBE: &str = "Transcribe";
-    /// Scoped STT for the shared voice pipeline.
+    /// Request a scoped speech transcription from the host.
     pub const TRANSCRIBE_VOICE: &str = "TranscribeVoice";
-    /// `SynthesizeSpeech` — use the host's configured speech synthesis provider.
+    /// Request scoped speech synthesis from the host.
     pub const SYNTHESIZE_SPEECH: &str = "SynthesizeSpeech";
-    /// `StoreVoiceMedia` — persist voice media and return a durable host reference.
+    /// Persist scoped voice media through the host.
     pub const STORE_VOICE_MEDIA: &str = "StoreVoiceMedia";
+    /// Read scoped voice media through the host.
     pub const READ_VOICE_MEDIA: &str = "ReadVoiceMedia";
-    /// Host-selected voice reply mode and authoritative turn facts.
+    /// Resolve host voice reply policy for a scoped turn.
     pub const GET_VOICE_REPLY_POLICY: &str = "GetVoiceReplyPolicy";
     /// `PublishEvent` — publish one provider event through the host event sink.
     pub const PUBLISH_EVENT: &str = "PublishEvent";
@@ -49,72 +151,56 @@ pub mod host_methods {
     pub const DISPATCH_CONTROLLER_BACKEND: &str = "DispatchControllerBackend";
 }
 
-/// The source-of-truth module method registry, shared with the module export generator.
-#[doc(hidden)]
-#[macro_export]
-macro_rules! channel_method_registry {
-    ($consumer:ident) => {
-        $consumer!([
-            #[doc = "`StartChannel` — connect and begin receiving on one configured provider."] START_CHANNEL => "StartChannel",
-            #[doc = "`StopChannel` — disconnect one running provider."] STOP_CHANNEL => "StopChannel",
-            #[doc = "`SendMessage` — deliver one outbound intent through a running provider."] SEND_MESSAGE => "SendMessage",
-            #[doc = "`ListChannels` — report every provider this build can serve."] LIST_CHANNELS => "ListChannels",
-            #[doc = "`ChannelStatus` — report connection state for one provider."] CHANNEL_STATUS => "ChannelStatus",
-            #[doc = "Reserve one idle relay handle before native startup."] RESERVE_RELAY => "ReserveRelay",
-            #[doc = "Start a reserved relay using confidential hydrated configuration."] START_RELAY => "StartRelay",
-            #[doc = "Start a relay using the canonical v2 identity-scoped capability handshake."] START_RELAY_V2 => "StartRelayV2",
-            #[doc = "Stop and join one reserved relay, including pending startup."] STOP_RELAY => "StopRelay",
-            #[doc = "Return safe lifecycle facts for one relay reservation."] RELAY_STATUS => "RelayStatus",
-            #[doc = "Query negotiated canonical v2 relay capabilities by reservation."] RELAY_CAPABILITIES_V2 => "RelayCapabilitiesV2",
-            #[doc = "Submit an ordered relay outbound intent."] SEND_RELAY_INTENT => "SendRelayIntent",
-            #[doc = "Freeze publication and drain every owned provider, relay and callback."] SHUTDOWN => "Shutdown",
-            #[doc = "`SendChannelIntent` — deliver one typed intent through a running provider."] SEND_CHANNEL_INTENT => "SendChannelIntent",
-            #[doc = "`SendEmail` — send host-configured MIME mail without starting IMAP."] SEND_EMAIL => "SendEmail",
-            #[doc = "Begin an attachment upload whose chunks remain below TinyBus frame limits."] BEGIN_EMAIL_UPLOAD => "BeginEmailUpload",
-            #[doc = "Append one bounded confidential attachment chunk idempotently."] APPEND_EMAIL_UPLOAD_CHUNK => "AppendEmailUploadChunk",
-            #[doc = "Send a completed upload once and replay its terminal result by handle."] SEND_EMAIL_UPLOAD => "SendEmailUpload",
-            #[doc = "Abort an upload that has not entered SMTP delivery."] ABORT_EMAIL_UPLOAD => "AbortEmailUpload",
-            #[doc = "Start a provider with host-selected HTTP proxy policy."] START_CHANNEL_CONFIGURED => "StartChannelConfigured",
-            #[doc = "Dispatch typed controller work through TinyChannels' owning manager."] CHANNEL_CONTROLLER => "ChannelController",
-            #[doc = "Run typing, draft and capability operations on one running provider."] CHANNEL_INTERACTION => "ChannelInteraction",
-            #[doc = "Check configured providers without starting listeners; inputs are confidential."] CHECK_CHANNEL_HEALTH => "CheckChannelHealth",
-            #[doc = "Start a provider with module-owned reconnect supervision and host-selected timing."] START_CHANNEL_SUPERVISED => "StartChannelSupervised",
-            #[doc = "Reserve one inert identity-scoped runtime with immutable callback paths."] RESERVE_RUNTIME => "ReserveRuntime",
-            #[doc = "Activate the private provider object for a known runtime handle."] START_RUNTIME => "StartRuntime",
-            #[doc = "Stop and join all resources belonging to one runtime handle."] STOP_RUNTIME => "StopRuntime",
-            #[doc = "Resolve provider facts from confidential hydrated configuration without listening."] DESCRIBE_CONFIGURED_CHANNELS => "DescribeConfiguredChannels",
-            #[doc = "Keep an external-webhook provider available for outbound operations."] START_OUTBOUND_CHANNEL => "StartOutboundChannel",
-            #[doc = "Normalize legacy messages and produce deterministic intent keys in the module."] PREPARE_OUTBOUND_INTENT => "PrepareOutboundIntent",
-            #[doc = "Prepare normalized inbound facts and persisted keys inside the module."] PREPARE_CHANNEL_INBOUND => "PrepareChannelInbound",
-            #[doc = "Derive hosted-ingress thread and client identities inside the module."] PREPARE_CHANNEL_IDENTITY => "PrepareChannelIdentity",
-            #[doc = "Drive a module-owned progressive reply through an opaque handle."] EXECUTE_PROGRESSIVE => "ExecuteProgressive",
-            #[doc = "Run module-owned remote commands and persisted turn state."] EXECUTE_REMOTE => "ExecuteRemote",
-            #[doc = "Prepare module-owned channel facts and runtime command responses."] PREPARE_CHANNEL_CONTROL => "PrepareChannelControl",
-            #[doc = "Activate an identity runtime with bounded `ProcessInbound` turn callbacks."] START_RUNTIME_WITH_DISPATCH => "StartRuntimeWithDispatch",
-            #[doc = "Parse model/provider commands and render help without changing host state."] PREPARE_RUNTIME_COMMAND => "PrepareRuntimeCommand",
-            #[doc = "Begin bounded media ingestion for an active configured provider."] BEGIN_MEDIA_UPLOAD => "BeginMediaUpload",
-            #[doc = "Append one idempotent confidential media chunk."] APPEND_MEDIA_UPLOAD_CHUNK => "AppendMediaUploadChunk",
-            #[doc = "Persist a complete upload as a scoped opaque media reference."] FINISH_MEDIA_UPLOAD => "FinishMediaUpload",
-            #[doc = "Abort a buffered media upload; retries are idempotent."] ABORT_MEDIA_UPLOAD => "AbortMediaUpload",
-            #[doc = "Resolve scoped media once into a bounded confidential chunk session."] BEGIN_MEDIA_READ => "BeginMediaRead",
-            #[doc = "Return one bounded confidential media chunk."] READ_MEDIA_CHUNK => "ReadMediaChunk",
-            #[doc = "Abort a bounded media read and release temporary bytes."] ABORT_MEDIA_READ => "AbortMediaRead",
-            #[doc = "Begin an isolated module-owned web output projection turn."] BEGIN_WEB_TURN => "BeginWebTurn",
-            #[doc = "Project one canonical web output event through the module."] PROJECT_WEB_OUTPUT => "ProjectWebOutput",
-            #[doc = "End a web output turn and invalidate its projection handle."] END_WEB_TURN => "EndWebTurn",
-        ]);
-    };
-}
-
-macro_rules! define_method_table {
-    ([$($(#[$doc:meta])* $name:ident => $method:literal),* $(,)?]) => {
-        pub mod methods { $($(#[$doc])* pub const $name: &str = $method;)* }
-        /// All module method names in the declaration order used by the interface.
-        pub const METHODS: [&str; 47] = [$(methods::$name),*];
-    };
-}
-
-crate::channel_method_registry!(define_method_table);
+/// All module method names in the declaration order used by the interface.
+pub const METHODS: [&str; 47] = [
+    methods::START_CHANNEL,
+    methods::STOP_CHANNEL,
+    methods::SEND_MESSAGE,
+    methods::LIST_CHANNELS,
+    methods::CHANNEL_STATUS,
+    methods::RESERVE_RELAY,
+    methods::START_RELAY,
+    methods::START_RELAY_V2,
+    methods::STOP_RELAY,
+    methods::RELAY_STATUS,
+    methods::RELAY_CAPABILITIES_V2,
+    methods::SEND_RELAY_INTENT,
+    methods::SHUTDOWN,
+    methods::SEND_CHANNEL_INTENT,
+    methods::SEND_EMAIL,
+    methods::BEGIN_EMAIL_UPLOAD,
+    methods::APPEND_EMAIL_UPLOAD_CHUNK,
+    methods::SEND_EMAIL_UPLOAD,
+    methods::ABORT_EMAIL_UPLOAD,
+    methods::START_CHANNEL_CONFIGURED,
+    methods::CHANNEL_CONTROLLER,
+    methods::CHANNEL_INTERACTION,
+    methods::CHECK_CHANNEL_HEALTH,
+    methods::START_CHANNEL_SUPERVISED,
+    methods::RESERVE_RUNTIME,
+    methods::START_RUNTIME,
+    methods::STOP_RUNTIME,
+    methods::DESCRIBE_CONFIGURED_CHANNELS,
+    methods::START_OUTBOUND_CHANNEL,
+    methods::PREPARE_OUTBOUND_INTENT,
+    methods::PREPARE_CHANNEL_INBOUND,
+    methods::PREPARE_CHANNEL_IDENTITY,
+    methods::EXECUTE_PROGRESSIVE,
+    methods::EXECUTE_REMOTE,
+    methods::PREPARE_CHANNEL_CONTROL,
+    methods::START_RUNTIME_WITH_DISPATCH,
+    methods::PREPARE_RUNTIME_COMMAND,
+    methods::BEGIN_MEDIA_UPLOAD,
+    methods::APPEND_MEDIA_UPLOAD_CHUNK,
+    methods::FINISH_MEDIA_UPLOAD,
+    methods::ABORT_MEDIA_UPLOAD,
+    methods::BEGIN_MEDIA_READ,
+    methods::READ_MEDIA_CHUNK,
+    methods::ABORT_MEDIA_READ,
+    methods::BEGIN_WEB_TURN,
+    methods::PROJECT_WEB_OUTPUT,
+    methods::END_WEB_TURN,
+];
 
 /// All host-callback method names in declaration order.
 pub const HOST_METHODS: [&str; 13] = [

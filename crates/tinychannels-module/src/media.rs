@@ -320,6 +320,12 @@ pub(crate) struct MediaUploads {
 }
 
 impl MediaUploads {
+    pub(crate) async fn invalidate_instance(&self, instance: &str) {
+        self.state.lock().await.uploads.retain(|_, upload| {
+            upload.request.instance != instance || upload.finalizing.load(Ordering::SeqCst)
+        });
+    }
+
     pub(crate) async fn binding_handle(
         &self,
         handle: &MediaUploadHandle,
@@ -531,10 +537,9 @@ impl MediaUploads {
                 },
             ))
             .catch_unwind();
-            let media = match tokio::time::timeout(UPLOAD_LIFETIME, write).await {
-                Ok(Ok(result)) => result,
-                Ok(Err(_)) => Err(Error::failed("media storage failed")),
-                Err(_) => Err(Error::failed("media storage timed out")),
+            let media = match write.await {
+                Ok(result) => result,
+                Err(_) => Err(Error::failed("media storage failed")),
             };
             let mut state = owner.state.lock().await;
             Self::prune(&mut state);

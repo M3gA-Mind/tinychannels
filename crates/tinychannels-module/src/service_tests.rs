@@ -1,170 +1,66 @@
 use super::*;
-use base64::Engine as _;
-use hmac::{KeyInit as _, Mac as _};
 use tinychannels_bus::ChannelsConfig;
 use tinychannels_bus::config::WhatsAppConfig;
 
+#[cfg(feature = "test-support")]
 #[tokio::test]
-async fn v1_email_subject_reaches_the_configured_smtp_wire() {
-    use std::io::{BufRead, Write};
-
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let smtp_port = listener.local_addr().unwrap().port();
-    let smtp = std::thread::spawn(move || {
-        let (socket, _) = listener.accept().unwrap();
-        socket
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
-        let mut writer = socket.try_clone().unwrap();
-        let mut reader = std::io::BufReader::new(socket);
-        let mut transcript = Vec::new();
-        writer.write_all(b"220 fixture\r\n").unwrap();
-        let mut in_data = false;
-        let mut line = String::new();
-        while reader.read_line(&mut line).unwrap_or(0) > 0 {
-            let command = line.trim_end().to_owned();
-            line.clear();
-            if in_data {
-                if command == "." {
-                    in_data = false;
-                    writer.write_all(b"250 queued\r\n").unwrap();
-                } else {
-                    transcript.push(command);
-                }
-                continue;
-            }
-            match command.as_str() {
-                "DATA" => {
-                    in_data = true;
-                    writer.write_all(b"354 send data\r\n").unwrap();
-                }
-                "QUIT" => {
-                    writer.write_all(b"221 bye\r\n").unwrap();
-                    break;
-                }
-                command if command.starts_with("EHLO") => {
-                    writer
-                        .write_all(b"250-fixture\r\n250 AUTH PLAIN\r\n")
-                        .unwrap();
-                }
-                command if command.starts_with("AUTH") => {
-                    writer.write_all(b"235 authenticated\r\n").unwrap();
-                }
-                _ => writer.write_all(b"250 ok\r\n").unwrap(),
-            }
-        }
-        transcript.join("\n")
-    });
-
+async fn test_remote_channel_fixture_registers_and_cleans_up_without_network() {
     let bus = tinybus::transport::memory::MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
     let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    let service = Channels::new(HostChannels::new(connection), None);
-    let config = ChannelsConfig {
-        email: Some(tinychannels_bus::config::EmailConfig {
-            imap_host: "127.0.0.1".into(),
-            imap_port: 1,
-            from_address: "bot@example.test".into(),
-            smtp_host: "127.0.0.1".into(),
-            smtp_port,
-            smtp_tls: false,
-            username: "bot".into(),
-            password: "secret".into(),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    let hooks = Arc::new(crate::provider::Hooks::default());
-    let _owner_host = hooks.host(service.host.clone(), "email:work".into(), None);
-    let launch = crate::native::build_native_v2(
-        "email:work",
-        &config,
-        &_owner_host,
-        &tinychannels::factory::DefaultHttpClients,
-    )
-    .expect("configured Email provider uses its native typed adapter");
-    service.running.lock().await.insert(
-        "email:work".into(),
-        launch.start(hooks, service.host.clone(), None, true),
-    );
-    let result = service
-        .send_message(
-            "email:work".into(),
-            tinychannels::SendMessage::with_subject(
-                "mail body",
-                "alice@example.test",
-                "Project update",
-            ),
-        )
-        .await;
+    let channels = Channels::new(HostChannels::new(connection), None);
 
-    let transcript = smtp.join().unwrap();
-    assert!(result.is_ok(), "{result:?}; SMTP transcript: {transcript}");
+    channels
+        .register_test_remote_channel("telegram".into())
+        .await
+        .unwrap();
     assert!(
-        transcript.contains("Subject: Project update"),
-        "{transcript}"
+        configured_capabilities(&channels.running, "telegram")
+            .await
+            .remote_control
     );
-    assert!(transcript.contains("mail body"), "{transcript}");
-    assert!(!transcript.contains("Subject: Project update\\nSubject:"));
-    service.shutdown().await.unwrap();
+
+    channels
+        .unregister_test_remote_channel("telegram".into())
+        .await
+        .unwrap();
+    assert!(
+        !configured_capabilities(&channels.running, "telegram")
+            .await
+            .remote_control
+    );
 }
 
+#[cfg(feature = "test-support")]
 #[tokio::test]
-async fn v1_send_preserves_provider_specific_subjects_for_qualified_instances() {
-    let (sent, mut received) = tokio::sync::mpsc::channel(2);
-    let (channels, _callbacks, _server) = channels_with_store_named(
-        "dingtalk:account-a",
-        Arc::new(CaptureWireProvider {
-            id: "dingtalk",
-            sent,
-        }),
-    )
-    .await;
-
-    channels
-        .send_message(
-            "dingtalk:account-a".into(),
-            SendMessage::with_subject("custom body", "room-1", "OpenHuman"),
-        )
+async fn test_remote_channel_fixture_rejects_duplicates_and_ignores_missing_cleanup() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    let dingtalk = received.recv().await.unwrap();
-    assert_eq!(dingtalk.channel_id, "dingtalk");
-    assert_eq!(dingtalk.conversation_id, "room-1");
-    assert!(matches!(
-        dingtalk.parts.as_slice(),
-        [tinychannels_bus::OutboundContentPart::Content {
-            part: tinychannels_bus::ContentPart::Text { text, .. }
-        }] if text == "Subject: OpenHuman\ncustom body"
-    ));
-    channels.shutdown().await.unwrap();
+    let channels = Channels::new(HostChannels::new(connection), None);
 
-    let (sent, mut received) = tokio::sync::mpsc::channel(2);
-    let (channels, _callbacks, _server) = channels_with_store_named(
-        "telegram:account-a",
-        Arc::new(CaptureWireProvider {
-            id: "telegram",
-            sent,
-        }),
-    )
-    .await;
     channels
-        .send_message(
-            "telegram:account-a".into(),
-            SendMessage::with_subject("visible body", "chat-1", "ignored subject"),
-        )
+        .test_register_remote_channel("telegram".into())
         .await
         .unwrap();
-    let telegram = received.recv().await.unwrap();
-    assert!(matches!(
-        telegram.parts.as_slice(),
-        [tinychannels_bus::OutboundContentPart::Content {
-            part: tinychannels_bus::ContentPart::Text { text, .. }
-        }] if text == "visible body"
-    ));
-    channels.shutdown().await.unwrap();
+    let duplicate = channels
+        .test_register_remote_channel("telegram".into())
+        .await
+        .unwrap_err();
+    assert!(duplicate.to_string().contains("already registered"));
+
+    channels
+        .test_unregister_remote_channel("missing".into())
+        .await
+        .unwrap();
+    channels
+        .test_unregister_remote_channel("telegram".into())
+        .await
+        .unwrap();
 }
 
 /// Mirrors the predicate in `start_channel`.
@@ -188,442 +84,6 @@ fn whatsapp(cloud: bool) -> ChannelsConfig {
         }),
         ..ChannelsConfig::default()
     }
-}
-
-#[test]
-fn temporary_route_authority_requires_matching_configured_scope_and_prefers_live_state() {
-    use tinychannels_bus::module_control::ConfiguredControlChannel;
-    use tinychannels_bus::module_remote::RemoteSessionScope;
-
-    let mut allowed = tinychannels_bus::ChannelCapabilities::unknown();
-    allowed.remote_control = true;
-    let configured = ConfiguredControlChannel {
-        name: "telegram:bot-a".into(),
-        capabilities: allowed.clone(),
-    };
-    let valid_scope = RemoteSessionScope {
-        channel: tinychannels_bus::ChannelRef {
-            id: "telegram".into(),
-            account_id: Some("telegram:bot-a".into()),
-        },
-        conversation: tinychannels_bus::ConversationRef {
-            id: "chat-1".into(),
-            ..Default::default()
-        },
-        session_key: "main:telegram:account:bot-a:chat-1".into(),
-    };
-    let message = tinychannels::ChannelMessage {
-        id: "msg-1".into(),
-        sender: "sender-1".into(),
-        reply_target: "chat-1".into(),
-        content: "/new".into(),
-        channel: "telegram".into(),
-        timestamp: 1,
-        thread_ts: None,
-        topic_id: None,
-        reply_to_id: None,
-        sender_name: None,
-    };
-
-    assert!(
-        !configured_route_capabilities("telegram", &message, None, Some(&configured), None,)
-            .remote_control
-    );
-    assert!(
-        configured_route_capabilities(
-            "telegram",
-            &message,
-            Some(&valid_scope),
-            Some(&configured),
-            None,
-        )
-        .remote_control
-    );
-
-    let mut wrong_account = valid_scope.clone();
-    wrong_account.channel.account_id = Some("telegram:bot-b".into());
-    assert!(
-        !configured_route_capabilities(
-            "telegram",
-            &message,
-            Some(&wrong_account),
-            Some(&configured),
-            None,
-        )
-        .remote_control
-    );
-
-    let mut wrong_provider = valid_scope.clone();
-    wrong_provider.channel.id = "discord".into();
-    assert!(
-        !configured_route_capabilities(
-            "telegram",
-            &message,
-            Some(&wrong_provider),
-            Some(&configured),
-            None,
-        )
-        .remote_control
-    );
-
-    let mut wrong_route = configured.clone();
-    wrong_route.name = "discord:bot-a".into();
-    assert!(
-        !configured_route_capabilities(
-            "telegram",
-            &message,
-            Some(&valid_scope),
-            Some(&wrong_route),
-            None,
-        )
-        .remote_control
-    );
-
-    let mut wrong_conversation = valid_scope.clone();
-    wrong_conversation.conversation.id = "chat-2".into();
-    assert!(
-        !configured_route_capabilities(
-            "telegram",
-            &message,
-            Some(&wrong_conversation),
-            Some(&configured),
-            None,
-        )
-        .remote_control
-    );
-
-    let mut threaded_scope = valid_scope.clone();
-    threaded_scope.conversation.thread_id = Some("thread-1".into());
-    assert!(
-        !configured_route_capabilities(
-            "telegram",
-            &message,
-            Some(&threaded_scope),
-            Some(&configured),
-            None,
-        )
-        .remote_control
-    );
-    let mut topical_scope = valid_scope.clone();
-    topical_scope.conversation.topic_id = Some("topic-1".into());
-    assert!(
-        !configured_route_capabilities(
-            "telegram",
-            &message,
-            Some(&topical_scope),
-            Some(&configured),
-            None,
-        )
-        .remote_control
-    );
-
-    let mut live_denied = tinychannels_bus::ChannelCapabilities::unknown();
-    live_denied.remote_control = false;
-    assert!(
-        !configured_route_capabilities(
-            "telegram",
-            &message,
-            Some(&valid_scope),
-            Some(&configured),
-            Some(live_denied.clone()),
-        )
-        .remote_control
-    );
-
-    let live_allowed = tinychannels_bus::ChannelCapabilities {
-        remote_control: true,
-        ..tinychannels_bus::ChannelCapabilities::unknown()
-    };
-    let mut snapshot_denied = configured.clone();
-    snapshot_denied.capabilities.remote_control = false;
-    assert!(
-        configured_route_capabilities(
-            "telegram",
-            &message,
-            Some(&valid_scope),
-            Some(&snapshot_denied),
-            Some(live_allowed.clone()),
-        )
-        .remote_control
-    );
-    let live_instances = HashMap::from([
-        ("telegram".to_owned(), live_allowed.clone()),
-        ("telegram:bot-a".to_owned(), live_denied),
-    ]);
-    assert!(
-        !live_route_instance(&live_instances, "telegram", Some("telegram:bot-a"))
-            .unwrap()
-            .remote_control
-    );
-}
-
-#[tokio::test]
-async fn unstarted_module_object_uses_only_matching_configured_route_authority() {
-    use tinychannels_bus::module_control::{
-        ChannelControlRequest as Request, ChannelControlResult as Response,
-        ConfiguredControlChannel,
-    };
-    use tinychannels_bus::module_remote::{RemoteRoute, RemoteSessionScope};
-
-    let service = inbound_preparation_service().await;
-    let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
-    capabilities.remote_control = true;
-    let configured = ConfiguredControlChannel {
-        name: "telegram:bot-a".into(),
-        capabilities,
-    };
-    let scope = RemoteSessionScope {
-        channel: tinychannels_bus::ChannelRef {
-            id: "telegram".into(),
-            account_id: Some("telegram:bot-a".into()),
-        },
-        conversation: tinychannels_bus::ConversationRef {
-            id: "chat-1".into(),
-            ..Default::default()
-        },
-        session_key: "trusted-session-key".into(),
-    };
-    let route_request = |scope: Option<RemoteSessionScope>| Request::Route {
-        workspace_dir: ".".into(),
-        message: Box::new(
-            serde_json::from_value(serde_json::json!({
-                "id": "message-1",
-                "sender": "sender-1",
-                "reply_target": "chat-1",
-                "content": "/help",
-                "channel": "telegram",
-                "timestamp": 1
-            }))
-            .unwrap(),
-        ),
-        route: RemoteRoute {
-            provider: "openai".into(),
-            model: "fixture-model".into(),
-        },
-        history_len: 0,
-        session_scope: scope.map(Box::new),
-        configured_channel: Some(Box::new(configured.clone())),
-        providers: vec![],
-    };
-
-    let valid = service
-        .prepare_channel_control(route_request(Some(scope.clone())))
-        .await
-        .unwrap();
-    assert!(matches!(
-        valid,
-        Response::Route {
-            reply: Some(_),
-            clear_history: false,
-            ..
-        }
-    ));
-
-    let mut wrong_account = scope;
-    wrong_account.channel.account_id = Some("telegram:bot-b".into());
-    let rejected = service
-        .prepare_channel_control(route_request(Some(wrong_account)))
-        .await
-        .unwrap();
-    assert!(matches!(rejected, Response::Route { reply: None, .. }));
-    service.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn shutdown_closes_web_turn_admission_before_clearing_projection_state() {
-    let bus = tinybus::transport::memory::MemoryBus::new();
-    tinybus::broker::Broker::new().spawn(bus.clone());
-    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
-        .await
-        .unwrap();
-    let channels = Arc::new(Channels::new(HostChannels::new(connection), None));
-    let request = tinychannels_bus::BeginWebTurn {
-        scope_key: "tenant-a".into(),
-        context: tinychannels_bus::WebEventContext {
-            client_id: "client".into(),
-            thread_id: "thread".into(),
-            request_id: "request".into(),
-            turn_request_id: None,
-            seq: None,
-            ts: None,
-        },
-    };
-
-    // Queue admission before shutdown while holding the shared registry lock.
-    // Shutdown closes the atomic gate first, then waits for this lock to clear
-    // state. Admission must recheck the gate after it gets the lock.
-    let mut web_turns = channels.web_turns.lock().await;
-    let active = web_turns.begin(request.clone()).unwrap();
-    let mut begin = Box::pin(channels.begin_web_turn(request));
-    futures_util::future::poll_fn(|cx| {
-        use std::future::Future as _;
-        assert!(begin.as_mut().poll(cx).is_pending());
-        std::task::Poll::Ready(())
-    })
-    .await;
-    let mut shutdown = Box::pin(channels.shutdown());
-    futures_util::future::poll_fn(|cx| {
-        use std::future::Future as _;
-        assert!(shutdown.as_mut().poll(cx).is_pending());
-        std::task::Poll::Ready(())
-    })
-    .await;
-    assert!(channels.terminal.load(Ordering::SeqCst));
-    drop(web_turns);
-
-    assert!(begin.await.is_err());
-    shutdown.await.unwrap();
-    assert!(
-        channels
-            .web_turns
-            .lock()
-            .await
-            .project(tinychannels_bus::ProjectWebOutput {
-                handle: active.handle,
-                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
-                    text: "after shutdown".into(),
-                    iteration: Some(1),
-                },
-            })
-            .is_err()
-    );
-    let late = tinychannels_bus::BeginWebTurn {
-        scope_key: "tenant-a".into(),
-        context: tinychannels_bus::WebEventContext {
-            client_id: "client".into(),
-            thread_id: "thread".into(),
-            request_id: "late-request".into(),
-            turn_request_id: None,
-            seq: None,
-            ts: None,
-        },
-    };
-    assert!(channels.begin_web_turn(late).await.is_err());
-}
-
-#[tokio::test]
-async fn service_web_projection_routes_events_and_closes_turns() {
-    let bus = tinybus::transport::memory::MemoryBus::new();
-    tinybus::broker::Broker::new().spawn(bus.clone());
-    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
-        .await
-        .unwrap();
-    let channels = Channels::new(HostChannels::new(connection), None);
-    let make_context = |request_id: &str| tinychannels_bus::WebEventContext {
-        client_id: "client".into(),
-        thread_id: "thread".into(),
-        request_id: request_id.into(),
-        turn_request_id: None,
-        seq: None,
-        ts: None,
-    };
-
-    let active = channels
-        .begin_web_turn(tinychannels_bus::BeginWebTurn {
-            scope_key: "tenant-a".into(),
-            context: make_context("active"),
-        })
-        .await
-        .unwrap();
-    let projected = channels
-        .project_web_output(tinychannels_bus::ProjectWebOutput {
-            handle: active.handle.clone(),
-            event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
-                text: "answer".into(),
-                iteration: Some(1),
-            },
-        })
-        .await
-        .unwrap();
-    assert_eq!(projected.events.len(), 1);
-    let Some(tinychannels_bus::WebChannelEvent::TextDelta {
-        context: projected_context,
-        ..
-    }) = projected.events.first()
-    else {
-        panic!("expected one projected text event: {projected:?}");
-    };
-    assert_eq!(projected_context.request_id, "active");
-    assert_eq!(projected_context.seq, Some(1));
-    assert!(projected_context.ts.is_some());
-
-    let terminal = channels
-        .project_web_output(tinychannels_bus::ProjectWebOutput {
-            handle: active.handle.clone(),
-            event: tinychannels_bus::module_progressive::ChannelOutputEvent::FinalMessage {
-                text: "answer".into(),
-                parts: Vec::new(),
-                receipt: None,
-            },
-        })
-        .await
-        .unwrap();
-    assert!(matches!(
-        terminal.events.as_slice(),
-        [tinychannels_bus::WebChannelEvent::ChatDone { context, .. }]
-            if context.request_id == "active" && context.seq == Some(2) && context.ts.is_some()
-    ));
-    assert!(
-        channels
-            .project_web_output(tinychannels_bus::ProjectWebOutput {
-                handle: active.handle,
-                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
-                    text: "late".into(),
-                    iteration: Some(1),
-                },
-            })
-            .await
-            .is_err()
-    );
-
-    let explicitly_ended = channels
-        .begin_web_turn(tinychannels_bus::BeginWebTurn {
-            scope_key: "tenant-a".into(),
-            context: make_context("explicit-end"),
-        })
-        .await
-        .unwrap();
-    channels
-        .end_web_turn(tinychannels_bus::EndWebTurn {
-            handle: explicitly_ended.handle.clone(),
-        })
-        .await
-        .unwrap();
-    assert!(
-        channels
-            .project_web_output(tinychannels_bus::ProjectWebOutput {
-                handle: explicitly_ended.handle,
-                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
-                    text: "after end".into(),
-                    iteration: Some(1),
-                },
-            })
-            .await
-            .is_err()
-    );
-
-    channels.shutdown().await.unwrap();
-    assert!(
-        channels
-            .begin_web_turn(tinychannels_bus::BeginWebTurn {
-                scope_key: "tenant-a".into(),
-                context: make_context("after-shutdown"),
-            })
-            .await
-            .is_err()
-    );
-    assert!(
-        channels
-            .project_web_output(tinychannels_bus::ProjectWebOutput {
-                handle: "invalid-after-shutdown".into(),
-                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
-                    text: "after shutdown".into(),
-                    iteration: Some(1),
-                },
-            })
-            .await
-            .is_err()
-    );
 }
 
 #[test]
@@ -653,196 +113,65 @@ fn providers_with_a_real_listen_loop_are_unaffected() {
 struct CaptureChannel(tokio::sync::mpsc::Sender<SendMessage>);
 
 #[async_trait::async_trait]
-impl crate::provider::TestProviderBehavior for CaptureChannel {
-    fn test_provider_id(&self) -> &'static str {
+impl tinychannels::Channel for CaptureChannel {
+    fn name(&self) -> &str {
         "fixture"
     }
-    async fn test_send(
+
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+
+    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
+        self.0.send(message.clone()).await?;
+        Ok(())
+    }
+
+    async fn listen(
         &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<
-        tinychannels_bus::channel::ChannelSendOutcome,
-        tinychannels::channel::ChannelSendError,
-    > {
-        let legacy = SendMessage::new(
-            crate::provider::test_message_text(message),
-            message.conversation_id.clone(),
-        );
-        self.0
-            .send(legacy)
-            .await
-            .map_err(|error| tinychannels::channel::ChannelSendError {
-                message: error.to_string(),
-                ..Default::default()
-            })?;
-        Ok(Default::default())
-    }
-}
-
-struct CaptureWireProvider {
-    id: &'static str,
-    sent: tokio::sync::mpsc::Sender<tinychannels_bus::ChannelOutboundMessage>,
-}
-
-#[async_trait::async_trait]
-impl crate::provider::TestProviderBehavior for CaptureWireProvider {
-    fn test_provider_id(&self) -> &'static str {
-        self.id
-    }
-
-    async fn test_send(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<
-        tinychannels_bus::channel::ChannelSendOutcome,
-        tinychannels::channel::ChannelSendError,
-    > {
-        self.sent.send(message.clone()).await.map_err(|error| {
-            tinychannels::channel::ChannelSendError {
-                message: error.to_string(),
-                ..Default::default()
-            }
-        })?;
-        Ok(Default::default())
-    }
-}
-
-struct RemoteControlCaptureChannel {
-    id: &'static str,
-    sent: tokio::sync::mpsc::Sender<SendMessage>,
-}
-
-#[async_trait::async_trait]
-impl crate::provider::TestProviderBehavior for RemoteControlCaptureChannel {
-    fn test_provider_id(&self) -> &'static str {
-        self.id
-    }
-    fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
-        capabilities.content.text.outbound = true;
-        capabilities.remote_control = true;
-        capabilities
-    }
-    async fn test_send(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<
-        tinychannels_bus::channel::ChannelSendOutcome,
-        tinychannels::channel::ChannelSendError,
-    > {
-        let legacy = SendMessage::new(
-            crate::provider::test_message_text(message),
-            message.conversation_id.clone(),
-        );
-        self.sent
-            .send(legacy)
-            .await
-            .map_err(|error| tinychannels::channel::ChannelSendError {
-                message: error.to_string(),
-                ..Default::default()
-            })?;
-        Ok(Default::default())
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
     }
 }
 
 struct CaptureTypedChannel(tokio::sync::mpsc::Sender<tinychannels_bus::ChannelOutboundMessage>);
 
 #[async_trait::async_trait]
-impl crate::provider::TestProviderBehavior for CaptureTypedChannel {
-    fn test_provider_id(&self) -> &'static str {
+impl tinychannels::Channel for CaptureTypedChannel {
+    fn name(&self) -> &str {
         "fixture"
     }
-    fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        let outbound = tinychannels_bus::ContentCapability {
-            outbound: true,
-            ..Default::default()
-        };
-        tinychannels_bus::ChannelCapabilities {
-            content: tinychannels_bus::ContentCapabilities {
-                text: outbound.clone(),
-                image: outbound.clone(),
-                video: outbound.clone(),
-                audio: outbound.clone(),
-                file: outbound.clone(),
-                sticker: outbound.clone(),
-                location: outbound.clone(),
-                contact: outbound.clone(),
-                buttons: outbound.clone(),
-                poll: outbound.clone(),
-                presentation: outbound.clone(),
-                native: outbound,
-                ..Default::default()
-            },
-            voice_out: tinychannels_bus::VoiceCapabilities {
-                supported: true,
-                synthesis: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        }
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        anyhow::bail!("typed test provider expects typed sends")
     }
 
-    async fn test_send(
+    async fn send_typed(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<
-        tinychannels_bus::channel::ChannelSendOutcome,
-        tinychannels::channel::ChannelSendError,
-    > {
-        self.0.send(message.clone()).await.map_err(|error| {
-            tinychannels::channel::ChannelSendError {
-                message: error.to_string(),
-                ..Default::default()
-            }
-        })?;
-        Ok(Default::default())
-    }
-}
-
-struct CaptureVoiceReceiptChannel(
-    tokio::sync::mpsc::Sender<tinychannels_bus::ChannelOutboundMessage>,
-);
-
-#[async_trait::async_trait]
-impl crate::provider::TestProviderBehavior for CaptureVoiceReceiptChannel {
-    fn test_provider_id(&self) -> &'static str {
-        "fixture"
-    }
-    fn test_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        tinychannels_bus::ChannelCapabilities {
-            voice_out: tinychannels_bus::VoiceCapabilities {
-                supported: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        }
+    ) -> anyhow::Result<()> {
+        self.0.send(message.clone()).await?;
+        Ok(())
     }
 
-    async fn test_send(
+    fn validate_typed_send(
         &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<
-        tinychannels_bus::channel::ChannelSendOutcome,
-        tinychannels::channel::ChannelSendError,
-    > {
-        self.0.send(message.clone()).await.map_err(|error| {
-            tinychannels::channel::ChannelSendError {
-                message: error.to_string(),
-                ..Default::default()
-            }
-        })?;
-        let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
-        outcome.receipt.primary_platform_message_id = Some("voice-message".into());
-        outcome
-            .receipt
-            .platform_message_ids
-            .push("voice-message".into());
-        Ok(outcome)
+        _message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
     }
 }
 
 #[tokio::test]
-async fn typed_intent_preserves_durable_key_and_thread_through_module_actor() {
+async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
     let bus = tinybus::transport::memory::MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
     let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
@@ -850,14 +179,15 @@ async fn typed_intent_preserves_durable_key_and_thread_through_module_actor() {
         .unwrap();
     let host = HostChannels::new(connection.clone());
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
-    let channel = Arc::new(CaptureTypedChannel(sent));
+    let channel = Arc::new(CaptureChannel(sent));
     let hooks = Arc::new(Hooks::default());
     let mut running = HashMap::new();
     running.insert(
         "fixture".to_owned(),
-        Running::start_test(channel, hooks, host.clone()),
+        Running::start(channel, hooks, host.clone()),
     );
     let channels = Channels {
+        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         progressive: Arc::new(crate::progressive::Replies::new(
             host.clone(),
             Arc::new(Mutex::new(running.clone())),
@@ -869,7 +199,6 @@ async fn typed_intent_preserves_durable_key_and_thread_through_module_actor() {
         running: Arc::new(Mutex::new(running)),
         provider_activations: Mutex::new(HashMap::new()),
         relays: Arc::new(Relays::new(host.clone())),
-        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         terminal: AtomicBool::new(false),
         runtimes: None,
         shutdown_task: Mutex::new(None),
@@ -916,11 +245,10 @@ async fn typed_intent_preserves_durable_key_and_thread_through_module_actor() {
     assert!(result.receipt.is_none());
     assert!(result.raw.is_none());
     let sent = received.recv().await.unwrap();
-    assert_eq!(crate::provider::test_message_text(&sent), "hello");
-    assert_eq!(sent.conversation_id, "room-7");
-    assert_eq!(sent.reply_to_id.as_deref(), Some("message-3"));
-    assert_eq!(sent.thread_id.as_deref(), Some("thread-9"));
-    assert_eq!(sent.idempotency_key, "delivery-42");
+    assert_eq!(sent.content, "hello");
+    assert_eq!(sent.recipient, "room-7");
+    assert_eq!(sent.thread_ts.as_deref(), Some("thread-9"));
+    assert_eq!(sent.idempotency_key.as_deref(), Some("delivery-42"));
     client
         .call::<()>(
             tinychannels_bus::BUS_NAME.try_into().unwrap(),
@@ -935,23 +263,21 @@ async fn typed_intent_preserves_durable_key_and_thread_through_module_actor() {
 }
 
 #[tokio::test]
-async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
+async fn prepared_legacy_payloads_use_the_legacy_provider_send_path() {
     let bus = tinybus::transport::memory::MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
     let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    let host = HostChannels::new(connection.clone());
-    let (sent, mut received) = tokio::sync::mpsc::channel(8);
-    let channel = Arc::new(CaptureTypedChannel(sent));
-    let hooks = Arc::new(Hooks::default());
-    let _provider_host = hooks.host(host.clone(), "account-a".into(), None);
-    let mut running = HashMap::new();
-    running.insert(
+    let host = HostChannels::new(connection);
+    let (sent, mut received) = tokio::sync::mpsc::channel(1);
+    let channel = Arc::new(CaptureChannel(sent));
+    let running = HashMap::from([(
         "fixture".to_owned(),
-        Running::start_test(channel, hooks, host.clone()),
-    );
+        Running::start(channel, Arc::new(Hooks::default()), host.clone()),
+    )]);
     let channels = Channels {
+        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         progressive: Arc::new(crate::progressive::Replies::new(
             host.clone(),
             Arc::new(Mutex::new(running.clone())),
@@ -963,7 +289,102 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         running: Arc::new(Mutex::new(running)),
         provider_activations: Mutex::new(HashMap::new()),
         relays: Arc::new(Relays::new(host.clone())),
+        terminal: AtomicBool::new(false),
+        runtimes: None,
+        shutdown_task: Mutex::new(None),
+        delivery_admission: Arc::new(Mutex::new(())),
+    };
+    let intent = tinychannels::outbound_intent_from_legacy_message(
+        "fixture",
+        serde_json::json!({
+            "content": "hello",
+            "recipient": "room-7",
+            "thread_ts": "thread-9",
+            "idempotencyKey": "legacy-key"
+        }),
+    );
+
+    channels
+        .send_channel_intent("fixture".to_owned(), intent)
+        .await
+        .unwrap();
+    let sent = received.recv().await.unwrap();
+    assert_eq!(sent.content, "hello");
+    assert_eq!(sent.recipient, "room-7");
+    assert_eq!(sent.thread_ts.as_deref(), Some("thread-9"));
+    assert_eq!(sent.idempotency_key.as_deref(), Some("legacy-key"));
+
+    let typed_intent = tinychannels::outbound_intent_from_send_message(
+        "fixture",
+        &SendMessage::new("typed hello", "room-8")
+            .in_thread(Some("thread-10".into()))
+            .with_idempotency_key("typed-legacy-key"),
+    );
+    channels
+        .send_channel_intent("fixture".to_owned(), typed_intent)
+        .await
+        .unwrap();
+
+    let sent = received.recv().await.unwrap();
+    assert_eq!(sent.content, "typed hello");
+    assert_eq!(sent.recipient, "room-8");
+    assert_eq!(sent.thread_ts.as_deref(), Some("thread-10"));
+    assert_eq!(sent.idempotency_key.as_deref(), Some("typed-legacy-key"));
+    channels.shutdown().await.unwrap();
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn prepared_legacy_provider_failure_keeps_the_named_send_error() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (channels, _callbacks, _server) =
+        channels_with_store(Arc::new(FailingChannel(calls.clone()))).await;
+    let intent = tinychannels::outbound_intent_from_legacy_message(
+        "fixture",
+        serde_json::json!({"content": "hello", "recipient": "room-7"}),
+    );
+
+    let error = channels
+        .send_channel_intent("fixture".into(), intent)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        BusError::MethodFailed { name, .. } if name == SEND_FAILED_ERROR
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    channels.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(connection.clone());
+    let (sent, mut received) = tokio::sync::mpsc::channel(8);
+    let channel = Arc::new(CaptureTypedChannel(sent));
+    let mut running = HashMap::new();
+    running.insert(
+        "fixture".to_owned(),
+        Running::start(channel, Arc::new(Hooks::default()), host.clone()),
+    );
+    let channels = Channels {
         web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
+        progressive: Arc::new(crate::progressive::Replies::new(
+            host.clone(),
+            Arc::new(Mutex::new(running.clone())),
+        )),
+        host: host.clone(),
+        email: crate::email::EmailSender::new(),
+        media_uploads: Arc::new(crate::media::MediaUploads::default()),
+        media_reads: Arc::new(crate::media::MediaReads::default()),
+        running: Arc::new(Mutex::new(running)),
+        provider_activations: Mutex::new(HashMap::new()),
+        relays: Arc::new(Relays::new(host.clone())),
         terminal: AtomicBool::new(false),
         runtimes: None,
         shutdown_task: Mutex::new(None),
@@ -1116,8 +537,6 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                 },
                 codec: Some("audio/ogg".into()),
                 duration_ms: Some(700),
-                audio_base64: None,
-                waveform: None,
             },
         },
         tinychannels_bus::OutboundContentPart::Voice {
@@ -1165,8 +584,6 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                 },
                 codec: Some("audio/ogg".into()),
                 duration_ms: Some(1200),
-                audio_base64: None,
-                waveform: None,
             },
         },
         tinychannels_bus::OutboundPayload::Voice {
@@ -1209,7 +626,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                         conversation_id: "room".into(),
                         channel_ref: Some(tinychannels_bus::channel::ChannelRef {
                             id: "fixture".into(),
-                            account_id: None,
+                            account_id: Some("account-a".into()),
                         }),
                         conversation_ref: Some(tinychannels_bus::channel::ConversationRef {
                             kind: tinychannels_bus::channel::ConversationKind::Thread,
@@ -1221,7 +638,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                         }),
                         reply_to_id: Some("source-message".into()),
                         thread_id: Some("thread".into()),
-                        turn_id: Some(format!("source-turn-{index}")),
+                        turn_id: None,
                         durability: tinychannels_bus::DeliveryDurability::BestEffort,
                         payload,
                     },
@@ -1230,10 +647,6 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
             .await
             .unwrap();
         let typed = received.recv().await.unwrap();
-        assert_eq!(
-            typed.turn_id.as_deref(),
-            Some(format!("source-turn-{index}").as_str())
-        );
         assert_eq!(typed.reply_to_id.as_deref(), Some("source-message"));
         assert_eq!(typed.thread_id.as_deref(), Some("thread"));
         assert_eq!(
@@ -1284,7 +697,6 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                             media,
                             codec,
                             duration_ms,
-                            ..
                         },
                 } = &typed.parts[0]
                 else {
@@ -1386,7 +798,6 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                         idempotency_key: key.into(),
                         channel_id: "fixture".into(),
                         conversation_id: "room".into(),
-                        turn_id: None,
                         durability: tinychannels_bus::DeliveryDurability::BestEffort,
                         payload,
                         ..Default::default()
@@ -1423,9 +834,10 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
     let mut running = HashMap::new();
     running.insert(
         "fixture".to_owned(),
-        Running::start_test(channel, hooks, host.clone()),
+        Running::start(channel, hooks, host.clone()),
     );
     let channels = Channels {
+        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         progressive: Arc::new(crate::progressive::Replies::new(
             host.clone(),
             Arc::new(Mutex::new(running.clone())),
@@ -1437,7 +849,6 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
         running: Arc::new(Mutex::new(running)),
         provider_activations: Mutex::new(HashMap::new()),
         relays: Arc::new(Relays::new(host.clone())),
-        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         terminal: AtomicBool::new(false),
         runtimes: None,
         shutdown_task: Mutex::new(None),
@@ -1452,7 +863,6 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
                 channel_ref: None,
                 conversation_ref: None,
                 idempotency_key: "delivery-required".to_owned(),
-                turn_id: None,
                 durability: tinychannels::DeliveryDurability::Required,
                 payload: tinychannels::OutboundPayload::Text {
                     text: "must remain durable".to_owned(),
@@ -1508,23 +918,43 @@ impl DurableHost {
 
 struct FailingChannel(Arc<std::sync::atomic::AtomicUsize>);
 
+struct LegacyProjectionRejectingChannel(Arc<std::sync::atomic::AtomicUsize>);
+
 #[async_trait::async_trait]
-impl crate::provider::TestProviderBehavior for FailingChannel {
-    fn test_provider_id(&self) -> &'static str {
+impl tinychannels::Channel for LegacyProjectionRejectingChannel {
+    fn name(&self) -> &str {
         "fixture"
     }
-    async fn test_send(
-        &self,
-        _message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<
-        tinychannels_bus::channel::ChannelSendOutcome,
-        tinychannels::channel::ChannelSendError,
-    > {
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Err(tinychannels::channel::ChannelSendError {
-            message: "fixture provider failure".into(),
-            ..Default::default()
-        })
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
+#[async_trait::async_trait]
+impl tinychannels::Channel for FailingChannel {
+    fn name(&self) -> &str {
+        "fixture"
+    }
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Err(anyhow::anyhow!("fixture provider failure"))
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
     }
 }
 
@@ -1537,17 +967,17 @@ struct SuccessfulReceiptChannel(Arc<std::sync::atomic::AtomicUsize>);
 struct AmbiguousNoIdChannel(Arc<std::sync::atomic::AtomicUsize>);
 
 #[async_trait::async_trait]
-impl crate::provider::TestProviderBehavior for AmbiguousNoIdChannel {
-    fn test_provider_id(&self) -> &'static str {
+impl tinychannels::Channel for AmbiguousNoIdChannel {
+    fn name(&self) -> &str {
         "fixture"
     }
-    async fn test_send(
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn send_typed_with_receipt(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<
-        tinychannels_bus::channel::ChannelSendOutcome,
-        tinychannels::channel::ChannelSendError,
-    > {
+    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(tinychannels_bus::channel::ChannelSendOutcome {
             receipt: Default::default(),
@@ -1558,6 +988,12 @@ impl crate::provider::TestProviderBehavior for AmbiguousNoIdChannel {
                 ..Default::default()
             }),
         })
+    }
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
     }
 }
 
@@ -1605,18 +1041,44 @@ async fn required_durable_ambiguous_send_without_ids_is_not_retried() {
     channels.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn required_durable_legacy_projection_failure_is_permanent_before_provider_io() {
+    let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (channels, callbacks, _server) =
+        channels_with_store(Arc::new(LegacyProjectionRejectingChannel(sends.clone()))).await;
+    let mut intent = required_intent("legacy-projection", "body");
+    intent.payload = tinychannels_bus::OutboundPayload::Media {
+        text: Some("caption".into()),
+        media_urls: vec!["https://example.test/image.png".into()],
+    };
+
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), intent)
+            .await
+            .is_err()
+    );
+
+    assert_eq!(sends.load(Ordering::SeqCst), 0);
+    let scopes = callbacks.storage.snapshot().await;
+    let queue = scopes.get("scope-a").unwrap();
+    assert!(!queue.pending.contains_key("legacy-projection"));
+    assert!(queue.failed.contains_key("legacy-projection"));
+    channels.shutdown().await.unwrap();
+}
+
 #[async_trait::async_trait]
-impl crate::provider::TestProviderBehavior for SuccessfulReceiptChannel {
-    fn test_provider_id(&self) -> &'static str {
+impl tinychannels::Channel for SuccessfulReceiptChannel {
+    fn name(&self) -> &str {
         "fixture"
     }
-    async fn test_send(
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn send_typed_with_receipt(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<
-        tinychannels_bus::channel::ChannelSendOutcome,
-        tinychannels::channel::ChannelSendError,
-    > {
+    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(tinychannels_bus::channel::ChannelSendOutcome {
             receipt: tinychannels_bus::channel::MessageReceipt {
@@ -1628,6 +1090,12 @@ impl crate::provider::TestProviderBehavior for SuccessfulReceiptChannel {
             },
             error: None,
         })
+    }
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
     }
 }
 
@@ -1663,17 +1131,19 @@ async fn required_success_and_replay_return_same_actual_scoped_receipt_without_r
 }
 
 #[async_trait::async_trait]
-impl crate::provider::TestProviderBehavior for PartialReceiptChannel {
-    fn test_provider_id(&self) -> &'static str {
+impl tinychannels::Channel for PartialReceiptChannel {
+    fn name(&self) -> &str {
         "fixture"
     }
-    async fn test_send(
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn send_typed_with_receipt(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<
-        tinychannels_bus::channel::ChannelSendOutcome,
-        tinychannels::channel::ChannelSendError,
-    > {
+    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(tinychannels_bus::channel::ChannelSendOutcome {
             receipt: tinychannels_bus::channel::MessageReceipt {
@@ -1689,6 +1159,13 @@ impl crate::provider::TestProviderBehavior for PartialReceiptChannel {
                 ..Default::default()
             }),
         })
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
     }
 }
 
@@ -1740,37 +1217,26 @@ async fn required_durable_partial_provider_send_persists_receipt_and_is_not_retr
 }
 
 #[async_trait::async_trait]
-impl crate::provider::TestProviderBehavior for EndedChannel {
-    fn test_provider_id(&self) -> &'static str {
+impl tinychannels::Channel for EndedChannel {
+    fn name(&self) -> &str {
         "fixture"
     }
-    async fn test_start(
-        &self,
-        _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync),
-    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
-    async fn test_send(
+
+    async fn listen(
         &self,
-        _message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<
-        tinychannels_bus::channel::ChannelSendOutcome,
-        tinychannels::channel::ChannelSendError,
-    > {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(Default::default())
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 
-async fn channels_with_store<T: crate::provider::TestProviderBehavior + 'static>(
-    channel: Arc<T>,
-) -> (Channels, DurableHost, tinybus::Connection) {
-    channels_with_store_named("fixture", channel).await
-}
-
-async fn channels_with_store_named<T: crate::provider::TestProviderBehavior + 'static>(
-    name: &'static str,
-    channel: Arc<T>,
+async fn channels_with_store(
+    channel: Arc<dyn tinychannels::Channel>,
 ) -> (Channels, DurableHost, tinybus::Connection) {
     let bus = tinybus::transport::memory::MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
@@ -1797,11 +1263,12 @@ async fn channels_with_store_named<T: crate::provider::TestProviderBehavior + 's
     let host = HostChannels::new(client);
     let hooks = Arc::new(Hooks::default());
     let running = HashMap::from([(
-        name.to_owned(),
-        Running::start_test(channel, hooks, host.clone()),
+        "fixture".to_owned(),
+        Running::start(channel, hooks, host.clone()),
     )]);
     let relays = Arc::new(Relays::new(host.clone()));
     let channels = Channels {
+        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         progressive: Arc::new(crate::progressive::Replies::new(
             host.clone(),
             Arc::new(Mutex::new(running.clone())),
@@ -1813,13 +1280,154 @@ async fn channels_with_store_named<T: crate::provider::TestProviderBehavior + 's
         running: Arc::new(Mutex::new(running)),
         provider_activations: Mutex::new(HashMap::new()),
         relays,
-        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         terminal: AtomicBool::new(false),
         runtimes: None,
         shutdown_task: Mutex::new(None),
         delivery_admission: Arc::new(Mutex::new(())),
     };
     (channels, callbacks, server)
+}
+
+#[tokio::test]
+async fn module_media_handlers_roundtrip_only_within_the_provider_turn_scope() {
+    let (sink, _received) = tokio::sync::mpsc::channel(1);
+    let (channels, _callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sink))).await;
+    channels.provider_activations.lock().await.insert(
+        "fixture".into(),
+        ProviderActivation {
+            generation: "fixture-generation".into(),
+            media_account_scope: Some("private-account-digest".into()),
+        },
+    );
+    let scope = tinychannels_bus::HostVoiceScope {
+        conversation: tinychannels_bus::ConversationRef {
+            id: "room-7".into(),
+            ..Default::default()
+        },
+        turn_id: "turn-9".into(),
+        ..Default::default()
+    };
+    let bytes = b"private media payload".to_vec();
+    let mut invalid_scope = scope.clone();
+    invalid_scope.turn_id.clear();
+    assert!(
+        channels
+            .begin_media_upload(tinychannels_bus::MediaUploadBegin {
+                instance: "fixture".into(),
+                scope: invalid_scope,
+                kind: tinychannels_bus::MediaKind::Document,
+                content_type: "text/plain".into(),
+                file_name: None,
+                duration_ms: None,
+                codec: None,
+                byte_count: bytes.len(),
+            })
+            .await
+            .is_err()
+    );
+    let upload = channels
+        .begin_media_upload(tinychannels_bus::MediaUploadBegin {
+            instance: "fixture".into(),
+            scope: scope.clone(),
+            kind: tinychannels_bus::MediaKind::Document,
+            content_type: "text/plain".into(),
+            file_name: Some("note.txt".into()),
+            duration_ms: None,
+            codec: None,
+            byte_count: bytes.len(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        channels
+            .append_media_upload_chunk(tinychannels_bus::MediaUploadChunk {
+                handle: upload.clone(),
+                sequence: 0,
+                bytes: bytes.clone(),
+            })
+            .await
+            .unwrap(),
+        1
+    );
+    let media = channels
+        .finish_media_upload(tinychannels_bus::MediaUploadFinish(upload))
+        .await
+        .unwrap();
+    assert!(
+        media
+            .opaque_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("tinychannels_media_v1_"))
+    );
+    assert_eq!(media.url, None);
+    assert_eq!(media.path, None);
+
+    let cancelled_upload = channels
+        .begin_media_upload(tinychannels_bus::MediaUploadBegin {
+            instance: "fixture".into(),
+            scope: scope.clone(),
+            kind: tinychannels_bus::MediaKind::Document,
+            content_type: "text/plain".into(),
+            file_name: None,
+            duration_ms: None,
+            codec: None,
+            byte_count: bytes.len(),
+        })
+        .await
+        .unwrap();
+    channels
+        .abort_media_upload(tinychannels_bus::MediaUploadFinish(cancelled_upload))
+        .await
+        .unwrap();
+
+    let mut wrong_turn = scope.clone();
+    wrong_turn.turn_id = "other-turn".into();
+    assert!(
+        channels
+            .begin_media_read(tinychannels_bus::MediaReadBegin {
+                instance: "fixture".into(),
+                scope: wrong_turn,
+                media: media.clone(),
+                max_bytes: 1024,
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        channels
+            .begin_media_read(tinychannels_bus::MediaReadBegin {
+                instance: "fixture".into(),
+                scope: scope.clone(),
+                media: media.clone(),
+                max_bytes: 0,
+            })
+            .await
+            .is_err()
+    );
+
+    let read = channels
+        .begin_media_read(tinychannels_bus::MediaReadBegin {
+            instance: "fixture".into(),
+            scope,
+            media,
+            max_bytes: 1024,
+        })
+        .await
+        .unwrap();
+    let chunk = channels
+        .read_media_chunk(tinychannels_bus::MediaReadChunk {
+            handle: read.handle.clone(),
+            sequence: 0,
+        })
+        .await
+        .unwrap();
+    assert_eq!(chunk.bytes, bytes);
+    assert!(chunk.done);
+    channels
+        .abort_media_read(tinychannels_bus::MediaReadFinish(read.handle))
+        .await
+        .unwrap();
+    channels.shutdown().await.unwrap();
 }
 
 fn required_intent(id: &str, text: &str) -> ChannelOutboundIntent {
@@ -1829,7 +1437,6 @@ fn required_intent(id: &str, text: &str) -> ChannelOutboundIntent {
         conversation_id: "room-1".into(),
         channel_ref: None,
         conversation_ref: None,
-        turn_id: None,
         durability: tinychannels::DeliveryDurability::Required,
         payload: tinychannels::OutboundPayload::Text { text: text.into() },
         ..Default::default()
@@ -1935,89 +1542,6 @@ async fn required_send_refuses_invalid_and_oversized_intents_before_persistence(
     );
     assert!(received.try_recv().is_err());
     assert!(callbacks.storage.snapshot().await.is_empty());
-    channels.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn large_voice_bytes_use_compact_scoped_reference_in_best_effort_and_required_intents() {
-    let (sent, mut received) = tokio::sync::mpsc::channel(4);
-    let (channels, callbacks, _server) =
-        channels_with_store(Arc::new(CaptureVoiceReceiptChannel(sent))).await;
-    let voice_intent = |id: &str, durability, audio_base64| ChannelOutboundIntent {
-        idempotency_key: id.into(),
-        channel_id: "fixture".into(),
-        conversation_id: "room-1".into(),
-        turn_id: Some(format!("{id}-origin-turn")),
-        durability,
-        payload: tinychannels_bus::OutboundPayload::Voice {
-            voice: tinychannels_bus::OutboundVoice::Media {
-                media: tinychannels_bus::MediaReference {
-                    opaque_id: Some("host-media-opaque".into()),
-                    kind: tinychannels_bus::MediaKind::Audio,
-                    content_type: Some("audio/ogg".into()),
-                    ..Default::default()
-                },
-                audio_base64,
-                codec: Some("ogg_opus".into()),
-                duration_ms: Some(1_200),
-                waveform: None,
-            },
-        },
-        ..Default::default()
-    };
-
-    let raw_audio = base64::engine::general_purpose::STANDARD.encode(vec![7_u8; 128 * 1024 + 1]);
-    let oversized = voice_intent(
-        "large-inline-voice",
-        tinychannels::DeliveryDurability::BestEffort,
-        Some(raw_audio),
-    );
-    assert!(
-        channels
-            .send_channel_intent("fixture".into(), oversized)
-            .await
-            .is_err(),
-        "raw audio above the relay envelope limit must be rejected before sending"
-    );
-    assert!(received.try_recv().is_err());
-
-    for durability in [
-        tinychannels::DeliveryDurability::BestEffort,
-        tinychannels::DeliveryDurability::Required,
-    ] {
-        let id = match durability {
-            tinychannels::DeliveryDurability::BestEffort => "compact-best-effort",
-            tinychannels::DeliveryDurability::Required => "compact-required",
-            tinychannels::DeliveryDurability::Disabled => unreachable!(),
-        };
-        let intent = voice_intent(id, durability, None);
-        let encoded = serde_json::to_vec(&intent).unwrap();
-        assert!(encoded.len() < tinychannels_bus::module_relay::RELAY_FRAME_BYTES);
-        assert!(encoded.len() < tinychannels_bus::module_delivery::DELIVERY_RECORD_BYTES);
-        assert!(!String::from_utf8_lossy(&encoded).contains("audioBase64"));
-
-        let result = channels
-            .send_channel_intent("fixture".into(), intent)
-            .await
-            .expect("compact durable reference fits normal and required paths");
-        if durability == tinychannels::DeliveryDurability::Required {
-            assert_eq!(result.message_id.as_deref(), Some("voice-message"));
-        }
-        let message = received.recv().await.expect("typed provider send");
-        assert_eq!(
-            message.turn_id.as_deref(),
-            Some(format!("{id}-origin-turn").as_str()),
-            "the real service dispatch retains the source turn separately from the idempotency key"
-        );
-        assert_eq!(message.idempotency_key, id);
-        assert!(matches!(
-            &message.parts[0],
-            tinychannels_bus::OutboundContentPart::Voice {
-                voice: tinychannels_bus::OutboundVoice::Media { media, audio_base64: None, .. }
-            } if media.opaque_id.as_deref() == Some("host-media-opaque")
-        ));
-    }
-    assert!(!callbacks.storage.snapshot().await.is_empty());
     channels.shutdown().await.unwrap();
 }
 
@@ -2153,7 +1677,7 @@ async fn startup_recovery_acks_a_matching_terminal_result_without_resending() {
 }
 
 #[tokio::test]
-async fn startup_recovery_rejects_a_conflicting_terminal_result() {
+async fn startup_recovery_quarantines_a_conflicting_terminal_result() {
     use tinychannels::delivery::{DeliveryQueueStore as _, DeliveryRecoveryState, QueuedDelivery};
 
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
@@ -2174,19 +1698,22 @@ async fn startup_recovery_rejects_a_conflicting_terminal_result() {
         .await
         .unwrap();
 
-    assert!(
-        recover_delivery_channel(&channels.host, &channels.running, "fixture")
-            .await
-            .is_err(),
-        "a terminal result for a different intent is a key conflict"
-    );
+    // Another intent's result is never adopted as ours: the entry is neither
+    // acked as delivered nor re-sent, but kept in the failed collection.
+    recover_delivery_channel(&channels.host, &channels.running, "fixture")
+        .await
+        .unwrap();
     let scopes = callbacks.storage.snapshot().await;
     let scope = scopes.get("scope-a").unwrap();
-    assert_eq!(scope.pending.len(), 1, "conflicts stay retryable");
-    assert!(scope.failed.is_empty());
+    assert!(scope.pending.is_empty());
+    assert_eq!(
+        scope.failed.len(),
+        1,
+        "conflicts are quarantined, not dropped"
+    );
     drop(scopes);
     assert!(received.try_recv().is_err());
-    channels.shutdown().await.unwrap_err();
+    channels.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -2277,6 +1804,33 @@ async fn changed_intent_cannot_reuse_a_terminal_result_key() {
 async fn stop_channel_keeps_provider_running_when_queue_recovery_fails() {
     let (sent, _received) = tokio::sync::mpsc::channel(1);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
+    let media_request = |instance: &str| tinychannels_bus::MediaUploadBegin {
+        instance: instance.into(),
+        scope: tinychannels_bus::HostVoiceScope {
+            conversation: tinychannels_bus::ConversationRef {
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "turn".into(),
+            ..Default::default()
+        },
+        kind: tinychannels_bus::MediaKind::Document,
+        content_type: "text/plain".into(),
+        file_name: None,
+        duration_ms: None,
+        codec: None,
+        byte_count: 1,
+    };
+    let fixture_upload = channels
+        .media_uploads
+        .begin(media_request("fixture"), "fixture-generation".into())
+        .await
+        .unwrap();
+    let second_fixture_upload = channels
+        .media_uploads
+        .begin(media_request("fixture"), "fixture-generation".into())
+        .await
+        .unwrap();
     callbacks
         .storage
         .faults
@@ -2285,6 +1839,13 @@ async fn stop_channel_keeps_provider_running_when_queue_recovery_fails() {
 
     assert!(channels.stop_channel("fixture".into()).await.is_err());
     assert!(channels.running.lock().await.contains_key("fixture"));
+    assert!(
+        channels
+            .media_uploads
+            .binding(&tinychannels_bus::MediaUploadFinish(fixture_upload))
+            .await
+            .is_ok()
+    );
 
     callbacks
         .storage
@@ -2293,6 +1854,20 @@ async fn stop_channel_keeps_provider_running_when_queue_recovery_fails() {
         .store(false, Ordering::SeqCst);
     channels.stop_channel("fixture".into()).await.unwrap();
     assert!(!channels.running.lock().await.contains_key("fixture"));
+    assert!(
+        channels
+            .media_uploads
+            .binding(&tinychannels_bus::MediaUploadFinish(second_fixture_upload))
+            .await
+            .is_err()
+    );
+    assert!(
+        channels
+            .media_uploads
+            .begin(media_request("other"), "other-generation".into())
+            .await
+            .is_ok()
+    );
     channels.shutdown().await.unwrap();
 }
 
@@ -2303,7 +1878,6 @@ async fn best_effort_rich_payload_is_rejected_by_the_legacy_text_only_provider()
     let intent = ChannelOutboundIntent {
         idempotency_key: "structured-1".into(),
         channel_id: "fixture".into(),
-        turn_id: None,
         durability: tinychannels::DeliveryDurability::BestEffort,
         payload: tinychannels::OutboundPayload::NativeChannelData {
             data: serde_json::json!({"kind": "card", "safe": true}),
@@ -2503,7 +2077,7 @@ async fn nested_runtime_shutdown_failure_still_drains_root_owners_and_can_retry(
     let runtimes = Arc::new(crate::runtime::Runtimes::new(module.clone()));
     let channels = Channels::new(root_host.clone(), Some(runtimes.clone()));
     let (sent, _received) = tokio::sync::mpsc::channel(1);
-    let provider = Running::start_test(
+    let provider = Running::start(
         Arc::new(CaptureChannel(sent)),
         Arc::new(Hooks::default()),
         root_host.clone(),
@@ -2692,115 +2266,19 @@ async fn preparation_preserves_explicit_keys_and_typed_thread_before_provider_io
         .await
         .unwrap();
     assert_eq!(prepared.intent.idempotency_key, "original-key");
-    assert_eq!(prepared.legacy_message, legacy.clone());
-    assert!(matches!(
-        &prepared.intent.payload,
-        tinychannels_bus::OutboundPayload::NativeChannelData { data } if data == &legacy
-    ));
-    let mut typed = SendMessage::new("fixture", "recipient").in_thread(Some("topic".into()));
-    typed.reply_to_id = Some("parent-message".into());
-    typed.topic_id = Some("topic-id".into());
+    assert_eq!(prepared.legacy_message, legacy);
+    let typed = SendMessage::new("fixture", "recipient").in_thread(Some("topic".into()));
     let expected = tinychannels::outbound_intent_from_send_message("telegram", &typed);
     let prepared = channels
         .prepare_outbound_intent("telegram".into(), ChannelMessagePreparation::Typed(typed))
         .await
         .unwrap();
     assert_eq!(prepared.intent.idempotency_key, expected.idempotency_key);
-    assert_eq!(prepared.intent.thread_id, None);
-    assert_eq!(prepared.intent.channel_id, "telegram");
-    assert_eq!(prepared.intent.conversation_id, "recipient");
-    assert_eq!(
-        prepared.intent.reply_to_id.as_deref(),
-        Some("parent-message")
-    );
-    assert_eq!(
-        prepared
-            .intent
-            .conversation_ref
-            .as_ref()
-            .and_then(|reference| reference.topic_id.as_deref()),
-        Some("topic-id")
-    );
-    assert!(
-        matches!(
-            &prepared.intent.payload,
-            tinychannels_bus::OutboundPayload::Text { text } if text == "fixture"
-        ),
-        "typed SendMessage input must reach providers as typed text, not native provider data"
-    );
-    assert_eq!(prepared.legacy_message["content"], "fixture");
-    assert_eq!(prepared.legacy_message["recipient"], "recipient");
-    assert_eq!(prepared.legacy_message["thread_ts"], "topic");
-    assert_eq!(prepared.legacy_message["replyToId"], "parent-message");
-    assert_eq!(prepared.legacy_message["topicId"], "topic-id");
+    assert_eq!(prepared.intent.thread_id.as_deref(), Some("topic"));
     assert_eq!(
         prepared.legacy_message["idempotencyKey"],
         prepared.intent.idempotency_key
     );
-
-    let mut subject_message = SendMessage::new("fixture", "recipient");
-    subject_message.subject = Some("subject".into());
-    let subject_prepared = channels
-        .prepare_outbound_intent(
-            "email".into(),
-            ChannelMessagePreparation::Typed(subject_message),
-        )
-        .await
-        .unwrap();
-    assert!(matches!(
-        &subject_prepared.intent.payload,
-        tinychannels_bus::OutboundPayload::Text { text } if text == "Subject: subject\nfixture"
-    ));
-    assert_eq!(subject_prepared.legacy_message["subject"], "subject");
-
-    let mut dingtalk_message = SendMessage::new("custom", "room");
-    dingtalk_message.subject = Some("OpenHuman".into());
-    let dingtalk_prepared = channels
-        .prepare_outbound_intent(
-            "dingtalk".into(),
-            ChannelMessagePreparation::Typed(dingtalk_message),
-        )
-        .await
-        .unwrap();
-    assert!(matches!(
-        &dingtalk_prepared.intent.payload,
-        tinychannels_bus::OutboundPayload::Text { text } if text == "Subject: OpenHuman\ncustom"
-    ));
-
-    let mut telegram_message = SendMessage::new("visible body", "chat");
-    telegram_message.subject = Some("ignored before typed migration".into());
-    let telegram_prepared = channels
-        .prepare_outbound_intent(
-            "telegram".into(),
-            ChannelMessagePreparation::Typed(telegram_message),
-        )
-        .await
-        .unwrap();
-    assert!(matches!(
-        &telegram_prepared.intent.payload,
-        tinychannels_bus::OutboundPayload::Text { text } if text == "visible body"
-    ));
-
-    let native_intent = tinychannels_bus::ChannelOutboundIntent {
-        channel_id: "telegram".into(),
-        idempotency_key: "native-key".into(),
-        payload: tinychannels_bus::OutboundPayload::NativeChannelData {
-            data: serde_json::json!({"provider_payload": "keep native"}),
-        },
-        ..Default::default()
-    };
-    let native_prepared = channels
-        .prepare_outbound_intent(
-            "telegram".into(),
-            ChannelMessagePreparation::Intent(native_intent),
-        )
-        .await
-        .unwrap();
-    assert!(matches!(
-        native_prepared.intent.payload,
-        tinychannels_bus::OutboundPayload::NativeChannelData { .. }
-    ));
-
     assert!(
         channels
             .prepare_outbound_intent(
@@ -2825,7 +2303,6 @@ async fn preparation_preserves_explicit_keys_and_typed_thread_before_provider_io
     let original = tinychannels_bus::ChannelOutboundIntent {
         channel_id: "telegram".into(),
         idempotency_key: "existing-required-key".into(),
-        turn_id: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         payload: tinychannels_bus::OutboundPayload::Text {
             text: "fixture".into(),
@@ -2859,105 +2336,22 @@ async fn preparation_preserves_explicit_keys_and_typed_thread_before_provider_io
     channels.shutdown().await.unwrap();
 }
 
-#[tokio::test]
-async fn telegram_v1_preparation_splits_topic_address_and_preserves_parent_reply() {
-    use tinychannels_bus::module_runtime::ChannelMessagePreparation;
-
-    let bus = tinybus::transport::memory::MemoryBus::new();
-    tinybus::broker::Broker::new().spawn(bus.clone());
-    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
-        .await
-        .unwrap();
-    let host = HostChannels::new(connection);
-    let channels = Channels::new(host, None);
-    let mut message = SendMessage::new("reply body", "-200:42");
-    message.thread_ts = Some("100".into());
-
-    let prepared = channels
-        .prepare_outbound_intent("telegram".into(), ChannelMessagePreparation::Typed(message))
-        .await
-        .unwrap();
-
-    assert_eq!(prepared.intent.conversation_id, "-200");
-    assert_eq!(
-        prepared
-            .intent
-            .conversation_ref
-            .as_ref()
-            .and_then(|value| value.topic_id.as_deref()),
-        Some("42")
-    );
-    assert_eq!(prepared.intent.reply_to_id.as_deref(), Some("100"));
-    assert_eq!(prepared.intent.thread_id, None);
-
-    let topic_only = channels
-        .prepare_outbound_intent(
-            "telegram".into(),
-            ChannelMessagePreparation::Typed(SendMessage::new("topic body", "-200:42")),
-        )
-        .await
-        .unwrap();
-    assert_eq!(topic_only.intent.conversation_id, "-200");
-    assert_eq!(
-        topic_only
-            .intent
-            .conversation_ref
-            .as_ref()
-            .and_then(|value| value.topic_id.as_deref()),
-        Some("42")
-    );
-    assert_eq!(topic_only.intent.reply_to_id, None);
-
-    let canonical = tinychannels_bus::ChannelOutboundIntent {
-        channel_id: "telegram".into(),
-        conversation_id: "-200:42".into(),
-        conversation_ref: Some(tinychannels_bus::ConversationRef {
-            id: "-200:42".into(),
-            topic_id: Some("explicit-topic".into()),
-            ..Default::default()
-        }),
-        reply_to_id: None,
-        payload: tinychannels_bus::OutboundPayload::Text {
-            text: "canonical body".into(),
-        },
-        ..Default::default()
-    };
-    let canonical_prepared = channels
-        .prepare_outbound_intent(
-            "telegram".into(),
-            ChannelMessagePreparation::Intent(canonical.clone()),
-        )
-        .await
-        .unwrap();
-    assert_eq!(canonical_prepared.intent, canonical);
-}
-
 struct OutboundOnlyFixture(tokio::sync::mpsc::Sender<SendMessage>);
 
 #[async_trait::async_trait]
-impl crate::provider::TestProviderBehavior for OutboundOnlyFixture {
-    fn test_provider_id(&self) -> &'static str {
+impl tinychannels::Channel for OutboundOnlyFixture {
+    fn name(&self) -> &str {
         "fixture"
     }
-    async fn test_send(
+    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
+        self.0.send(message.clone()).await?;
+        Ok(())
+    }
+    async fn listen(
         &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<
-        tinychannels_bus::channel::ChannelSendOutcome,
-        tinychannels::channel::ChannelSendError,
-    > {
-        let legacy = SendMessage::new(
-            crate::provider::test_message_text(message),
-            message.conversation_id.clone(),
-        );
-        self.0
-            .send(legacy)
-            .await
-            .map_err(|error| tinychannels::channel::ChannelSendError {
-                message: error.to_string(),
-                ..Default::default()
-            })?;
-        Ok(Default::default())
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        panic!("external webhook providers must not start a native listener")
     }
 }
 
@@ -2970,17 +2364,13 @@ async fn outbound_only_worker_sends_and_joins_without_polling_webhook_listener()
         .unwrap();
     let host = HostChannels::new(connection);
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
-    let running = Running::start_test_outbound(
+    let running = Running::start_outbound(
         Arc::new(OutboundOnlyFixture(sent)),
         Arc::new(Hooks::default()),
         host.clone(),
     );
     running
-        .send_typed(crate::provider::typed_test_message(
-            "fixture",
-            "fixture",
-            "recipient",
-        ))
+        .send(SendMessage::new("fixture", "recipient"))
         .await
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(received.recv().await.unwrap().content, "fixture");
@@ -2989,11 +2379,7 @@ async fn outbound_only_worker_sends_and_joins_without_polling_webhook_listener()
     assert!(running.is_finished());
     assert!(
         running
-            .send_typed(crate::provider::typed_test_message(
-                "fixture",
-                "closed",
-                "recipient",
-            ))
+            .send(SendMessage::new("closed", "recipient"))
             .await
             .is_err()
     );
@@ -3062,336 +2448,14 @@ async fn inbound_preparation_service() -> Channels {
     Channels::new(host, None)
 }
 
-#[tokio::test]
-async fn inbound_voice_transcript_projects_to_legacy_text_and_preserves_typed_scope() {
-    use tinychannels_bus::module_inbound::{ChannelInboundSource, PrepareChannelInboundRequest};
-    use tinychannels_bus::{
-        ChannelInboundEnvelope, ChannelRef, ContentPart, ConversationKind, ConversationRef,
-        MediaKind, MediaReference, SenderRef, VoiceNote, VoiceTranscript, VoiceTranscriptSource,
-        VoiceTranscriptState,
-    };
-
-    let service = inbound_preparation_service().await;
-    let envelope = ChannelInboundEnvelope {
-        channel: ChannelRef {
-            id: "telegram".into(),
-            account_id: Some("telegram:bot-a".into()),
-        },
-        message_id: "voice-42".into(),
-        conversation: ConversationRef {
-            kind: ConversationKind::Dm,
-            id: "chat-7".into(),
-            topic_id: Some("topic-3".into()),
-            ..Default::default()
-        },
-        sender: SenderRef {
-            id: "alice".into(),
-            ..Default::default()
-        },
-        parts: vec![
-            ContentPart::Text {
-                text: "caption".into(),
-                markdown_dialect: None,
-            },
-            ContentPart::VoiceNote {
-                voice_note: VoiceNote {
-                    media: MediaReference {
-                        opaque_id: Some("voice-media-ref".into()),
-                        kind: MediaKind::Audio,
-                        ..Default::default()
-                    },
-                    transcript: Some(VoiceTranscript {
-                        text: "turn left at the next street".into(),
-                        language: Some("en".into()),
-                        state: VoiceTranscriptState::Complete,
-                        source: VoiceTranscriptSource::HostStt,
-                    }),
-                    ..Default::default()
-                },
-            },
-            ContentPart::VoiceNote {
-                voice_note: VoiceNote {
-                    media: MediaReference {
-                        opaque_id: Some("voice-media-ref-2".into()),
-                        kind: MediaKind::Audio,
-                        ..Default::default()
-                    },
-                    transcript: Some(VoiceTranscript {
-                        text: "then stop".into(),
-                        language: Some("en".into()),
-                        state: VoiceTranscriptState::Complete,
-                        source: VoiceTranscriptSource::Provider,
-                    }),
-                    ..Default::default()
-                },
-            },
-        ],
-        ..Default::default()
-    };
-
-    let prepared = service
-        .prepare_channel_inbound(PrepareChannelInboundRequest {
-            source: ChannelInboundSource::Envelope {
-                envelope: envelope.clone(),
-                timestamp: 42,
-            },
-            namespace: "openhuman".into(),
-            session_policy: Default::default(),
-            preparation_mode: Default::default(),
-        })
-        .await
-        .expect("a completed voice transcript is valid legacy turn text");
-
-    assert_eq!(
-        prepared.message.content,
-        "caption\nturn left at the next street\nthen stop"
-    );
-    assert_eq!(prepared.envelope, envelope);
-    assert_eq!(prepared.thread_id, "channel:telegram/alice/chat-7");
-    assert_eq!(
-        prepared.envelope.channel.account_id.as_deref(),
-        Some("telegram:bot-a")
-    );
-    assert_eq!(
-        prepared.envelope.conversation.topic_id.as_deref(),
-        Some("topic-3")
-    );
-
-    let invalid_transcripts = [
-        None,
-        Some(VoiceTranscript {
-            text: "transcription failed".into(),
-            language: Some("en".into()),
-            state: VoiceTranscriptState::Unavailable,
-            source: VoiceTranscriptSource::HostStt,
-        }),
-        Some(VoiceTranscript {
-            text: String::new(),
-            language: Some("en".into()),
-            state: VoiceTranscriptState::Complete,
-            source: VoiceTranscriptSource::HostStt,
-        }),
-        Some(VoiceTranscript {
-            text: "   \n".into(),
-            language: Some("en".into()),
-            state: VoiceTranscriptState::Complete,
-            source: VoiceTranscriptSource::HostStt,
-        }),
-        Some(VoiceTranscript {
-            text: "still processing".into(),
-            language: Some("en".into()),
-            state: VoiceTranscriptState::Pending,
-            source: VoiceTranscriptSource::HostStt,
-        }),
-    ];
-    for transcript in invalid_transcripts {
-        let mut incomplete = envelope.clone();
-        let ContentPart::VoiceNote { voice_note } = &mut incomplete.parts[1] else {
-            unreachable!("the voice note follows the caption");
-        };
-        voice_note.transcript = transcript;
-        assert!(
-            service
-                .prepare_channel_inbound(PrepareChannelInboundRequest {
-                    source: ChannelInboundSource::Envelope {
-                        envelope: incomplete,
-                        timestamp: 43,
-                    },
-                    namespace: "openhuman".into(),
-                    session_policy: Default::default(),
-                    preparation_mode: Default::default(),
-                })
-                .await
-                .is_err()
-        );
-    }
-    service.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn typed_inbound_preparation_preserves_rich_parts_without_legacy_projection() {
-    use tinychannels_bus::module_inbound::{
-        ChannelInboundPreparationMode, ChannelInboundSource, PrepareChannelInboundRequest,
-    };
-    use tinychannels_bus::{
-        ChannelInboundEnvelope, ChannelMessage, ChannelRef, ContentPart, ConversationKind,
-        ConversationRef, MediaKind, MediaReference, SenderRef, VoiceNote, VoiceTranscript,
-        VoiceTranscriptSource, VoiceTranscriptState,
-    };
-
-    let service = inbound_preparation_service().await;
-    let envelope = ChannelInboundEnvelope {
-        channel: ChannelRef {
-            id: "telegram".into(),
-            account_id: Some("telegram:work".into()),
-        },
-        message_id: "image-only-7".into(),
-        conversation: ConversationRef {
-            kind: ConversationKind::Group,
-            id: "room-4".into(),
-            thread_id: Some("thread-8".into()),
-            topic_id: Some("topic-2".into()),
-            ..Default::default()
-        },
-        sender: SenderRef {
-            id: "alice".into(),
-            ..Default::default()
-        },
-        parts: vec![
-            ContentPart::Image {
-                media: MediaReference {
-                    opaque_id: Some("image-ref-7".into()),
-                    content_type: Some("image/png".into()),
-                    kind: MediaKind::Image,
-                    ..Default::default()
-                },
-                caption: Some("diagram".into()),
-                alt_text: Some("network chart".into()),
-            },
-            ContentPart::File {
-                media: MediaReference {
-                    opaque_id: Some("file-ref-9".into()),
-                    file_name: Some("notes.txt".into()),
-                    content_type: Some("text/plain".into()),
-                    kind: MediaKind::Document,
-                    ..Default::default()
-                },
-                file_name: Some("notes.txt".into()),
-                caption: Some("meeting notes".into()),
-            },
-        ],
-        ..Default::default()
-    };
-
-    let typed = service
-        .prepare_channel_inbound(PrepareChannelInboundRequest {
-            source: ChannelInboundSource::Envelope {
-                envelope: envelope.clone(),
-                timestamp: 123,
-            },
-            namespace: "openhuman".into(),
-            session_policy: Default::default(),
-            preparation_mode: ChannelInboundPreparationMode::Typed,
-        })
-        .await
-        .expect("typed hosts need the envelope even when legacy text cannot represent it");
-    assert_eq!(typed.envelope, envelope);
-    assert_eq!(typed.message.content, "");
-    assert_eq!(typed.message.channel, "telegram");
-    assert_eq!(typed.thread_id, "channel:telegram/alice/room-4");
-
-    let legacy = service
-        .prepare_channel_inbound(PrepareChannelInboundRequest {
-            source: ChannelInboundSource::Envelope {
-                envelope: envelope.clone(),
-                timestamp: 123,
-            },
-            namespace: "openhuman".into(),
-            session_policy: Default::default(),
-            preparation_mode: ChannelInboundPreparationMode::LegacyText,
-        })
-        .await;
-    assert!(legacy.is_err(), "legacy preparation remains fail closed");
-
-    for (index, part) in envelope.parts.iter().cloned().enumerate() {
-        let mut single_part = envelope.clone();
-        single_part.message_id = format!("single-part-{index}");
-        single_part.parts = vec![part];
-        let prepared = service
-            .prepare_channel_inbound(PrepareChannelInboundRequest {
-                source: ChannelInboundSource::Envelope {
-                    envelope: single_part.clone(),
-                    timestamp: 124,
-                },
-                namespace: "openhuman".into(),
-                session_policy: Default::default(),
-                preparation_mode: ChannelInboundPreparationMode::Typed,
-            })
-            .await
-            .expect("image-only and file-only typed messages are representable");
-        assert_eq!(prepared.envelope, single_part);
-        assert!(prepared.message.content.is_empty());
-    }
-
-    let mut ordered = envelope.clone();
-    ordered.message_id = "ordered-parts-5".into();
-    ordered.parts = vec![
-        ContentPart::Text {
-            text: "before".into(),
-            markdown_dialect: None,
-        },
-        ContentPart::VoiceNote {
-            voice_note: VoiceNote {
-                transcript: Some(VoiceTranscript {
-                    text: "spoken words".into(),
-                    language: Some("en".into()),
-                    state: VoiceTranscriptState::Complete,
-                    source: VoiceTranscriptSource::HostStt,
-                }),
-                ..Default::default()
-            },
-        },
-        envelope.parts[0].clone(),
-        ContentPart::Text {
-            text: "after".into(),
-            markdown_dialect: None,
-        },
-    ];
-    let prepared = service
-        .prepare_channel_inbound(PrepareChannelInboundRequest {
-            source: ChannelInboundSource::Envelope {
-                envelope: ordered.clone(),
-                timestamp: 125,
-            },
-            namespace: "openhuman".into(),
-            session_policy: Default::default(),
-            preparation_mode: ChannelInboundPreparationMode::Typed,
-        })
-        .await
-        .unwrap();
-    assert_eq!(prepared.message.content, "before\nspoken words\nafter");
-    assert_eq!(prepared.envelope, ordered);
-
-    let legacy_message = ChannelMessage {
-        id: envelope.message_id.clone(),
-        sender: envelope.sender.id.clone(),
-        reply_target: envelope.conversation.id.clone(),
-        content: "stale legacy view".into(),
-        channel: envelope.channel.id.clone(),
-        timestamp: 126,
-        thread_ts: envelope.conversation.thread_id.clone(),
-        topic_id: envelope.conversation.topic_id.clone(),
-        reply_to_id: envelope.reply_to_id.clone(),
-        sender_name: None,
-    };
-    let prepared = service
-        .prepare_channel_inbound(PrepareChannelInboundRequest {
-            source: ChannelInboundSource::Legacy {
-                message: legacy_message,
-                envelope: Some(envelope.clone()),
-            },
-            namespace: "openhuman".into(),
-            session_policy: Default::default(),
-            preparation_mode: ChannelInboundPreparationMode::Typed,
-        })
-        .await
-        .unwrap();
-    assert_eq!(prepared.envelope, envelope);
-    assert!(prepared.message.content.is_empty());
-    service.shutdown().await.unwrap();
-}
-
 async fn enable_remote_providers(channels: &Channels) {
     let host = channels.host.clone();
     for configured_name in ["telegram", "discord"] {
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
         channels.running.lock().await.insert(
             configured_name.to_owned(),
-            Running::start_test(
-                Arc::new(RemoteControlCaptureChannel {
-                    id: configured_name,
-                    sent: sender,
-                }),
+            Running::start(
+                Arc::new(CaptureChannel(sender)),
                 Arc::new(Hooks::default()),
                 host.clone(),
             ),
@@ -3664,7 +2728,15 @@ fn exported_manifest_preserves_the_complete_contract_member_order() {
         .iter()
         .map(|method| method.as_str())
         .collect();
-    assert_eq!(actual, tinychannels_bus::METHODS);
+    #[cfg(feature = "test-support")]
+    let expected = {
+        let mut expected = tinychannels_bus::METHODS.to_vec();
+        expected.extend(["TestRegisterRemoteChannel", "TestUnregisterRemoteChannel"]);
+        expected
+    };
+    #[cfg(not(feature = "test-support"))]
+    let expected = tinychannels_bus::METHODS.to_vec();
+    assert_eq!(actual, expected);
 }
 
 #[tokio::test]
@@ -3743,14 +2815,18 @@ async fn remote_help_is_parsed_and_rendered_inside_the_module() {
                     "content":"/help", "channel":"telegram:fixture", "timestamp":1
                 }))
                 .unwrap(),
+                capabilities: Some(Box::new(tinychannels_bus::ChannelCapabilities {
+                    remote_control: true,
+                    ..Default::default()
+                })),
                 route: RemoteRoute {
                     provider: "fixture".into(),
                     model: "fixture".into(),
                 },
                 history_len: 0,
                 session_scope: None,
-                configured_channel: None,
                 providers: vec![],
+                configured_channel: None,
             },
         )
         .await
@@ -3866,6 +2942,7 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
         Request::Route {
         workspace_dir: ".".into(),
         message: serde_json::from_value(serde_json::json!({"id":"fixture","sender":"sender","reply_target":"chat","content":content,"channel":channel,"timestamp":1})).unwrap(),
+        capabilities: None,
         route: RemoteRoute { provider: "old".into(), model: "model".into() }, history_len: 3,
         session_scope: None,
         configured_channel: None,
@@ -3945,7 +3022,52 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
 }
 
 #[tokio::test]
-async fn linq_starts_with_module_ingress_and_rejects_duplicate_ownership() {
+async fn route_remote_commands_use_host_capabilities_for_isolated_runtime() {
+    use tinychannels_bus::module_control::{
+        ChannelControlRequest as Request, ChannelControlResult as Response, ProviderDescriptor,
+    };
+    use tinychannels_bus::module_remote::RemoteRoute;
+
+    let service = inbound_preparation_service().await;
+    let response = service
+        .prepare_channel_control(Request::Route {
+            workspace_dir: ".".into(),
+            message: serde_json::from_value(serde_json::json!({
+                "id":"fixture", "sender":"sender", "reply_target":"chat",
+                "content":"/help", "channel":"telegram", "timestamp":1
+            }))
+            .unwrap(),
+            capabilities: Some(Box::new(tinychannels_bus::ChannelCapabilities {
+                remote_control: true,
+                ..Default::default()
+            })),
+            route: RemoteRoute {
+                provider: "fixture".into(),
+                model: "fixture".into(),
+            },
+            history_len: 0,
+            session_scope: None,
+            providers: vec![ProviderDescriptor {
+                name: "fixture".into(),
+                aliases: vec![],
+            }],
+            configured_channel: None,
+        })
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        response,
+        Response::Route {
+            reply: Some(reply),
+            ..
+        } if reply == tinychannels::remote::build_remote_help_response()
+    ));
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn webhook_provider_requires_outbound_start_and_rejects_duplicate_ownership() {
     let service = inbound_preparation_service().await;
     let config = ChannelsConfig {
         linq: Some(tinychannels_bus::config::LinqConfig {
@@ -3956,12 +3078,13 @@ async fn linq_starts_with_module_ingress_and_rejects_duplicate_ownership() {
         }),
         ..Default::default()
     };
-    service
+    let error = service
         .start_channel("linq".into(), config.clone())
         .await
-        .unwrap();
-    assert_eq!(service.list_channels().await.unwrap(), ["linq"]);
-    service.stop_channel("linq".into()).await.unwrap();
+        .map(|_| ())
+        .expect_err("request must fail");
+    assert!(matches!(error, BusError::MethodFailed { name, .. } if name == NO_INGRESS_ERROR));
+    assert!(service.list_channels().await.unwrap().is_empty());
     service
         .start_outbound_channel("linq".into(), config.clone(), Default::default())
         .await
@@ -4041,300 +3164,6 @@ async fn channel_start_variants_refuse_missing_configuration_and_excessive_backo
         );
     }
     service.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
-    use base64::Engine as _;
-    use tinychannels_bus::{
-        ChannelRef, ConversationKind, ConversationRef, HostVoiceScope, MediaKind, MediaReadBegin,
-        MediaReadChunk, MediaReadFinish, MediaUploadBegin, MediaUploadChunk, MediaUploadFinish,
-    };
-
-    let (service, _callbacks, _server) =
-        channels_with_store(Arc::new(CaptureChannel(tokio::sync::mpsc::channel(1).0))).await;
-    service.provider_activations.lock().await.insert(
-        "fixture".into(),
-        super::ProviderActivation {
-            generation: "activation-a".into(),
-            media_account_scope: crate::provider::MediaScope::fixed(Some(
-                "fixture:media-v1:test".into(),
-            )),
-        },
-    );
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII=")
-        .unwrap();
-    let begin = MediaUploadBegin {
-        instance: "fixture".into(),
-        scope: HostVoiceScope {
-            configured_instance: "forged-instance".into(),
-            channel: ChannelRef {
-                id: "forged-channel".into(),
-                account_id: Some("forged-account".into()),
-            },
-            conversation: ConversationRef {
-                kind: ConversationKind::Thread,
-                id: "conversation".into(),
-                scope_id: Some("scope".into()),
-                parent_id: Some("parent".into()),
-                thread_id: Some("thread".into()),
-                topic_id: Some("topic".into()),
-            },
-            turn_id: "turn".into(),
-        },
-        kind: MediaKind::Image,
-        content_type: "image/png".into(),
-        file_name: Some("image.png".into()),
-        duration_ms: None,
-        codec: None,
-        byte_count: bytes.len(),
-    };
-    assert!(
-        service
-            .begin_media_upload(MediaUploadBegin {
-                instance: "missing".into(),
-                ..begin.clone()
-            })
-            .await
-            .is_err()
-    );
-    let handle = service.begin_media_upload(begin.clone()).await.unwrap();
-    assert_eq!(
-        service
-            .append_media_upload_chunk(MediaUploadChunk {
-                handle: handle.clone(),
-                sequence: 0,
-                bytes: bytes.clone(),
-            })
-            .await
-            .unwrap(),
-        1
-    );
-    let finish = MediaUploadFinish(handle);
-    let result = service.finish_media_upload(finish.clone()).await.unwrap();
-    assert!(result.opaque_id.is_some());
-    assert_eq!(result.content_type.as_deref(), Some("image/png"));
-    assert_eq!(
-        service.finish_media_upload(finish.clone()).await.unwrap(),
-        result
-    );
-    assert!(service.abort_media_upload(finish.clone()).await.is_err());
-
-    let mut read_scope = begin.scope.clone();
-    read_scope.configured_instance = "fixture".into();
-    read_scope.channel.id = "fixture".into();
-    read_scope.channel.account_id = Some("fixture:media-v1:test".into());
-    let read_request = MediaReadBegin {
-        instance: "fixture".into(),
-        scope: read_scope.clone(),
-        media: result.clone(),
-        max_bytes: bytes_len(&result),
-    };
-    assert!(
-        service
-            .begin_media_read(MediaReadBegin {
-                instance: "missing".into(),
-                ..read_request.clone()
-            })
-            .await
-            .expect_err("inactive provider cannot resolve media")
-            .to_string()
-            .contains("not running")
-    );
-    service.provider_activations.lock().await.insert(
-        "fixture-no-identity".into(),
-        super::ProviderActivation {
-            generation: "activation-no-identity".into(),
-            media_account_scope: crate::provider::MediaScope::default(),
-        },
-    );
-    let running_fixture = service.running.lock().await["fixture"].clone();
-    service
-        .running
-        .lock()
-        .await
-        .insert("fixture-no-identity".into(), running_fixture);
-    assert!(
-        service
-            .begin_media_read(MediaReadBegin {
-                instance: "fixture-no-identity".into(),
-                ..read_request.clone()
-            })
-            .await
-            .expect_err("provider without stable identity fails closed")
-            .to_string()
-            .contains("no stable media identity")
-    );
-    assert!(
-        service
-            .begin_media_read(MediaReadBegin {
-                max_bytes: 0,
-                ..read_request.clone()
-            })
-            .await
-            .expect_err("zero-byte bound is invalid")
-            .to_string()
-            .contains("request is invalid")
-    );
-    let read = service
-        .begin_media_read(read_request.clone())
-        .await
-        .unwrap();
-    assert_eq!(read.byte_count, bytes_len(&result) as usize);
-    assert_eq!(read.media.opaque_id, result.opaque_id);
-    assert_eq!(read.content_type, "image/png");
-    assert_eq!(read.file_name.as_deref(), Some("image.png"));
-    let first = service
-        .read_media_chunk(MediaReadChunk {
-            handle: read.handle.clone(),
-            sequence: 0,
-        })
-        .await
-        .unwrap();
-    assert!(first.done);
-    assert_eq!(first.bytes, bytes);
-    assert_eq!(
-        service
-            .read_media_chunk(MediaReadChunk {
-                handle: read.handle.clone(),
-                sequence: 0,
-            })
-            .await
-            .unwrap(),
-        first
-    );
-    let aborted_handle = read.handle.clone();
-    service
-        .abort_media_read(MediaReadFinish(read.handle))
-        .await
-        .unwrap();
-    assert!(service.media_reads.binding(&aborted_handle).await.is_err());
-    assert!(
-        service
-            .read_media_chunk(MediaReadChunk {
-                handle: aborted_handle,
-                sequence: 0,
-            })
-            .await
-            .is_err()
-    );
-
-    let replaced_read = service
-        .begin_media_read(MediaReadBegin {
-            instance: "fixture".into(),
-            scope: read_scope.clone(),
-            media: result.clone(),
-            max_bytes: bytes_len(&result),
-        })
-        .await
-        .unwrap();
-
-    service.provider_activations.lock().await.insert(
-        "fixture".into(),
-        super::ProviderActivation {
-            generation: "activation-b".into(),
-            media_account_scope: crate::provider::MediaScope::fixed(Some(
-                "fixture:media-v1:test".into(),
-            )),
-        },
-    );
-    assert!(
-        service
-            .read_media_chunk(MediaReadChunk {
-                handle: replaced_read.handle.clone(),
-                sequence: 0,
-            })
-            .await
-            .is_err()
-    );
-    assert!(
-        service
-            .abort_media_read(MediaReadFinish(replaced_read.handle.clone()))
-            .await
-            .is_err()
-    );
-    assert!(service.finish_media_upload(finish).await.is_err());
-    let terminal_read = service
-        .begin_media_read(MediaReadBegin {
-            instance: "fixture".into(),
-            scope: read_scope,
-            media: result,
-            max_bytes: 1024,
-        })
-        .await
-        .unwrap();
-    service.terminal.store(true, Ordering::SeqCst);
-    assert!(
-        service
-            .begin_media_upload(MediaUploadBegin {
-                instance: "fixture".into(),
-                ..MediaUploadBegin {
-                    byte_count: 1,
-                    ..request_media_fixture()
-                }
-            })
-            .await
-            .is_err()
-    );
-    assert!(
-        service
-            .begin_media_read(read_request)
-            .await
-            .expect_err("terminal module refuses begin")
-            .to_string()
-            .contains("shutting down")
-    );
-    assert!(
-        service
-            .read_media_chunk(MediaReadChunk {
-                handle: terminal_read.handle.clone(),
-                sequence: 0,
-            })
-            .await
-            .expect_err("terminal module refuses chunks")
-            .to_string()
-            .contains("shutting down")
-    );
-    assert!(
-        service
-            .abort_media_read(MediaReadFinish(terminal_read.handle))
-            .await
-            .expect_err("terminal module refuses abort")
-            .to_string()
-            .contains("shutting down")
-    );
-    service.shutdown().await.unwrap();
-}
-
-fn bytes_len(reference: &tinychannels_bus::MediaReference) -> u64 {
-    reference
-        .size_bytes
-        .expect("stored media includes byte count")
-}
-
-fn request_media_fixture() -> tinychannels_bus::MediaUploadBegin {
-    tinychannels_bus::MediaUploadBegin {
-        instance: "fixture".into(),
-        scope: tinychannels_bus::HostVoiceScope {
-            configured_instance: "fixture".into(),
-            channel: tinychannels_bus::ChannelRef {
-                id: "fixture".into(),
-                account_id: None,
-            },
-            conversation: tinychannels_bus::ConversationRef {
-                id: "conversation".into(),
-                ..Default::default()
-            },
-            turn_id: "turn".into(),
-        },
-        kind: tinychannels_bus::MediaKind::Unknown,
-        content_type: "application/octet-stream".into(),
-        file_name: None,
-        duration_ms: None,
-        codec: None,
-        byte_count: 1,
-    }
 }
 
 #[tokio::test]
@@ -4512,147 +3341,29 @@ async fn legacy_send_and_interaction_route_to_live_provider_and_reject_unknown_c
 }
 
 #[tokio::test]
-async fn v1_subjects_are_normalized_only_for_providers_that_consume_them() {
-    for (instance, provider, subject, content, expected) in [
-        (
-            "email:account-a",
-            "email",
-            "Weekly report",
-            "All green",
-            "Subject: Weekly report\nAll green",
-        ),
-        (
-            "dingtalk:account-a",
-            "dingtalk",
-            "OpenHuman",
-            "custom",
-            "Subject: OpenHuman\ncustom",
-        ),
-        (
-            "telegram:account-a",
-            "telegram",
-            "ignored",
-            "visible body",
-            "visible body",
-        ),
-    ] {
-        let (sent, mut received) = tokio::sync::mpsc::channel(1);
-        let (service, _callbacks, _server) = channels_with_store_named(
-            instance,
-            Arc::new(CaptureWireProvider { id: provider, sent }),
-        )
-        .await;
-        let mut message = SendMessage::new(content, "recipient");
-        message.subject = Some(subject.into());
-        service
-            .send_message(instance.into(), message)
-            .await
-            .unwrap();
-        let actual = received.recv().await.unwrap();
-        assert_eq!(actual.channel_id, provider);
-        assert_eq!(actual.conversation_id, "recipient");
-        assert_eq!(
-            crate::provider::test_message_text(&actual),
-            expected,
-            "v1 subject projection for {provider}"
-        );
-        service.shutdown().await.unwrap();
-    }
-}
-
-#[tokio::test]
-async fn v1_discord_send_uses_configured_channel_when_recipient_is_empty() {
-    use wiremock::matchers::{header, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    let rest = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/channels/555000111/messages"))
-        .and(header("authorization", "Bot MTIzNDU2.ts.hmac"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "id": "123456789012345678"
-        })))
-        .expect(1)
-        .mount(&rest)
-        .await;
-
-    let (channels, _callbacks, _server) =
-        channels_with_store(Arc::new(CaptureChannel(tokio::sync::mpsc::channel(1).0))).await;
-    let instance = "discord:account-a".to_owned();
-    let channel: Arc<dyn tinychannels::LongTailNative> = Arc::new(
-        tinychannels::DiscordChannel::new(
-            "MTIzNDU2.ts.hmac".into(),
-            Some("999000333".into()),
-            Some("555000111".into()),
-            vec![],
-            false,
-            false,
-        )
-        .with_api_base(rest.uri()),
-    );
-    let running = crate::provider::Running::start_long_tail(
-        "Discord",
-        channel,
-        Arc::new(crate::provider::Hooks::default()),
-        channels.host.clone(),
-        None,
-        true,
-        crate::provider::LongTailListenerMode::Adapter,
-    );
-    channels
-        .running
-        .lock()
-        .await
-        .insert(instance.clone(), running);
-
-    let result = channels
-        .send_message(instance, SendMessage::new("v1 proactive", ""))
-        .await;
-    let requests = rest.received_requests().await.unwrap();
-    assert!(
-        result.is_ok(),
-        "configured Discord target should be used; result={result:?}, requests={requests:?}"
-    );
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].url.path(), "/channels/555000111/messages");
-    assert_eq!(
-        requests[0].body_json::<serde_json::Value>().unwrap()["content"],
-        "v1 proactive"
-    );
-    rest.verify().await;
-    channels.shutdown().await.unwrap();
-}
-
-#[tokio::test]
 async fn service_send_failures_preserve_named_error_and_durable_queue_busy_refuses_admission() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (service, _callbacks, _server) =
         channels_with_store(Arc::new(FailingChannel(calls.clone()))).await;
-    let legacy_error = service
-        .send_message("fixture".into(), SendMessage::new("hello", "room"))
-        .await
-        .expect_err("legacy send surface projects the provider failure");
-    assert!(
-        matches!(legacy_error, BusError::MethodFailed { name, .. } if name == SEND_FAILED_ERROR)
-    );
-    let typed_result = service
-        .send_channel_intent(
-            "fixture".into(),
-            ChannelOutboundIntent {
-                turn_id: None,
-                durability: tinychannels::DeliveryDurability::BestEffort,
-                ..required_intent("best-effort", "hello")
-            },
-        )
-        .await
-        .expect("typed API returns the structured provider outcome");
-    assert_eq!(
-        typed_result
-            .error
-            .as_ref()
-            .map(|error| error.message.as_str()),
-        Some("fixture provider failure")
-    );
+    for error in [
+        service
+            .send_message("fixture".into(), SendMessage::new("hello", "room"))
+            .await
+            .expect_err("provider fails"),
+        service
+            .send_channel_intent(
+                "fixture".into(),
+                ChannelOutboundIntent {
+                    durability: tinychannels::DeliveryDurability::BestEffort,
+                    ..required_intent("best-effort", "hello")
+                },
+            )
+            .await
+            .map(|_| ())
+            .expect_err("provider fails"),
+    ] {
+        assert!(matches!(error, BusError::MethodFailed { name, .. } if name == SEND_FAILED_ERROR));
+    }
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     let admission = service.delivery_admission.lock().await;
     let error = service
@@ -4830,319 +3541,40 @@ async fn shutdown_refuses_preparation_and_execution_before_host_work() {
 }
 
 #[tokio::test]
-async fn whatsapp_cloud_starts_normally_and_serves_webhook_ingress_over_the_bus() {
-    #[derive(Clone)]
-    struct WebhookHost;
-
-    #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
-    impl WebhookHost {
-        async fn deliver_inbound(
-            &self,
-            _channel: String,
-            _message: serde_json::Value,
-        ) -> tinybus::Result<()> {
-            Ok(())
-        }
-
-        async fn report_status(
-            &self,
-            _channel: String,
-            _state: String,
-            _detail: Option<String>,
-        ) -> tinybus::Result<()> {
-            Ok(())
-        }
-
-        async fn persist_allowed_identity(
-            &self,
-            _channel: String,
-            _identity: String,
-        ) -> tinybus::Result<()> {
-            Ok(())
-        }
-    }
-
-    let bus = tinybus::transport::memory::MemoryBus::new();
-    tinybus::broker::Broker::new().spawn(bus.clone());
-    let host_server = tinybus::Connection::connect(bus.connect().await.unwrap())
-        .await
-        .unwrap();
-    host_server
-        .serve_at(
-            tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
-            WebhookHost,
-        )
-        .await
-        .unwrap();
-    host_server
-        .request_name(tinychannels_bus::HOST_BUS_NAME)
-        .await
-        .unwrap();
-    let module = tinybus::Connection::connect(bus.connect().await.unwrap())
-        .await
-        .unwrap();
-    let service = Channels::new(HostChannels::new(module), None);
-    let config = ChannelsConfig {
-        whatsapp: Some(tinychannels_bus::config::WhatsAppConfig {
-            access_token: Some("access-token".into()),
-            phone_number_id: Some("123".into()),
-            verify_token: Some("verify-me".into()),
-            app_secret: Some("secret".into()),
-            session_path: None,
-            pair_phone: None,
-            pair_code: None,
-            allowed_numbers: vec!["*".into()],
-        }),
-        ..Default::default()
+async fn a_conflicting_pending_entry_is_quarantined_and_does_not_block_a_later_required_send() {
+    use tinychannels::delivery::{
+        DeliveryQueueStore as _, DeliveryRecoveryState, DeliveryResultStore as _, QueuedDelivery,
     };
-    service
-        .start_channel("whatsapp".into(), config.clone())
-        .await
-        .expect("the module serves the Cloud webhook ingress");
-    let _running = service
-        .running
-        .lock()
-        .await
-        .get("whatsapp")
-        .cloned()
-        .expect("configured WhatsApp provider is running");
 
-    let foreign_receipt = service
-        .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
-            channel: "whatsapp".into(),
-            interaction: tinychannels_bus::ChannelInteraction::MarkRead {
-                channel: tinychannels_bus::ChannelRef {
-                    id: "whatsapp".into(),
-                    account_id: Some("whatsapp:another-account".into()),
-                },
-                conversation: tinychannels_bus::ConversationRef {
-                    id: "15550001111".into(),
-                    kind: tinychannels_bus::ConversationKind::Dm,
-                    ..Default::default()
-                },
-                provider_message_id: "wamid.foreign".into(),
-            },
-        })
-        .await
-        .expect_err("a read receipt from another account must be refused");
-    assert!(matches!(foreign_receipt, BusError::MethodFailed { .. }));
-    // The subscription handshake is answered through the interaction method.
-    let challenge = service
-        .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
-            channel: "whatsapp".into(),
-            interaction: tinychannels_bus::ChannelInteraction::VerifyWebhook {
-                mode: "subscribe".into(),
-                verify_token: "verify-me".into(),
-                challenge: "challenge-1".into(),
-            },
+    let (sent, mut received) = tokio::sync::mpsc::channel(1);
+    let (channels, _callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
+    let store = crate::delivery::HostDeliveryStore::from_host(&channels.host);
+    let mut stuck = QueuedDelivery::new(
+        "stuck",
+        required_intent("stuck", "older intent"),
+        now_unix_ms(),
+    );
+    stuck.recovery_state = Some(DeliveryRecoveryState::SendAttemptStarted);
+    stuck.platform_send_started_at_unix_ms = Some(now_unix_ms());
+    store.save_pending(stuck).await.unwrap();
+    store
+        .save_result(tinychannels_bus::DeliveryTerminalResult {
+            id: "stuck".into(),
+            intent_fingerprint: "f".repeat(64),
+            completed_at_unix_ms: now_unix_ms(),
+            receipt: None,
         })
         .await
         .unwrap();
-    assert!(matches!(
-        challenge,
-        tinychannels_bus::ChannelInteractionResult::WebhookChallenge(value) if value == "challenge-1"
-    ));
-    // An unsigned delivery is refused with the client-error name.
-    let refused = service
-        .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
-            channel: "whatsapp".into(),
-            interaction: tinychannels_bus::ChannelInteraction::DeliverWebhook {
-                signature: None,
-                body_base64: "e30=".into(),
-            },
-        })
-        .await
-        .map(|_| ())
-        .expect_err("an unsigned delivery must be refused");
-    assert!(matches!(
-        refused,
-        BusError::MethodFailed { name, .. } if name == crate::interaction::WEBHOOK_REJECTED_ERROR
-    ));
 
-    let body = serde_json::to_vec(&serde_json::json!({
-        "object": "whatsapp_business_account",
-        "entry": [{"id": "account", "changes": [{"field": "messages", "value": {
-            "messaging_product": "whatsapp",
-            "metadata": {"phone_number_id": "123"},
-            "contacts": [{"wa_id": "15550001111", "profile": {"name": "Ada"}}],
-            "messages": [{"from": "15550001111", "id": "wamid.typed-1", "timestamp": "1700000000", "type": "text", "text": {"body": "hello from webhook"}}]
-        }}]}]
-    }))
-    .unwrap();
-    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(b"secret").unwrap();
-    mac.update(&body);
-    let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
-    let accepted = service
-        .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
-            channel: "whatsapp".into(),
-            interaction: tinychannels_bus::ChannelInteraction::DeliverWebhook {
-                signature: Some(signature),
-                body_base64: base64::engine::general_purpose::STANDARD.encode(body),
-            },
-        })
-        .await
-        .unwrap();
-    assert!(matches!(
-        accepted,
-        tinychannels_bus::ChannelInteractionResult::WebhookAccepted(outcome)
-            if outcome.messages == 1 && outcome.events == 0 && outcome.duplicates == 0
-    ));
-    service.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn whatsapp_selection_follows_the_stanza_shape_and_web_binds_its_media_authority() {
-    use tinychannels::host::ChannelHost;
-    let host: Arc<dyn ChannelHost> = tinychannels::NoopHost::arc();
-    let select = |name: &str, config: &ChannelsConfig| {
-        super::WhatsAppNative::select(name, config, &host, &tinychannels::DefaultHttpClients)
-    };
-    let cloud_config = ChannelsConfig {
-        whatsapp: Some(tinychannels_bus::config::WhatsAppConfig {
-            access_token: Some("token".into()),
-            phone_number_id: Some("123".into()),
-            verify_token: Some("verify".into()),
-            app_secret: None,
-            session_path: None,
-            pair_phone: None,
-            pair_code: None,
-            allowed_numbers: Vec::new(),
-        }),
-        ..Default::default()
-    };
-    let web_config = whatsapp(false);
-    assert!(select("telegram", &cloud_config).is_none());
-    assert!(select("whatsapp", &ChannelsConfig::default()).is_none());
-    let unusable = ChannelsConfig {
-        whatsapp: Some(tinychannels_bus::config::WhatsAppConfig {
-            access_token: None,
-            phone_number_id: None,
-            verify_token: None,
-            app_secret: None,
-            session_path: None,
-            pair_phone: None,
-            pair_code: None,
-            allowed_numbers: Vec::new(),
-        }),
-        ..Default::default()
-    };
-    assert!(select("whatsapp", &unusable).is_none());
-
-    let cloud =
-        select("whatsapp", &cloud_config).expect("a Cloud stanza selects the Cloud adapter");
-    let web = select("whatsapp", &web_config).expect("a session stanza selects the Web adapter");
-    assert!(matches!(cloud, super::WhatsAppNative::Cloud(_)));
-    let cloud_adapter: &dyn tinychannels::channel::ChannelAdapter = match &cloud {
-        super::WhatsAppNative::Cloud(channel) => channel.as_ref(),
-        super::WhatsAppNative::Web(_) => unreachable!("cloud stanza selected web adapter"),
-    };
-    let web_adapter: &dyn tinychannels::channel::ChannelAdapter = match &web {
-        super::WhatsAppNative::Web(channel) => channel.as_ref(),
-        super::WhatsAppNative::Cloud(_) => unreachable!("web stanza selected cloud adapter"),
-    };
-    assert_eq!(cloud_adapter.descriptor().id, "whatsapp");
-    assert_eq!(web_adapter.descriptor().id, "whatsapp");
-
-    // Only Web learns its media authority from the session; before the device
-    // is linked that authority is unknown, and Cloud's is its configuration.
-    let scope = crate::provider::MediaScope::fixed(None);
-    cloud.bind_media_authority(&scope);
-    assert_eq!(scope.current(), None);
-    web.bind_media_authority(&scope);
-    assert_eq!(
-        scope.current(),
-        None,
-        "an unlinked device has no account yet"
+    let result = channels
+        .send_channel_intent("fixture".into(), required_intent("later", "hello"))
+        .await;
+    assert!(
+        result.is_ok(),
+        "an unrelated stuck entry blocked a new required send: {result:?}"
     );
-
-    // An outbound-only start is network-free and still yields the native adapter.
-    let service = inbound_preparation_service().await;
-    let running = web.start(Arc::new(Hooks::default()), service.host.clone(), None, true);
-
-    assert_eq!(
-        running
-            .adapter_handle()
-            .descriptor()
-            .metadata
-            .get("adapterMode")
-            .map(String::as_str),
-        Some("native-v2")
-    );
-    running.stop().await.unwrap();
-}
-
-#[tokio::test]
-async fn a_long_tail_provider_starts_as_a_native_adapter_and_is_listed() {
-    let service = inbound_preparation_service().await;
-    let config = ChannelsConfig {
-        mattermost: Some(tinychannels_bus::config::MattermostConfig {
-            url: "http://127.0.0.1:9".into(),
-            bot_token: "bot-token".into(),
-            channel_id: Some("chan1".into()),
-            allowed_users: vec![],
-            thread_replies: None,
-            mention_only: None,
-        }),
-        ..Default::default()
-    };
-    let described = service
-        .describe_configured_channels(config.clone(), Default::default())
-        .await
-        .expect("configured native provider is described");
-    let mattermost = described
-        .iter()
-        .find(|channel| channel.name == "mattermost")
-        .expect("Mattermost is listed from the configured factory instance");
-    assert_eq!(
-        mattermost.interaction.capabilities.account.configured,
-        Some(true)
-    );
-    assert_eq!(
-        mattermost.interaction.capabilities.account.enabled,
-        Some(true)
-    );
-    service
-        .start_channel("mattermost".into(), config.clone())
-        .await
-        .expect("the module starts a long-tail provider");
-    assert_eq!(service.list_channels().await.unwrap(), ["mattermost"]);
-    let running = service.running.lock().await.get("mattermost").cloned();
-    let running = running.expect("mattermost is running");
-    assert_eq!(running.adapter_handle().descriptor().id, "mattermost");
-    assert_eq!(
-        service
-            .channel_status("mattermost".into())
-            .await
-            .expect("native adapter status is available"),
-        "unhealthy",
-        "unknown provider health is not reported as connected"
-    );
-    service.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn starting_an_unconfigured_provider_reports_not_configured() {
-    let service = inbound_preparation_service().await;
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let finished = Running::start_test(
-        Arc::new(CaptureChannel(tx)),
-        Arc::new(Hooks::default()),
-        service.host.clone(),
-    );
-    finished.stop().await.unwrap();
-    service
-        .running
-        .lock()
-        .await
-        .insert("mattermost".into(), finished);
-
-    let error = service
-        .start_channel("mattermost".into(), ChannelsConfig::default())
-        .await
-        .expect_err("an absent provider is not started");
-    assert!(matches!(
-        error,
-        BusError::MethodFailed { name, .. } if name == NOT_CONFIGURED_ERROR
-    ));
-    service.shutdown().await.unwrap();
+    assert_eq!(received.recv().await.unwrap().content, "hello");
+    assert!(store.load_pending("stuck").await.unwrap().is_none());
+    assert!(store.load_failed("stuck").await.unwrap().is_some());
 }

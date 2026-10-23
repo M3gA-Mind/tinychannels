@@ -301,6 +301,12 @@ impl crate::provider::TestProviderBehavior for MockProvider {
                 tinychannels_bus::OutboundContentPart::Content {
                     part: tinychannels_bus::ContentPart::Text { text, .. },
                 } => Some(text.clone()),
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Native { data, .. },
+                } => data
+                    .get("content")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
                 _ => None,
             })
             .unwrap_or_default();

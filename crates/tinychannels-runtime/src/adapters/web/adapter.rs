@@ -5,7 +5,7 @@ use super::project::WebTurnProjector;
 use super::sink::{WebEventSink, WebScope};
 use crate::channel::{
     ChannelAdapter, ChannelDescriptor, ChannelInboundSink, ChannelOutboundIntent, ChannelSendError,
-    ChannelSendOutcome, MessageReceipt,
+    MessageReceipt,
 };
 use crate::controllers::{ChannelAccountSnapshot, ChannelAccountState};
 use async_trait::async_trait;
@@ -158,7 +158,9 @@ impl WebChannelAdapter {
             parts = envelope.parts.len(),
             "web adapter: inbound submission"
         );
-        inbound.push(ChannelIngress::Inbound(envelope)).await
+        inbound
+            .push_ingress(ChannelIngress::Inbound(envelope))
+            .await
     }
 
     /// Project one canonical output event and publish the result.
@@ -303,7 +305,7 @@ impl ChannelAdapter for WebChannelAdapter {
     async fn send(
         &self,
         intent: ChannelOutboundIntent,
-    ) -> Result<ChannelSendOutcome, ChannelSendError> {
+    ) -> Result<MessageReceipt, ChannelSendError> {
         if tinychannels_bus::provider_id(&intent.channel_id) != WEB_CHANNEL_ID
             || intent.conversation_id.trim().is_empty()
         {
@@ -324,19 +326,16 @@ impl ChannelAdapter for WebChannelAdapter {
             thread_id: intent.thread_id.clone(),
             ..Default::default()
         });
-        Ok(ChannelSendOutcome {
-            receipt: MessageReceipt {
-                idempotency_key: Some(intent.idempotency_key.clone()),
-                channel: Some(channel),
-                conversation: Some(conversation),
-                primary_platform_message_id: Some(intent.idempotency_key.clone()),
-                platform_message_ids: vec![intent.idempotency_key],
-                thread_id: intent.thread_id,
-                reply_to_id: intent.reply_to_id,
-                sent_at: (self.clock)(),
-                ..Default::default()
-            },
-            error: None,
+        Ok(MessageReceipt {
+            idempotency_key: Some(intent.idempotency_key.clone()),
+            channel: Some(channel),
+            conversation: Some(conversation),
+            primary_platform_message_id: Some(intent.idempotency_key.clone()),
+            platform_message_ids: vec![intent.idempotency_key],
+            thread_id: intent.thread_id,
+            reply_to_id: intent.reply_to_id,
+            sent_at: (self.clock)(),
+            ..Default::default()
         })
     }
 

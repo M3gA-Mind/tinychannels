@@ -54,13 +54,9 @@ impl TelegramChannel {
         if upload.bytes.is_empty() || upload.bytes.len() > 20 * 1024 * 1024 {
             anyhow::bail!("media upload exceeds the supported inline limit");
         }
-        let mime = upload
-            .content_type
-            .parse::<mime::Mime>()
-            .map_err(|_| anyhow::anyhow!("Telegram media has an invalid content type"))?;
         let part = Part::bytes(upload.bytes)
             .file_name(upload.file_name.to_owned())
-            .mime_str(mime.as_ref())?;
+            .mime_str(upload.content_type)?;
         let mut form = Form::new()
             .text("chat_id", upload.chat_id.to_owned())
             .part(upload.field.to_owned(), part);
@@ -324,17 +320,7 @@ impl TelegramChannel {
         let mut message_ids = Vec::new();
 
         for (index, chunk) in chunks.iter().enumerate() {
-            let text = if chunks.len() > 1 {
-                if index == 0 {
-                    format!("{chunk}\n\n(continues...)")
-                } else if index == chunks.len() - 1 {
-                    format!("(continued)\n\n{chunk}")
-                } else {
-                    format!("(continued)\n\n{chunk}\n\n(continues...)")
-                }
-            } else {
-                chunk.to_string()
-            };
+            let text = chunk.to_string();
 
             let mut markdown_body = serde_json::json!({
                 "chat_id": chat_id,

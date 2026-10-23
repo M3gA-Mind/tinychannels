@@ -72,7 +72,7 @@ pub trait LongTailNative:
     crate::channel::ChannelAdapter
     + crate::channel::ChannelTypedSend
     + crate::channel::ChannelTyping
-    + crate::channel::ChannelReaction
+    + crate::channel::LegacyChannelReaction
     + crate::channel::ChannelEdit
     + crate::channel::ChannelDelete
     + crate::channel::ChannelStreamingDraft
@@ -83,7 +83,7 @@ impl<T> LongTailNative for T where
     T: crate::channel::ChannelAdapter
         + crate::channel::ChannelTypedSend
         + crate::channel::ChannelTyping
-        + crate::channel::ChannelReaction
+        + crate::channel::LegacyChannelReaction
         + crate::channel::ChannelEdit
         + crate::channel::ChannelDelete
         + crate::channel::ChannelStreamingDraft
@@ -291,10 +291,12 @@ macro_rules! impl_long_tail_adapter {
                 &self,
                 intent: tinychannels_bus::ChannelOutboundIntent,
             ) -> Result<
-                tinychannels_bus::channel::ChannelSendOutcome,
+                tinychannels_bus::channel::MessageReceipt,
                 tinychannels_bus::channel::ChannelSendError,
             > {
-                $crate::providers::long_tail::send_intent(self, intent).await
+                $crate::providers::long_tail::send_intent(self, intent)
+                    .await
+                    .map(|outcome| outcome.receipt)
             }
             async fn status(
                 &self,
@@ -342,7 +344,7 @@ macro_rules! impl_long_tail_adapter {
         }
 
         #[async_trait::async_trait]
-        impl $crate::channel::ChannelReaction for $ty {
+        impl $crate::channel::LegacyChannelReaction for $ty {
             async fn send_reaction(
                 &self,
                 channel: &tinychannels_bus::channel::ChannelRef,

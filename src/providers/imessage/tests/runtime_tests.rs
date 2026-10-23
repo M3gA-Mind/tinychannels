@@ -55,6 +55,14 @@ struct IngressSender(mpsc::Sender<ChannelIngress>);
 impl ChannelInboundSink for IngressSender {
     async fn push(
         &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
+        &self,
         ingress: ChannelIngress,
     ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
         self.0

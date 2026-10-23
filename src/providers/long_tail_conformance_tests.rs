@@ -6,10 +6,8 @@
 //! retain capability-honesty checks until their transports have equivalent
 //! local fixtures.
 
-use crate::LongTailNative;
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
-    ChannelTyping,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelStreamingDraft, ChannelTyping,
 };
 use crate::factory::{
     DefaultHttpClients, HttpClientFactory, build_long_tail_channel,
@@ -18,6 +16,7 @@ use crate::factory::{
 use crate::host::{
     MediaRepository, MediaScope, MediaStoreRequest, StoredMedia, VoiceMediaRequest, VoiceMediaStore,
 };
+use crate::providers::long_tail::LongTailNative;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
@@ -200,6 +199,14 @@ struct ConformanceInboundSink(tokio::sync::mpsc::UnboundedSender<tinychannels_bu
 #[async_trait]
 impl crate::channel::ChannelInboundSink for ConformanceInboundSink {
     async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
         &self,
         ingress: tinychannels_bus::ChannelIngress,
     ) -> Result<(), ChannelSendError> {
@@ -943,7 +950,7 @@ impl LongTailFixture {
         intent: ChannelOutboundIntent,
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         let before = self.request_count().await;
-        let outcome = ChannelAdapter::send(self.channel.as_ref(), intent).await;
+        let outcome = ChannelAdapter::send_outcome(self.channel.as_ref(), intent).await;
         self.record(feature, before).await;
         outcome.map(Some)
     }
@@ -1169,7 +1176,8 @@ impl AdapterFixture for LongTailFixture {
                     },
                 );
                 intent.thread_id = Some(ROOT.into());
-                self.refused(ChannelAdapter::send(channel, intent)).await
+                self.refused(ChannelAdapter::send_outcome(channel, intent))
+                    .await
             }
             Feature::Text | Feature::ThreadAddressing => {
                 self.send_and_record(
@@ -1191,7 +1199,8 @@ impl AdapterFixture for LongTailFixture {
                 if channel.declared_capabilities().addressing.reply_to_id {
                     self.send_intent_and_record(feature, intent).await
                 } else {
-                    self.refused(ChannelAdapter::send(channel, intent)).await
+                    self.refused(ChannelAdapter::send_outcome(channel, intent))
+                        .await
                 }
             }
             Feature::Typing => {
@@ -1254,7 +1263,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Sticker => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     channel,
                     self.intent(
                         feature,
@@ -1270,7 +1279,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Location => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     channel,
                     self.intent(
                         feature,
@@ -1287,7 +1296,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Contact => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     channel,
                     self.intent(
                         feature,
@@ -1302,7 +1311,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Poll => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     channel,
                     self.intent(
                         feature,
@@ -1318,7 +1327,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Buttons => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     channel,
                     self.intent(
                         feature,
@@ -1335,7 +1344,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Presentation => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     channel,
                     self.intent(
                         feature,
@@ -1347,7 +1356,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::NativeData => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     channel,
                     self.intent(
                         feature,
@@ -1364,21 +1373,19 @@ impl AdapterFixture for LongTailFixture {
                     OutboundPayload::Voice {
                         voice: tinychannels_bus::OutboundVoice::Media {
                             media: media(MediaKind::Audio),
-                            audio_base64: None,
                             codec: Some(if self.id == "dingtalk" {
                                 "amr_nb".into()
                             } else {
                                 "m4a_aac".into()
                             }),
                             duration_ms: Some(1500),
-                            waveform: None,
                         },
                     },
                 )
                 .await
             }
             Feature::VoiceSynthesis => {
-                self.refused(ChannelAdapter::send(
+                self.refused(ChannelAdapter::send_outcome(
                     channel,
                     self.intent(
                         feature,
@@ -1395,7 +1402,7 @@ impl AdapterFixture for LongTailFixture {
             Feature::Reactions => {
                 if !channel.declared_capabilities().reactions {
                     return self
-                        .refused(ChannelReaction::send_reaction(
+                        .refused(crate::channel::LegacyChannelReaction::send_reaction(
                             channel,
                             &account(self.id),
                             &target,
@@ -1405,7 +1412,7 @@ impl AdapterFixture for LongTailFixture {
                         ))
                         .await;
                 }
-                let setup = ChannelAdapter::send(
+                let setup = ChannelAdapter::send_outcome(
                     channel,
                     self.intent(
                         feature,
@@ -1421,7 +1428,7 @@ impl AdapterFixture for LongTailFixture {
                     .as_deref()
                     .ok_or_else(|| crate::providers::native::pre_dispatch("missing post ID"))?;
                 let before = self.request_count().await;
-                ChannelReaction::send_reaction(
+                crate::channel::LegacyChannelReaction::send_reaction(
                     channel,
                     &account(self.id),
                     &target,
@@ -1452,7 +1459,7 @@ impl AdapterFixture for LongTailFixture {
                         ))
                         .await;
                 }
-                let setup = ChannelAdapter::send(
+                let setup = ChannelAdapter::send_outcome(
                     channel,
                     self.intent(
                         feature,
@@ -1492,7 +1499,7 @@ impl AdapterFixture for LongTailFixture {
                         .refused(ChannelDelete::delete(channel, &MessageReceipt::default()))
                         .await;
                 }
-                let setup = ChannelAdapter::send(
+                let setup = ChannelAdapter::send_outcome(
                     channel,
                     self.intent(
                         feature,

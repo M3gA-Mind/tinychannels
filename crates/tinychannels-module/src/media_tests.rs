@@ -661,8 +661,52 @@ async fn cancelling_the_bus_waiter_does_not_cancel_or_duplicate_finalize() {
         .unwrap();
 }
 
+#[tokio::test]
+async fn invalidating_instance_releases_idle_uploads_and_keeps_finalizing_uploads() {
+    let uploads = std::sync::Arc::new(MediaUploads::default());
+    let repository = std::sync::Arc::new(BlockingPersistence::default());
+    let finalizing = ready_upload(&uploads).await;
+    let pending = ready_upload(&uploads).await;
+    let finishing = {
+        let uploads = uploads.clone();
+        let repository = repository.clone();
+        let finalizing = finalizing.clone();
+        tokio::spawn(async move {
+            uploads
+                .finish(
+                    MediaUploadFinish(finalizing),
+                    "activation-a".into(),
+                    repository,
+                )
+                .await
+        })
+    };
+    repository.entered.notified().await;
+
+    uploads.invalidate_instance("telegram:primary").await;
+
+    assert!(
+        uploads
+            .binding(&MediaUploadFinish(finalizing))
+            .await
+            .is_ok()
+    );
+    assert!(uploads.binding(&MediaUploadFinish(pending)).await.is_err());
+    let mut other_instance = request(1);
+    other_instance.instance = "other-instance".into();
+    assert!(
+        uploads
+            .begin(other_instance, "activation-b".into())
+            .await
+            .is_ok()
+    );
+
+    repository.release.notify_one();
+    assert!(finishing.await.unwrap().is_ok());
+}
+
 #[tokio::test(start_paused = true)]
-async fn stalled_storage_times_out_and_retry_reuses_the_same_dedupe_key() {
+async fn stalled_storage_keeps_upload_finalizing_until_persistence_finishes() {
     let uploads = std::sync::Arc::new(MediaUploads::default());
     let repository = std::sync::Arc::new(BlockingPersistence::default());
     let handle = ready_upload(&uploads).await;
@@ -678,25 +722,17 @@ async fn stalled_storage_times_out_and_retry_reuses_the_same_dedupe_key() {
     };
     repository.entered.notified().await;
     tokio::time::advance(UPLOAD_LIFETIME + Duration::from_millis(1)).await;
-    assert!(finishing.await.unwrap().is_err());
-    assert_eq!(uploads.state.lock().await.uploads.len(), 1);
+    tokio::task::yield_now().await;
+    assert!(!finishing.is_finished());
+    assert_eq!(repository.calls.load(Ordering::SeqCst), 1);
     repository.release.notify_one();
-    let media = uploads
-        .clone()
-        .finish(
-            MediaUploadFinish(handle),
-            "activation-a".into(),
-            repository.clone(),
-        )
-        .await
-        .unwrap();
+    let media = finishing.await.unwrap().unwrap();
     assert_eq!(
         media.opaque_id.as_deref(),
         Some("tinychannels_media_v1_saved")
     );
     let keys = repository.dedupe_keys.lock().unwrap();
-    assert_eq!(keys.len(), 2);
-    assert_eq!(keys[0], keys[1]);
+    assert_eq!(keys.len(), 1);
 }
 
 struct PanickingPersistence;

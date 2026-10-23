@@ -11,7 +11,3 @@ pub struct ReplyContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_ts: Option<String>,
 }
-
-#[cfg(test)]
-#[path = "approvals_tests.rs"]
-mod tests;

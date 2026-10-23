@@ -5,7 +5,7 @@ use crate::providers::whatsapp_shared::vcard::ContactCard;
 use crate::providers::whatsapp_web::fakes::{Call, RecordingClient};
 use tinychannels_bus::{
     ChannelRef, ContactMethod, ContentPart, ConversationRef, MediaKind, MediaReference,
-    OutboundContentPart, OutboundVoice,
+    OutboundContentPart, VoiceNote,
 };
 
 fn channel(allowed: &[&str]) -> (WhatsAppWebChannel, Arc<RecordingClient>) {
@@ -356,15 +356,16 @@ async fn every_content_kind_is_uploaded_or_built_and_sent_in_order() {
             emoji: None,
             alt_text: None,
         }),
-        OutboundContentPart::Voice {
-            voice: OutboundVoice::Media {
+        content(ContentPart::VoiceNote {
+            voice_note: VoiceNote {
                 media: reference("v1"),
-                audio_base64: None,
                 codec: Some("ogg_opus".into()),
                 duration_ms: Some(1500),
-                waveform: Some(vec![0.5; 16]),
+                waveform: Some(vec![0.5; 64]),
+                push_to_talk: true,
+                transcript: None,
             },
-        },
+        }),
         content(ContentPart::Location {
             latitude: 1.0,
             longitude: 2.0,

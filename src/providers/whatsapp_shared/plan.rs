@@ -498,20 +498,9 @@ pub(crate) async fn plan_parts(
                         media,
                         codec,
                         duration_ms,
-                        waveform,
                         ..
                     },
-            } => {
-                plan_voice(
-                    scope,
-                    ports,
-                    media,
-                    codec.as_deref(),
-                    *duration_ms,
-                    waveform.as_deref(),
-                )
-                .await?
-            }
+            } => plan_voice(scope, ports, media, codec.as_deref(), *duration_ms, None).await?,
             OutboundContentPart::Voice {
                 voice: OutboundVoice::Synthesize { .. },
             } => {

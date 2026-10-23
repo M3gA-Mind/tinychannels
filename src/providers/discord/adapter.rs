@@ -3,9 +3,9 @@
 
 use super::channel::DiscordChannel;
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelInboundSink, ChannelReaction,
-    ChannelSendError, ChannelSendOutcome, ChannelStreamingDraft, ChannelTypedSend, ChannelTyping,
-    MessageReceipt,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelInboundSink, ChannelSendError,
+    ChannelSendOutcome, ChannelStreamingDraft, ChannelTypedSend, ChannelTyping,
+    LegacyChannelReaction, MessageReceipt,
 };
 use async_trait::async_trait;
 use tinychannels_bus::{ChannelCapabilities, ChannelOutboundIntent, ChannelOutboundMessage};
@@ -93,7 +93,7 @@ impl ChannelAdapter for DiscordChannel {
         tokio::pin!(gateway);
         let delivery = async {
             while let Some(ingress) = inbound.recv().await {
-                sink.push(ingress).await?;
+                sink.push_ingress(ingress).await?;
             }
             Ok::<(), ChannelSendError>(())
         };
@@ -141,9 +141,10 @@ impl ChannelAdapter for DiscordChannel {
     async fn send(
         &self,
         intent: ChannelOutboundIntent,
-    ) -> Result<ChannelSendOutcome, ChannelSendError> {
+    ) -> Result<MessageReceipt, ChannelSendError> {
         self.send_v2_with_receipt(&ChannelOutboundMessage::from_intent(&intent))
             .await
+            .map(|outcome| outcome.receipt)
     }
 
     async fn status(
@@ -177,7 +178,7 @@ impl ChannelTypedSend for DiscordChannel {
 }
 
 #[async_trait]
-impl ChannelReaction for DiscordChannel {
+impl LegacyChannelReaction for DiscordChannel {
     async fn send_reaction(
         &self,
         channel: &tinychannels_bus::channel::ChannelRef,

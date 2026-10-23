@@ -1313,6 +1313,11 @@ impl TelegramChannel {
         if conversation.thread_id.is_none() {
             conversation.thread_id = message.thread_id.clone();
         }
+        let (chat_id, embedded_thread) = Self::parse_reply_target(&conversation.id);
+        conversation.id = chat_id;
+        if conversation.thread_id.is_none() {
+            conversation.thread_id = embedded_thread;
+        }
         let thread_id = conversation
             .thread_id
             .as_deref()
@@ -1801,7 +1806,7 @@ impl TelegramChannel {
     ) -> anyhow::Result<()> {
         let ingress = tinychannels_bus::ChannelIngress::Event(event);
         if let Some(sink) = typed_sink {
-            sink.push(ingress)
+            sink.push_ingress(ingress)
                 .await
                 .map_err(|error| anyhow::anyhow!(error.message))?;
         } else if let Some(events) = &self.events
@@ -1818,7 +1823,7 @@ impl TelegramChannel {
         envelope: tinychannels_bus::ChannelInboundEnvelope,
     ) -> anyhow::Result<bool> {
         if let Some(sink) = typed_sink {
-            sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            sink.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
                 .await
                 .map_err(|error| anyhow::anyhow!(error.message))?;
             return Ok(true);
@@ -2709,21 +2714,18 @@ async fn send_typed_media_with_receipt(
 
 impl TelegramChannel {
     pub(super) async fn send_compat_message(&self, message: &SendMessage) -> anyhow::Result<()> {
-        let mut intent = crate::channel::outbound_intent_from_send_message("telegram", message);
-        // The frozen interaction DTO's provider-specific payload is a legacy
-        // serialization detail. Telegram's typed API accepts text parts, and
-        // the other routing fields from the converter remain authoritative.
-        intent.payload = tinychannels_bus::OutboundPayload::Text {
-            text: message.content.clone(),
-        };
-        let outbound = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
-        let outcome = crate::channel::ChannelTypedSend::send_typed(self, &outbound)
+        // This shim only carries text across the legacy provider boundary. Media and
+        // reactions must use the typed v2 ports; marker-looking text stays text.
+        let (chat_id, encoded_thread) = Self::parse_reply_target(&message.recipient);
+        let topic_id = message.topic_id.as_deref().or(encoded_thread.as_deref());
+        let reply_to = message
+            .reply_to_id
+            .as_deref()
+            .or(message.thread_ts.as_deref())
+            .and_then(|id| id.parse::<i64>().ok());
+        let content = super::text::strip_tool_call_tags(&message.content);
+        self.send_text_chunks(&content, &chat_id, topic_id, reply_to)
             .await
-            .map_err(|error| anyhow::anyhow!(error.message))?;
-        if let Some(error) = outcome.error {
-            return Err(anyhow::anyhow!(error.message));
-        }
-        Ok(())
     }
 
     pub(crate) fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
@@ -2805,12 +2807,60 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
     async fn send(
         &self,
         intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<tinychannels_bus::channel::MessageReceipt, crate::channel::ChannelSendError> {
+        let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
+        let outcome = self
+            .send_v2_with_receipt(&message)
+            .await
+            .map_err(typed_send_error)?;
+        if let Some(error) = outcome.error {
+            return Err(error);
+        }
+        Ok(outcome.receipt)
+    }
+
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, crate::channel::ChannelSendError>
     {
-        let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
-        self.send_v2_with_receipt(&message)
+        self.send_v2_with_receipt(message)
             .await
             .map_err(typed_send_error)
+    }
+
+    fn validate_typed_send(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        if message
+            .reply_to_id
+            .as_deref()
+            .is_some_and(|id| id.parse::<i64>().is_err())
+        {
+            return Err(crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::BadFormat,
+                message: "Telegram typed send was rejected before provider dispatch".into(),
+                retryable: false,
+                ..Default::default()
+            });
+        }
+        if message.parts.iter().any(|part| {
+            matches!(
+                part,
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Image { .. }
+                        | tinychannels_bus::ContentPart::Video { .. }
+                        | tinychannels_bus::ContentPart::Audio { .. }
+                        | tinychannels_bus::ContentPart::File { .. }
+                }
+            )
+        }) {
+            return Err(crate::channel::ChannelSendError::unsupported(
+                "Telegram typed adapter does not support this media part",
+            ));
+        }
+        Ok(())
     }
 
     async fn status(
@@ -2837,7 +2887,7 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
 }
 
 #[async_trait]
-impl crate::channel::ChannelReaction for TelegramChannel {
+impl crate::channel::LegacyChannelReaction for TelegramChannel {
     async fn send_reaction(
         &self,
         channel: &tinychannels_bus::channel::ChannelRef,

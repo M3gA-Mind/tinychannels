@@ -7,6 +7,8 @@
 
 use async_trait::async_trait;
 
+use super::{MediaScope, MediaStoreRequest, MediaStreamRequest, StoredMedia};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoiceCodecRequest {
     pub audio_base64: String,
@@ -26,8 +28,6 @@ pub trait VoiceCodec: Send + Sync {
     async fn transcode(&self, request: VoiceCodecRequest) -> anyhow::Result<VoiceCodecResult>;
 }
 
-/// Persist audio with a host-authorized reference before a provider forwards
-/// it to a normalized channel envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoiceMediaRequest {
     pub audio_base64: String,
@@ -39,8 +39,6 @@ pub struct VoiceMediaRequest {
     pub scope: tinychannels_bus::HostVoiceScope,
 }
 
-/// Host-owned durable media persistence. Implementations return only media
-/// references they authorize for the scoped conversation.
 #[async_trait]
 pub trait VoiceMediaStore: Send + Sync {
     async fn store_voice(
@@ -48,13 +46,44 @@ pub trait VoiceMediaStore: Send + Sync {
         request: VoiceMediaRequest,
     ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult>;
 
-    /// Resolve a host-authorized opaque reference for one outbound upload.
     async fn read_voice(
         &self,
         _scope: tinychannels_bus::HostVoiceScope,
         _opaque_id: String,
     ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
         anyhow::bail!("host voice media resolution is unavailable")
+    }
+}
+
+/// Durable channel media persistence with account, conversation, and turn
+/// checks enforced by the store on every operation.
+#[async_trait]
+pub trait MediaRepository: Send + Sync {
+    /// Store a fully buffered object and return a host-owned opaque reference.
+    async fn store_media(
+        &self,
+        request: MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference>;
+
+    /// Stream an untrusted source under its declared byte limit before storing.
+    async fn store_media_stream(
+        &self,
+        _request: MediaStreamRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        anyhow::bail!("media repository does not support streamed storage")
+    }
+
+    /// Resolve an opaque reference only for its exact storage scope.
+    async fn read_media(
+        &self,
+        scope: MediaScope,
+        opaque_id: String,
+        max_bytes: u64,
+    ) -> anyhow::Result<StoredMedia>;
+
+    /// Delete one object only after validating its stored scope.
+    async fn delete_media(&self, _scope: MediaScope, _opaque_id: String) -> anyhow::Result<bool> {
+        anyhow::bail!("media repository does not support deletion")
     }
 }
 
@@ -93,9 +122,6 @@ pub trait Transcriber: Send + Sync {
         request: TranscriptionRequest,
     ) -> anyhow::Result<TranscriptionResult>;
 
-    /// Context-aware transcription used by the shared voice pipeline. Legacy
-    /// hosts inherit the unscoped adapter; module hosts bind the context to
-    /// the configured account before crossing TinyBus.
     async fn transcribe_scoped(
         &self,
         _scope: tinychannels_bus::HostVoiceScope,
@@ -136,7 +162,6 @@ pub struct SpeechResult {
 pub trait SpeechSynthesizer: Send + Sync {
     async fn synthesize(&self, request: SpeechRequest) -> anyhow::Result<SpeechResult>;
 
-    /// Context-aware synthesis used by channel reply policy.
     async fn synthesize_scoped(
         &self,
         _scope: tinychannels_bus::HostVoiceScope,
@@ -290,9 +315,9 @@ pub trait EventSink: Send + Sync {
             tinychannels_bus::ChannelEventKind::OutboundReaction { .. } => "outbound_reaction",
             tinychannels_bus::ChannelEventKind::MessageUpdated { .. } => "message_updated",
             tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "message_deleted",
-            tinychannels_bus::ChannelEventKind::ButtonCallback { .. } => "button_callback",
             tinychannels_bus::ChannelEventKind::Presence { .. } => "presence",
             tinychannels_bus::ChannelEventKind::Lifecycle { .. } => "lifecycle",
+            tinychannels_bus::ChannelEventKind::ButtonCallback { .. } => "button_callback",
         };
         self.publish("channel", kind, serde_json::to_value(event)?)
             .await
@@ -374,32 +399,7 @@ pub trait StorageProvider: Send + Sync {
     /// The scoped document store, or why it is unavailable.
     async fn documents(
         &self,
-    ) -> anyhow::Result<std::sync::Arc<dyn tinystoragedrivers_core::DocumentStore>>;
-
-    /// The scoped blob store used for media bytes; hosts grant only the
-    /// provider's media prefix, never general blob authority.
-    async fn blobs(
-        &self,
-    ) -> anyhow::Result<std::sync::Arc<dyn tinystoragedrivers_core::BlobStore>> {
-        anyhow::bail!("host scoped media blob storage is unavailable")
-    }
-}
-
-/// Shared durable media repository for providers that support typed
-/// attachments. The implementation is bound to host-granted scoped storage.
-#[async_trait]
-pub trait MediaRepository: Send + Sync {
-    async fn store_media(
-        &self,
-        request: super::MediaStoreRequest,
-    ) -> anyhow::Result<tinychannels_bus::MediaReference>;
-
-    async fn read_media(
-        &self,
-        scope: super::MediaScope,
-        opaque_id: String,
-        max_bytes: u64,
-    ) -> anyhow::Result<super::StoredMedia>;
+    ) -> anyhow::Result<std::sync::Arc<dyn tinystoragedrivers_api::DocumentStore>>;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 use super::*;
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
-    ChannelTypedSend, ChannelTyping,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelStreamingDraft, ChannelTypedSend,
+    ChannelTyping,
 };
 use crate::providers::slack::fixtures::*;
 use serde_json::{Value, json};
@@ -155,7 +155,7 @@ impl SlackWireFixture {
         &self,
         intent: ChannelOutboundIntent,
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
-        ChannelAdapter::send(self.slack.as_ref(), intent)
+        ChannelAdapter::send_outcome(self.slack.as_ref(), intent)
             .await
             .map(Some)
     }
@@ -355,10 +355,8 @@ impl AdapterFixture for SlackWireFixture {
                 self.send(intent(OutboundPayload::Voice {
                     voice: OutboundVoice::Media {
                         media: media_ref(MediaKind::Audio),
-                        audio_base64: None,
                         codec: Some("m4a_aac".into()),
                         duration_ms: None,
-                        waveform: None,
                     },
                 }))
                 .await
@@ -437,7 +435,7 @@ impl AdapterFixture for SlackWireFixture {
                     value: "👍".into(),
                     custom_emoji_id: None,
                 };
-                crate::channel::ChannelReaction::send_reaction(
+                crate::channel::LegacyChannelReaction::send_reaction(
                     adapter,
                     &channel_ref(),
                     &conversation(None),
@@ -602,7 +600,18 @@ async fn lifecycle_hooks_are_owned_by_the_module_runtime() {
     struct NoSink;
     #[async_trait::async_trait]
     impl crate::channel::ChannelInboundSink for NoSink {
-        async fn push(&self, _: tinychannels_bus::ChannelIngress) -> Result<(), ChannelSendError> {
+        async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(
+            &self,
+            _: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), ChannelSendError> {
             Ok(())
         }
     }
@@ -638,13 +647,15 @@ async fn typed_sends_post_text_and_keep_provider_errors_recoverable() {
     let server = mock_api().await;
     mount(&server, "chat.postMessage", ok(json!({"ts": "1.1"}))).await;
     let channel = channel_for(&server, &[]);
-    ChannelAdapter::send(&channel, text_intent("hi"))
+    ChannelAdapter::send_outcome(&channel, text_intent("hi"))
         .await
         .unwrap();
     let mut threaded = text_intent("again");
     threaded.thread_id = Some("1.0".into());
     threaded.conversation_ref = Some(conversation(Some("1.0")));
-    ChannelAdapter::send(&channel, threaded).await.unwrap();
+    ChannelAdapter::send_outcome(&channel, threaded)
+        .await
+        .unwrap();
     let posts = bodies(&server, "chat.postMessage").await;
     assert_eq!(
         (posts[0]["channel"].as_str(), posts[0]["text"].as_str()),
@@ -659,7 +670,7 @@ async fn typed_sends_post_text_and_keep_provider_errors_recoverable() {
         json!({"ok": false, "error": "channel_not_found"}),
     )
     .await;
-    let error = ChannelAdapter::send(&channel_for(&denied, &[]), text_intent("x"))
+    let error = ChannelAdapter::send_outcome(&channel_for(&denied, &[]), text_intent("x"))
         .await
         .unwrap_err();
     assert_eq!(error.kind, SendErrorKind::NotFound);
@@ -765,7 +776,7 @@ async fn typed_interaction_operations_preserve_provider_validation() {
         value: "👍".into(),
         custom_emoji_id: None,
     };
-    ChannelReaction::send_reaction(
+    crate::channel::LegacyChannelReaction::send_reaction(
         &channel,
         &channel_ref(),
         &conversation(None),
@@ -810,7 +821,7 @@ async fn typed_interaction_operations_preserve_provider_validation() {
         custom_emoji_id: None,
     };
     assert!(
-        ChannelReaction::send_reaction(
+        crate::channel::LegacyChannelReaction::send_reaction(
             &channel,
             &channel_ref(),
             &conversation(None),
@@ -836,7 +847,7 @@ async fn reactions_for_another_channel_are_forbidden() {
         id: "telegram".into(),
         account_id: None,
     };
-    let error = ChannelReaction::send_reaction(
+    let error = crate::channel::LegacyChannelReaction::send_reaction(
         &channel,
         &other,
         &conversation(None),
@@ -889,7 +900,18 @@ async fn listening_needs_a_channel_or_an_app_token_and_picks_the_transport() {
     struct NoSink;
     #[async_trait::async_trait]
     impl crate::channel::ChannelInboundSink for NoSink {
-        async fn push(&self, _: tinychannels_bus::ChannelIngress) -> Result<(), ChannelSendError> {
+        async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(
+            &self,
+            _: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), ChannelSendError> {
             Ok(())
         }
     }

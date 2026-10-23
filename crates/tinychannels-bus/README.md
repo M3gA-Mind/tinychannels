@@ -3,21 +3,14 @@
 Serialized channel vocabulary, configuration/schema declarations, interface
 names, relay frames and structured errors. Normal dependencies are Serde,
 JSON/schema/error derivation, and Base64 used only by the existing
-`PassthroughForward.body` custom serializer (`bodyB64`). It carries only wire
-DTOs, names, constants, and errors. Provider traits and history helpers live in
-`tinychannels-runtime`; this crate has no async runtime, async-trait macro,
-`anyhow`, callbacks, scheduler, crypto, entropy, stateful locks, transport,
+`PassthroughForward.body` custom serializer (`bodyB64`). This crate has no
+provider callbacks, scheduler, crypto, entropy, stateful locks, transport,
 session derivation or delivery algorithms.
 
 DTOs are defined once here. `tinychannels-runtime` and `tinychannels` re-export
 these same Rust types. Hosts should name wire values through this crate and
 execute behavior through the compiled module. The root library compatibility
 facade is for existing implementation consumers, not a host dependency shortcut.
-
-The method constants, public `METHODS` array, and compiled module export list
-come from one registry in `names.rs`; host callbacks keep their own opposite
-direction registry. The artifact test compares the compiled manifest with the
-registry including declaration order.
 
 `python3 scripts/check-bus-purity.py --offline` audits independent default and
 all-feature normal/build dependency closures and rejects runtime source seams.
@@ -60,60 +53,6 @@ exact-version: a v21 host cannot bind a v22 module, so this shim is for source
 migration and same-version legacy provider adapters, not cross-version callback
 compatibility.
 
-Contract version 24 includes confidential `BeginMediaUpload`,
-`AppendMediaUploadChunk`, `FinishMediaUpload`, and `AbortMediaUpload` calls for
-host-to-module media. An upload is accepted only on its owning runtime object
-while the named configured provider instance is active. The caller supplies
-the complete conversation and originating-turn scope; the module replaces
-caller-selected provider/account identity with the active configured instance
-before storing through its scoped media repository. A successful finalize
-returns the existing opaque `MediaReference` DTO, which can be passed directly
-to typed provider sends.
-
-Each runtime accepts at most two active uploads. Each upload is at most 20 MiB,
-split into ordered chunks of at most 512 KiB (40 chunks maximum); serialized
-begin metadata is limited to 64 KiB. Incomplete uploads expire after one
-minute. Finalization has a one-minute persistence deadline, retains its
-reservation while storage is pending, and retries use the same deterministic
-storage key. At most 128 terminal handle results are retained for five minutes.
-Chunk retries are idempotent only when bytes match; conflicting retries fail.
-The implementation validates media kind, MIME type, body and size through
-`ScopedMediaStore` before returning a reference. This contract adds no host
-implementation-library dependency or host-side media metadata schema.
-Durable media scope binds the full logical conversation/turn to a versioned,
-private authority derived from the configured provider's authentication and
-endpoint fields, not to a runtime activation ID. Mutable policy is excluded, so
-policy edits and Slack's optional Socket Mode app token do not change the
-authority. Credential or endpoint changes conservatively create a new scope;
-transparent credential rotation requires a provider-authenticated stable
-identity. Existing records are retained, but provider-only legacy records that
-cannot be unambiguously bound fail closed and are never re-scoped to a caller.
-
-Signal and iMessage, and WhatsApp configurations with only a local session
-path, currently lack an authenticated identity source and fail closed for this
-media scope until one is supplied.
-In-flight upload handles remain activation-bound and cannot authorize against a
-replacement provider activation.
-
-Contract version 27 adds confidential `BeginWebTurn`, `ProjectWebOutput`, and
-`EndWebTurn` operations. Begin accepts a host-derived isolation key and
-addressing context but rejects caller-supplied sequence or timestamp values;
-the module returns an opaque handle, stamps ordered output events, and closes
-the handle on terminal output or explicit end. Context fields, retained bytes,
-and active turns are bounded, with admission rejected rather than evicting a
-live turn. Tenant/profile routing remains host-owned.
-
-Version 24 adds confidential `BeginMediaRead`, `ReadMediaChunk`, and
-`AbortMediaRead` operations. Begin resolves the opaque ID through the module's
-existing scoped repository using the full conversation and turn; provider and
-account are derived from the active configured instance. The repository is read
-once under a 30-second deadline. At most two 20 MiB objects are held in memory
-per runtime, and each short-lived (60-second) handle returns ordered, retryable
-chunks capped at 512 KiB. Callers must abort after EOF; stopping the provider
-invalidates its handles. The reply contains validated bytes and normalized
-metadata only, without a host cache path or storage key. Hosts can write those
-bytes through their own guarded file ports.
-
 This source contract still requires a compatible published native module before
 a downstream host can claim released composition.
 
@@ -141,6 +80,10 @@ marker. Terminal receipts are included in idempotent replays.
 The controller vocabulary includes complete Discord guild, text-channel and
 permission DTOs. Provider APIs re-export these types at their existing paths;
 REST calls and permission calculations remain implementation behavior.
+`controllers::requests` defines the typed camel-case parameters accepted by
+the public channel controller methods. `ReplyContext` carries the reply target
+and optional thread address across approval surfaces, and `MODULE_ID` is the
+stable "tinychannels" module-registry identity.
 
 The deployed OpenHuman web chat vocabulary is available from
 `tinychannels_bus::web`. It is a distinct snake-case `event`-tagged protocol,
@@ -166,8 +109,8 @@ belong to their dependent epic leaves.
 `src/fixtures/web/` contains hand-authored historical compatibility fixtures,
 not captured runtime transcripts. Their shapes were derived from the deployed
 host at OpenHuman base `ba83482245`, including constructors in
-`crates/openhuman-core/src/web_chat/presentation.rs`,
-`crates/openhuman-core/src/web_chat/ops/`,
+`crates/openhuman-core/src/channels/web_chat/presentation.rs`,
+`crates/openhuman-core/src/channels/web_chat/ops.rs`,
 `crates/openhuman-core/src/channels/proactive.rs`,
 `crates/openhuman-core/src/flows/ops/streaming.rs`,
 `crates/openhuman-core/src/cron/scheduler/`,

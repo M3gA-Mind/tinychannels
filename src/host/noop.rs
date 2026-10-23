@@ -9,7 +9,7 @@
 use super::{
     AllowlistStore, ApprovalGate, ChannelHost, ConversationStore, EventSink, LifecycleRegistry,
     MediaRepository, Memory, ReactionGate, RunLedger, SpeechSynthesizer, StorageProvider,
-    Transcriber, TurnDispatcher, VoiceMediaStore,
+    Transcriber, TurnDispatcher, VoiceCodec, VoiceMediaStore,
 };
 use std::sync::Arc;
 
@@ -40,8 +40,8 @@ pub struct ChannelHostBuilder {
     transcriber: Option<Arc<dyn Transcriber>>,
     synthesizer: Option<Arc<dyn SpeechSynthesizer>>,
     voice_media_store: Option<Arc<dyn VoiceMediaStore>>,
+    voice_codec: Option<Arc<dyn VoiceCodec>>,
     media_repository: Option<Arc<dyn MediaRepository>>,
-    voice_codec: Option<Arc<dyn super::VoiceCodec>>,
     approvals: Option<Arc<dyn ApprovalGate>>,
     reactions: Option<Arc<dyn ReactionGate>>,
     conversations: Option<Arc<dyn ConversationStore>>,
@@ -74,12 +74,13 @@ impl ChannelHostBuilder {
         self.voice_media_store = Some(value);
         self
     }
-    pub fn media_repository(mut self, value: Arc<dyn MediaRepository>) -> Self {
-        self.media_repository = Some(value);
+    pub fn voice_codec(mut self, value: Arc<dyn VoiceCodec>) -> Self {
+        self.voice_codec = Some(value);
         self
     }
-    pub fn voice_codec(mut self, value: Arc<dyn super::VoiceCodec>) -> Self {
-        self.voice_codec = Some(value);
+    /// Install durable scoped media storage for providers that receive attachments.
+    pub fn media_repository(mut self, value: Arc<dyn MediaRepository>) -> Self {
+        self.media_repository = Some(value);
         self
     }
     pub fn approvals(mut self, value: Arc<dyn ApprovalGate>) -> Self {
@@ -126,8 +127,8 @@ impl ChannelHostBuilder {
             transcriber: self.transcriber,
             synthesizer: self.synthesizer,
             voice_media_store: self.voice_media_store,
-            media_repository: self.media_repository,
             voice_codec: self.voice_codec,
+            media_repository: self.media_repository,
             approvals: self.approvals,
             reactions: self.reactions,
             conversations: self.conversations,
@@ -147,8 +148,8 @@ struct CompositeHost {
     transcriber: Option<Arc<dyn Transcriber>>,
     synthesizer: Option<Arc<dyn SpeechSynthesizer>>,
     voice_media_store: Option<Arc<dyn VoiceMediaStore>>,
+    voice_codec: Option<Arc<dyn VoiceCodec>>,
     media_repository: Option<Arc<dyn MediaRepository>>,
-    voice_codec: Option<Arc<dyn super::VoiceCodec>>,
     approvals: Option<Arc<dyn ApprovalGate>>,
     reactions: Option<Arc<dyn ReactionGate>>,
     conversations: Option<Arc<dyn ConversationStore>>,
@@ -173,11 +174,11 @@ impl ChannelHost for CompositeHost {
     fn voice_media_store(&self) -> Option<Arc<dyn VoiceMediaStore>> {
         self.voice_media_store.clone()
     }
+    fn voice_codec(&self) -> Option<Arc<dyn VoiceCodec>> {
+        self.voice_codec.clone()
+    }
     fn media_repository(&self) -> Option<Arc<dyn MediaRepository>> {
         self.media_repository.clone()
-    }
-    fn voice_codec(&self) -> Option<Arc<dyn super::VoiceCodec>> {
-        self.voice_codec.clone()
     }
     fn approvals(&self) -> Option<Arc<dyn ApprovalGate>> {
         self.approvals.clone()

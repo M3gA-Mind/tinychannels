@@ -10,12 +10,6 @@ pub use definitions::{
     AuthModeSpec, ChannelAuthMode, ChannelCapability, ChannelDefinition, FieldRequirement,
     all_channel_definitions, find_channel_definition,
 };
-pub use requests::{
-    ChannelConnectRequest, ChannelCreateThreadRequest, ChannelDescribeRequest,
-    ChannelDisconnectRequest, ChannelListThreadsRequest, ChannelSendMessageRequest,
-    ChannelSendReactionRequest, ChannelStatusRequest, ChannelTestRequest,
-    ChannelUpdateThreadRequest, DiscordCheckPermissionsRequest, DiscordListChannelsRequest,
-};
 pub use schemas::{
     ChannelControllerField, ChannelControllerFieldType, ChannelControllerSchema,
     all_channel_controller_schemas, channel_controller_schema,
@@ -30,3 +24,13 @@ pub use types::{
 };
 
 pub use discord::{BotPermissionCheck, DiscordGuild, DiscordTextChannel};
+pub use requests::{
+    ChannelConnectRequest, ChannelCreateThreadRequest, ChannelDescribeRequest,
+    ChannelDisconnectRequest, ChannelListThreadsRequest, ChannelSendMessageRequest,
+    ChannelSendReactionRequest, ChannelSetDefaultRequest, ChannelStatusRequest, ChannelTestRequest,
+    ChannelUpdateThreadRequest, DiscordCheckPermissionsRequest, DiscordListChannelsRequest,
+};
+
+#[cfg(test)]
+#[path = "requests_tests.rs"]
+mod requests_tests;

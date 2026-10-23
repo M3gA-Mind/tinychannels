@@ -126,10 +126,8 @@ async fn voice_clips_are_sent_as_audio_attachments() {
             vec![OutboundContentPart::Voice {
                 voice: OutboundVoice::Media {
                     media: media(MediaKind::Audio),
-                    audio_base64: None,
                     codec: None,
                     duration_ms: None,
-                    waveform: None,
                 },
             }],
         ),
@@ -256,10 +254,12 @@ async fn operations_applescript_cannot_do_are_explicitly_unsupported() {
         ..Default::default()
     };
     assert!(
-        ChannelReaction::send_reaction(channel, &chan, &conv, "G1", &reaction, false)
-            .await
-            .unwrap_err()
-            .unsupported
+        crate::channel::LegacyChannelReaction::send_reaction(
+            channel, &chan, &conv, "G1", &reaction, false
+        )
+        .await
+        .unwrap_err()
+        .unsupported
     );
     let receipt = MessageReceipt {
         conversation: Some(conv),

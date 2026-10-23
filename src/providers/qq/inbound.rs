@@ -366,7 +366,7 @@ impl QQChannel {
                                     stopped = true;
                                     break 'gateway;
                                 }
-                                result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
+                                result = sink.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
                             };
                             published.map_err(|error| anyhow::anyhow!(error.message))?;
                             self.mark_duplicate(msg_id).await;
@@ -401,7 +401,7 @@ impl QQChannel {
                                     stopped = true;
                                     break 'gateway;
                                 }
-                                result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
+                                result = sink.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
                             };
                             published.map_err(|error| anyhow::anyhow!(error.message))?;
                             self.mark_duplicate(msg_id).await;

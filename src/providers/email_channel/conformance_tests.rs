@@ -1,7 +1,8 @@
 //! The shared adapter conformance matrix against a capturing SMTP relay.
 
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction as ReactionPort, ChannelTyping,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelTyping,
+    LegacyChannelReaction as ReactionPort,
 };
 use crate::providers::email_channel::fixtures::*;
 use serde_json::{Value, json};
@@ -114,7 +115,7 @@ impl EmailFixture {
         &self,
         intent: ChannelOutboundIntent,
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
-        ChannelAdapter::send(&self.rig.channel, intent)
+        ChannelAdapter::send_outcome(&self.rig.channel, intent)
             .await
             .map(Some)
     }
@@ -292,10 +293,8 @@ impl AdapterFixture for EmailFixture {
                 self.send(intent(OutboundPayload::Voice {
                     voice: OutboundVoice::Media {
                         media: media_ref(MediaKind::Audio),
-                        audio_base64: None,
                         codec: Some("m4a_aac".into()),
                         duration_ms: None,
-                        waveform: None,
                     },
                 }))
                 .await

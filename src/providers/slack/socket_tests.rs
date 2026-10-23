@@ -274,7 +274,15 @@ async fn typed_polling_retries_transport_errors_before_advancing_the_cursor() {
 
     #[async_trait::async_trait]
     impl ChannelInboundSink for Sink {
-        async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+        async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
             self.0.send(ingress).map_err(|_| ChannelSendError {
                 kind: tinychannels_bus::channel::SendErrorKind::Transient,
                 message: "test sink closed".into(),
@@ -357,7 +365,15 @@ async fn typed_polling_retries_bad_json_and_rejected_messages_without_advancing_
 
     #[async_trait::async_trait]
     impl ChannelInboundSink for RejectFirstSink {
-        async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+        async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
             if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
                 return Err(ChannelSendError {
                     kind: tinychannels_bus::channel::SendErrorKind::Transient,
@@ -678,7 +694,15 @@ async fn typed_delivery_queue_finishes_cleanly_after_transport_closes() {
 
     #[async_trait::async_trait]
     impl ChannelInboundSink for Sink {
-        async fn push(&self, _ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+        async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(&self, _ingress: ChannelIngress) -> Result<(), ChannelSendError> {
             Ok(())
         }
     }
@@ -698,7 +722,15 @@ async fn typed_socket_listener_rejects_duplicates_and_restarts_after_stop() {
 
     #[async_trait::async_trait]
     impl ChannelInboundSink for Sink {
-        async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+        async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
             self.0.send(ingress).map_err(|_| ChannelSendError {
                 kind: tinychannels_bus::channel::SendErrorKind::Transient,
                 message: "test sink closed".into(),
@@ -809,7 +841,15 @@ async fn typed_socket_ack_waits_for_sink_acceptance_without_blocking_ping() {
 
     #[async_trait::async_trait]
     impl ChannelInboundSink for BlockingFirstSink {
-        async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+        async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
             if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
                 self.entered.notify_one();
                 std::future::pending::<()>().await;
@@ -949,7 +989,15 @@ async fn typed_socket_retries_a_rejected_record_before_acknowledging_it() {
 
     #[async_trait::async_trait]
     impl ChannelInboundSink for RejectThenBlockSink {
-        async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+        async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
             match self.calls.fetch_add(1, Ordering::SeqCst) {
                 0 => Err(ChannelSendError {
                     kind: tinychannels_bus::channel::SendErrorKind::Transient,
@@ -1071,7 +1119,15 @@ async fn adapter_start_delivers_socket_mode_messages_to_the_typed_sink() {
 
     #[async_trait::async_trait]
     impl ChannelInboundSink for Sink {
-        async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+        async fn push(
+            &self,
+            envelope: tinychannels_bus::ChannelInboundEnvelope,
+        ) -> Result<(), ChannelSendError> {
+            self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                .await
+        }
+
+        async fn push_ingress(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
             self.0.send(ingress).map_err(|_| ChannelSendError {
                 kind: tinychannels_bus::channel::SendErrorKind::Transient,
                 message: "test sink closed".into(),

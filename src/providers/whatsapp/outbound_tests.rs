@@ -386,10 +386,8 @@ async fn attachments_are_uploaded_then_sent_by_media_id() {
         OutboundContentPart::Voice {
             voice: tinychannels_bus::OutboundVoice::Media {
                 media: reference("v1"),
-                audio_base64: None,
                 codec: Some("ogg_opus".into()),
                 duration_ms: Some(1000),
-                waveform: Some(vec![0.5; 8]),
             },
         },
         OutboundContentPart::Content {

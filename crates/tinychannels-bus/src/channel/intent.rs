@@ -148,16 +148,8 @@ impl<'de> Deserialize<'de> for OutboundPayload {
 pub enum OutboundVoice {
     Media {
         media: MediaReference,
-        /// Optional bounded inline payload for one native upload. The durable
-        /// reference remains the canonical media identity.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        audio_base64: Option<String>,
         codec: Option<String>,
         duration_ms: Option<u64>,
-        /// Normalised 0.0-1.0 loudness preview for providers that draw one
-        /// (WhatsApp push-to-talk). Absent when the codec path produced none.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        waveform: Option<Vec<f32>>,
     },
     Synthesize {
         text: String,
@@ -195,7 +187,7 @@ pub struct ChannelOutboundMessage {
     pub conversation_ref: Option<ConversationRef>,
     pub reply_to_id: Option<String>,
     pub thread_id: Option<String>,
-    /// Originating scoped host turn; distinct from the per-send idempotency key.
+    /// Originating agent turn used to scope opaque host media references.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
     pub idempotency_key: String,
@@ -311,7 +303,7 @@ impl ChannelOutboundMessage {
     }
 
     /// Build the documented one-release text-only v21 projection.
-    pub fn legacy_text(&self) -> crate::Result<String> {
+    pub fn legacy_text(&self) -> anyhow::Result<String> {
         let mut text = Vec::new();
         for part in &self.parts {
             match part {
@@ -322,11 +314,7 @@ impl ChannelOutboundMessage {
                             markdown_dialect: None,
                         },
                 } => text.push(value.as_str()),
-                _ => {
-                    return Err(crate::TinyChannelsError::new(
-                        "provider does not support typed channel content",
-                    ));
-                }
+                _ => anyhow::bail!("provider does not support typed channel content"),
             }
         }
         Ok(text.join("\n"))
@@ -362,7 +350,7 @@ impl ChannelOutboundMessage {
     }
 
     /// Convert to the explicit one-release legacy text-only send shape.
-    pub fn to_legacy_message(&self) -> crate::Result<crate::traits::SendMessage> {
+    pub fn to_legacy_message(&self) -> anyhow::Result<crate::traits::SendMessage> {
         Ok(crate::traits::SendMessage {
             content: self.legacy_text()?,
             recipient: self
@@ -402,7 +390,7 @@ pub struct ChannelOutboundIntent {
     pub conversation_ref: Option<ConversationRef>,
     pub reply_to_id: Option<String>,
     pub thread_id: Option<String>,
-    /// Originating turn for scoped host operations; independent of delivery key.
+    /// Originating agent turn used to scope opaque host media references.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
     pub durability: DeliveryDurability,

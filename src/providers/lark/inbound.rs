@@ -315,7 +315,7 @@ impl LarkChannel {
                         continue;
                     };
                     if sink
-                        .push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                    .push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
                         .await
                         .is_err()
                     {
@@ -734,7 +734,7 @@ impl LarkChannel {
                                 .await
                             {
                                 match sink
-                                    .push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                                    .push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
                                     .await
                                 {
                                     Ok(()) => {

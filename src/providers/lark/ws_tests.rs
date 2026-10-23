@@ -163,7 +163,15 @@ struct RecordingInboundSink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
 
 #[async_trait::async_trait]
 impl ChannelInboundSink for RecordingInboundSink {
-    async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+    async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
         self.0.send(ingress).map_err(|_| ChannelSendError {
             kind: SendErrorKind::Transient,
             message: "test sink closed".into(),
@@ -180,7 +188,15 @@ struct RejectFirstInboundSink {
 
 #[async_trait::async_trait]
 impl ChannelInboundSink for RejectFirstInboundSink {
-    async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+    async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
         if self
             .attempts
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -206,7 +222,15 @@ struct BlockingInboundSink(tokio::sync::Notify);
 
 #[async_trait::async_trait]
 impl ChannelInboundSink for BlockingInboundSink {
-    async fn push(&self, _ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+    async fn push(
+        &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(&self, _ingress: ChannelIngress) -> Result<(), ChannelSendError> {
         self.0.notify_one();
         std::future::pending().await
     }

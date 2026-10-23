@@ -501,10 +501,8 @@ async fn lark_host_voice_store_delivers_voice_without_file_repository() {
                         content_type: Some("audio/mp4".into()),
                         ..Default::default()
                     },
-                    audio_base64: None,
                     codec: Some("m4a_aac".into()),
                     duration_ms: Some(500),
-                    waveform: None,
                 },
             }],
         },
@@ -530,7 +528,7 @@ async fn lark_public_reaction_extension_reports_unsupported_without_network_io()
     })
     .await;
     let channel = channel_with(&server, true);
-    let error = crate::channel::ChannelReaction::send_reaction(
+    let error = crate::channel::LegacyChannelReaction::send_reaction(
         &channel,
         &tinychannels_bus::channel::ChannelRef {
             id: "lark".into(),
@@ -1134,10 +1132,8 @@ async fn host_aware_factory_sends_typed_image_through_lark_image_upload() {
                         content_type: Some("audio/mp4".into()),
                         ..Default::default()
                     },
-                    audio_base64: None,
                     codec: Some("m4a_aac".into()),
                     duration_ms: Some(500),
-                    waveform: None,
                 },
             }],
         },

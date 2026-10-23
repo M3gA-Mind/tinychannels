@@ -807,6 +807,14 @@ struct TypedRecordingSink {
 impl crate::channel::ChannelInboundSink for TypedRecordingSink {
     async fn push(
         &self,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.push_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+    }
+
+    async fn push_ingress(
+        &self,
         ingress: tinychannels_bus::ChannelIngress,
     ) -> Result<(), crate::channel::ChannelSendError> {
         self.ingress.lock().await.push(ingress);
@@ -1011,21 +1019,22 @@ fn a_sender_user_already_in_e164_is_not_double_prefixed() {
 }
 
 #[cfg(feature = "whatsapp-web")]
-struct FixedStorage(Result<Arc<dyn tinystoragedrivers_core::DocumentStore>, &'static str>);
+struct FixedStorage(Result<Arc<dyn tinystoragedrivers_api::DocumentStore>, &'static str>);
 
 #[cfg(feature = "whatsapp-web")]
 #[async_trait]
 impl crate::host::StorageProvider for FixedStorage {
-    async fn documents(&self) -> anyhow::Result<Arc<dyn tinystoragedrivers_core::DocumentStore>> {
+    async fn documents(&self) -> anyhow::Result<Arc<dyn tinystoragedrivers_api::DocumentStore>> {
         self.0.clone().map_err(|message| anyhow::anyhow!(message))
     }
 }
 
 #[cfg(feature = "whatsapp-web")]
-fn memory_docs() -> Arc<dyn tinystoragedrivers_core::DocumentStore> {
-    use tinystoragedrivers_core::StorageBackend;
-    let storage = tinystoragedrivers_core::MemoryStorage::new()
-        .for_scope(&tinystoragedrivers_core::Scope::local())
+fn memory_docs() -> Arc<dyn tinystoragedrivers_api::DocumentStore> {
+    use tinystoragedrivers_api::StorageBackend;
+    let backend = tinystoragedrivers_testkit::MemoryBackend::new();
+    let storage = backend
+        .for_scope(&tinystoragedrivers_types::Scope::new("tenant:whatsapp-tests").unwrap())
         .unwrap();
     Arc::clone(storage.documents())
 }
@@ -1194,7 +1203,7 @@ mod v2 {
             value: "👍".into(),
             custom_emoji_id: None,
         };
-        crate::channel::ChannelReaction::send_reaction(
+        crate::channel::LegacyChannelReaction::send_reaction(
             &channel,
             &ChannelRef {
                 id: "whatsapp".into(),
@@ -1235,7 +1244,7 @@ mod v2 {
             value: "👍".into(),
             custom_emoji_id: None,
         };
-        crate::channel::ChannelReaction::send_reaction(
+        crate::channel::LegacyChannelReaction::send_reaction(
             &channel,
             &whatsapp(),
             &conversation(),
@@ -1249,7 +1258,7 @@ mod v2 {
             id: "telegram".into(),
             account_id: None,
         };
-        let refused = crate::channel::ChannelReaction::send_reaction(
+        let refused = crate::channel::LegacyChannelReaction::send_reaction(
             &channel,
             &wrong,
             &conversation(),

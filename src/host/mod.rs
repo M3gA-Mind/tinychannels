@@ -3,7 +3,7 @@
 //!
 //! ## Why
 //!
-//! [`crate::channel::ChannelAdapter`] covers the *transport* side of a provider —
+//! [`crate::traits::Channel`] covers the *transport* side of a provider —
 //! receive inbound messages, send outbound ones. That is all a **lean**
 //! provider (irc, signal, slack) needs. **Rich** providers (web, telegram,
 //! presentation, whatsapp_web) additionally need to reach back into the host
@@ -78,6 +78,7 @@ pub struct HostCapabilities {
     pub stt: bool,
     pub tts: bool,
     pub voice_media_store: bool,
+    pub voice_codec: bool,
     pub media_repository: bool,
     pub approvals: bool,
     pub reaction_gate: bool,
@@ -97,6 +98,7 @@ impl HostCapabilities {
         stt: false,
         tts: false,
         voice_media_store: false,
+        voice_codec: false,
         media_repository: false,
         approvals: false,
         reaction_gate: false,
@@ -116,6 +118,7 @@ impl HostCapabilities {
             stt: host.transcriber().is_some(),
             tts: host.synthesizer().is_some(),
             voice_media_store: host.voice_media_store().is_some(),
+            voice_codec: host.voice_codec().is_some(),
             media_repository: host.media_repository().is_some(),
             approvals: host.approvals().is_some(),
             reaction_gate: host.reactions().is_some(),
@@ -155,16 +158,14 @@ pub trait ChannelHost: Send + Sync {
     fn synthesizer(&self) -> Option<Arc<dyn SpeechSynthesizer>> {
         None
     }
-    /// Durable voice media storage for normalized inbound and outbound parts.
     fn voice_media_store(&self) -> Option<Arc<dyn VoiceMediaStore>> {
         None
     }
-    /// Durable shared media storage for typed channel attachments.
-    fn media_repository(&self) -> Option<Arc<dyn MediaRepository>> {
+    fn voice_codec(&self) -> Option<Arc<dyn VoiceCodec>> {
         None
     }
-    /// Codec operations implemented by the loaded TinyVoice module.
-    fn voice_codec(&self) -> Option<Arc<dyn VoiceCodec>> {
+    /// Durable media storage with opaque references scoped to a channel turn.
+    fn media_repository(&self) -> Option<Arc<dyn MediaRepository>> {
         None
     }
     /// Human-in-the-loop approval gate.
@@ -212,6 +213,7 @@ pub trait ChannelHost: Send + Sync {
             stt: self.transcriber().is_some(),
             tts: self.synthesizer().is_some(),
             voice_media_store: self.voice_media_store().is_some(),
+            voice_codec: self.voice_codec().is_some(),
             media_repository: self.media_repository().is_some(),
             approvals: self.approvals().is_some(),
             reaction_gate: self.reactions().is_some(),

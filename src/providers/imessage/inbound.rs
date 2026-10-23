@@ -506,7 +506,7 @@ impl IMessageChannel {
                 }
                 false
             }
-            result = sink.push(ingress) => result.is_ok(),
+            result = sink.push_ingress(ingress) => result.is_ok(),
         };
         if accepted {
             reservation.commit();

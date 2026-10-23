@@ -3,7 +3,7 @@ use crate::host::MediaRepository as _;
 use crate::providers::telegram::fixtures::*;
 use base64::Engine;
 use std::sync::Arc;
-use tinystoragedrivers_core::StorageBackend as _;
+use tinystoragedrivers_api::StorageBackend as _;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -128,9 +128,9 @@ struct ScopedMediaRepository {
 
 impl ScopedMediaRepository {
     fn new() -> Self {
-        let storage = tinystoragedrivers_core::MemoryStorage::new()
+        let storage = tinystoragedrivers_testkit::MemoryBackend::new()
             .for_scope(
-                &tinystoragedrivers_core::Scope::new("module:tinychannels@telegram").unwrap(),
+                &tinystoragedrivers_types::Scope::new("module:tinychannels@telegram").unwrap(),
             )
             .unwrap();
         Self {
