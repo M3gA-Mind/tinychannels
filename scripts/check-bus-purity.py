@@ -19,7 +19,7 @@ FORBIDDEN = ('async fn ', 'async_trait', 'tokio::', 'std::sync', 'std::thread',
              'std::fs', 'std::env', 'std::time', 'parking_lot::', 'sha2::', 'hmac::',
              'rand::', 'uuid::', 'fn build_session_key', 'fn classify_send_error',
              'fn authenticated_inbound_event', 'fn segment_for_delivery')
-STORAGE_PORT_PACKAGES = {'tinystoragedrivers-core'}
+STORAGE_PORT_PACKAGES = {'tinystoragedrivers-core', 'tinystoragedrivers-types'}
 
 
 def dependency_closure(nodes, roots):

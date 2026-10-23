@@ -26,22 +26,20 @@ See [Channel Contracts](channel-contracts.md).
 - Provider suites compare declared capabilities with actual mock-wire
   observations and require undeclared behavior to fail without platform I/O.
 
-## Host Capabilities
+## Provider host services
 
-- `ChannelHost` - optional capability aggregator.
-- `ProviderContext` - standard provider construction context.
-- `HostCapabilities` - cheap capability descriptor.
-- `TurnDispatcher` - run a channel turn through the host harness.
-- `Transcriber` and `SpeechSynthesizer` - voice input/output.
-- `ApprovalGate` and `ReactionGate` - human approval and response gating.
-- `ConversationStore` - durable per-session history.
-- `EventSink` - host domain events.
-- `LifecycleRegistry` - provider shutdown hooks.
-- `RunLedger` - run and telemetry records.
+- `ChannelHost` and `ProviderContext` - provider construction context and
+  optional service ports.
+- `Transcriber`, `SpeechSynthesizer`, and media repositories - voice and
+  scoped media services supplied by the host.
+- `EventSink`, `LifecycleRegistry`, and allowlist services - host event,
+  shutdown, and access-control integration.
 
 The module executes provider operations through TinyBus. OpenHuman supplies
-scoped host callbacks and retains authorization, account policy, and durable
-conversation sessions.
+the scoped services the configured providers need and retains authorization,
+account policy, agent execution, and durable conversation sessions. These
+service ports do not transfer provider transport or delivery policy to the
+host.
 
 ## Relay Contracts
 
@@ -71,6 +69,10 @@ repository's relay module documentation.
 - `recover_pending_deliveries` - drain pending entries in enqueue order.
 - Unknown-send reconciliation for crash or transport ambiguity after platform
   send starts.
+
+TinyChannels owns this queue state machine. Its module connects the queue to a
+`DocumentStore` through the scoped storage capability; a missing store is
+reported as unsupported, with no in-memory substitute.
 
 See [Delivery](channel-delivery.md).
 

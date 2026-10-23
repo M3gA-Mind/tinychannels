@@ -2,6 +2,60 @@ use super::*;
 use tinychannels_bus::ChannelsConfig;
 use tinychannels_bus::config::WhatsAppConfig;
 
+#[tokio::test]
+async fn service_web_turn_methods_open_project_and_release_one_scoped_handle() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let channels = Channels::new(HostChannels::new(connection), None);
+    let handle = channels
+        .begin_web_turn(tinychannels_bus::BeginWebTurn {
+            scope_key: "user:1/thread:2".into(),
+            context: tinychannels_bus::WebEventContext {
+                client_id: "client".into(),
+                thread_id: "thread-2".into(),
+                request_id: "request-3".into(),
+                ..Default::default()
+            },
+        })
+        .await
+        .unwrap();
+
+    let output = channels
+        .project_web_output(tinychannels_bus::ProjectWebOutput {
+            handle: handle.handle.clone(),
+            event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                text: "hello".into(),
+                iteration: Some(1),
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(output.events.len(), 1);
+    assert_eq!(output.events[0].context().thread_id, "thread-2");
+
+    channels
+        .end_web_turn(tinychannels_bus::EndWebTurn {
+            handle: handle.handle.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        channels
+            .project_web_output(tinychannels_bus::ProjectWebOutput {
+                handle: handle.handle,
+                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                    text: "after end".into(),
+                    iteration: None,
+                },
+            })
+            .await
+            .is_err()
+    );
+}
+
 #[cfg(feature = "test-support")]
 #[tokio::test]
 async fn test_remote_channel_fixture_registers_and_cleans_up_without_network() {
@@ -626,7 +680,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                         conversation_id: "room".into(),
                         channel_ref: Some(tinychannels_bus::channel::ChannelRef {
                             id: "fixture".into(),
-                            account_id: Some("account-a".into()),
+                            account_id: Some("fixture".into()),
                         }),
                         conversation_ref: Some(tinychannels_bus::channel::ConversationRef {
                             kind: tinychannels_bus::channel::ConversationKind::Thread,
@@ -654,7 +708,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                 .channel_ref
                 .as_ref()
                 .and_then(|channel| channel.account_id.as_deref()),
-            Some("account-a")
+            Some("fixture")
         );
         let address = typed.conversation_ref.as_ref().unwrap();
         assert_eq!(address.scope_id.as_deref(), Some("workspace-a"));
@@ -1907,10 +1961,25 @@ async fn provider_failure_stays_pending_then_recovery_fails_closed_once() {
         channels_with_store(Arc::new(FailingChannel(calls.clone()))).await;
     let intent = required_intent("provider-fail", "body");
     assert!(
+        !channels
+            .running
+            .lock()
+            .await
+            .get("fixture")
+            .unwrap()
+            .is_finished(),
+        "provider should be available before required delivery"
+    );
+    assert!(
         channels
             .send_channel_intent("fixture".into(), intent.clone())
             .await
             .is_err()
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "initial delivery reaches provider"
     );
     {
         let scopes = callbacks.storage.snapshot().await;
@@ -1922,7 +1991,11 @@ async fn provider_failure_stays_pending_then_recovery_fails_closed_once() {
     recover_delivery_channel(&channels.host, &channels.running, "fixture")
         .await
         .unwrap();
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "ambiguous delivery is not retried blindly"
+    );
     let scopes = callbacks.storage.snapshot().await;
     let scope = scopes.get("scope-a").unwrap();
     assert!(scope.pending.is_empty());
@@ -3345,25 +3418,31 @@ async fn service_send_failures_preserve_named_error_and_durable_queue_busy_refus
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (service, _callbacks, _server) =
         channels_with_store(Arc::new(FailingChannel(calls.clone()))).await;
-    for error in [
-        service
-            .send_message("fixture".into(), SendMessage::new("hello", "room"))
-            .await
-            .expect_err("provider fails"),
-        service
-            .send_channel_intent(
-                "fixture".into(),
-                ChannelOutboundIntent {
-                    durability: tinychannels::DeliveryDurability::BestEffort,
-                    ..required_intent("best-effort", "hello")
-                },
-            )
-            .await
-            .map(|_| ())
-            .expect_err("provider fails"),
-    ] {
-        assert!(matches!(error, BusError::MethodFailed { name, .. } if name == SEND_FAILED_ERROR));
-    }
+    let legacy_error = service
+        .send_message("fixture".into(), SendMessage::new("hello", "room"))
+        .await
+        .expect_err("legacy provider send fails");
+    assert!(matches!(
+        legacy_error,
+        BusError::MethodFailed { name, .. } if name == SEND_FAILED_ERROR
+    ));
+
+    let typed_result = service
+        .send_channel_intent(
+            "fixture".into(),
+            ChannelOutboundIntent {
+                durability: tinychannels::DeliveryDurability::BestEffort,
+                ..required_intent("best-effort", "hello")
+            },
+        )
+        .await
+        .expect("typed send failure is returned in its outcome");
+    let typed_error = typed_result
+        .error
+        .expect("typed provider error is preserved");
+    assert_eq!(typed_error.message, "fixture provider failure");
+    assert!(!typed_error.retryable);
+    assert!(typed_error.sent_before_error);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     let admission = service.delivery_admission.lock().await;
     let error = service

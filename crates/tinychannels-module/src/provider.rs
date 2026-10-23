@@ -104,6 +104,53 @@ async fn dispatch_interaction(
     }
 }
 
+async fn dispatch_draft_upsert(
+    drafts: &dyn tinychannels::channel::ChannelStreamingDraft,
+    configured_instance: &str,
+    previous: Option<tinychannels_bus::channel::MessageReceipt>,
+    intent: tinychannels_bus::ChannelOutboundIntent,
+) -> Result<tinychannels_bus::ChannelInteractionResult> {
+    let channel = intent
+        .channel_ref
+        .clone()
+        .unwrap_or_else(|| tinychannels_bus::ChannelRef {
+            id: tinychannels_bus::provider_id(configured_instance).to_owned(),
+            account_id: Some(configured_instance.to_owned()),
+        });
+    let conversation =
+        intent
+            .conversation_ref
+            .clone()
+            .unwrap_or_else(|| tinychannels_bus::ConversationRef {
+                id: intent.conversation_id.clone(),
+                thread_id: intent.thread_id.clone(),
+                ..Default::default()
+            });
+    let thread_id = intent
+        .thread_id
+        .clone()
+        .or_else(|| conversation.thread_id.clone());
+    let idempotency_key = intent.idempotency_key.clone();
+    let mut receipt = drafts
+        .upsert_draft(previous.as_ref(), intent)
+        .await
+        .map_err(|error| Error::failed(error.message))?;
+    receipt.idempotency_key = Some(idempotency_key);
+    receipt.channel = Some(channel);
+    if receipt.conversation.is_none() {
+        receipt.conversation = Some(conversation);
+    }
+    if receipt.thread_id.is_none() {
+        receipt.thread_id = thread_id;
+    }
+    Ok(tinychannels_bus::ChannelInteractionResult::Sent(Box::new(
+        tinychannels_bus::channel::ChannelSendOutcome {
+            receipt,
+            error: None,
+        },
+    )))
+}
+
 async fn stop_typing_refresh(handle: &str, typing: &mut TypingRefreshes) {
     if let Some(refresh) = typing.remove(handle) {
         refresh.cancel.send_replace(true);
@@ -266,6 +313,9 @@ impl tinychannels::host::MediaRepository for ModuleMediaRepository {
         opaque_id: String,
         max_bytes: u64,
     ) -> anyhow::Result<tinychannels::host::StoredMedia> {
+        if scope.configured_instance != self.1 {
+            anyhow::bail!("media scope does not match the configured provider instance");
+        }
         self.bind_scope(&mut scope)?;
         self.scoped_store()
             .await?
@@ -637,7 +687,15 @@ impl ChannelAdapter for LegacyChannelAdapter {
         self.0
             .send_typed_with_receipt(message)
             .await
-            .map_err(|error| ChannelSendError::new(error.to_string()))
+            .map_err(|error| {
+                let mut error = ChannelSendError::new(error.to_string());
+                // The v21 error has no delivery-state field. Once its send
+                // method returns an error, the compatibility bridge cannot
+                // prove that the provider did not accept the message, so
+                // durable delivery must reconcile instead of replaying it.
+                error.sent_before_error = true;
+                error
+            })
     }
 
     fn validate_typed_send(
@@ -780,6 +838,8 @@ impl Running {
         let finished = Arc::new(AtomicBool::new(false));
         let task_finished = finished.clone();
         let adapter = channel.adapter().clone();
+        let send_drafts = channel.drafts().cloned();
+        let send_reactions = channel.reactions().cloned();
         let listen_adapter = adapter.clone();
         let send_adapter = adapter.clone();
         let stop_adapter = adapter.clone();
@@ -858,49 +918,154 @@ impl Running {
                                 })
                                 .map_err(|error| Error::failed(error.message))
                         }
-                        ProviderOperation::SendTyped(message) => send_adapter
-                            .send_typed(&message)
-                            .await
-                            .map(|mut outcome| {
-                                outcome.receipt.idempotency_key =
-                                    Some(message.idempotency_key.clone());
-                                outcome.receipt.channel =
-                                    Some(message.channel_ref.clone().unwrap_or_else(|| {
-                                        tinychannels_bus::ChannelRef {
-                                            id: tinychannels_bus::provider_id(&configured_instance)
-                                                .to_owned(),
-                                            account_id: Some(configured_instance.clone()),
+                        ProviderOperation::SendTyped(message) => {
+                            let expected_channel_id =
+                                tinychannels_bus::provider_id(&configured_instance);
+                            if message.channel_ref.as_ref().is_some_and(|channel| {
+                                channel.id != expected_channel_id
+                                    || channel
+                                        .account_id
+                                        .as_deref()
+                                        .is_some_and(|account| account != configured_instance)
+                            }) {
+                                let _ = command.reply.send(Err(Error::failed(
+                                    "typed send channel does not match configured provider",
+                                )));
+                                continue;
+                            }
+                            let mut outcome = match send_adapter.send_typed(&message).await {
+                                Ok(outcome) => outcome,
+                                Err(error) => tinychannels_bus::channel::ChannelSendOutcome {
+                                    error: Some(error),
+                                    ..Default::default()
+                                },
+                            };
+                            outcome.receipt.idempotency_key = Some(message.idempotency_key.clone());
+                            outcome.receipt.channel =
+                                Some(message.channel_ref.clone().unwrap_or_else(|| {
+                                    tinychannels_bus::ChannelRef {
+                                        id: tinychannels_bus::provider_id(&configured_instance)
+                                            .to_owned(),
+                                        account_id: Some(configured_instance.clone()),
+                                    }
+                                }));
+                            if outcome.receipt.conversation.is_none() {
+                                outcome.receipt.conversation =
+                                    Some(message.conversation_ref.clone().unwrap_or_else(|| {
+                                        tinychannels_bus::ConversationRef {
+                                            id: message.conversation_id.clone(),
+                                            ..Default::default()
                                         }
                                     }));
-                                if outcome.receipt.conversation.is_none() {
-                                    outcome.receipt.conversation =
-                                        Some(message.conversation_ref.clone().unwrap_or_else(
-                                            || tinychannels_bus::ConversationRef {
-                                                id: message.conversation_id.clone(),
-                                                ..Default::default()
-                                            },
-                                        ));
-                                }
-                                if outcome.receipt.thread_id.is_none() {
-                                    outcome.receipt.thread_id =
-                                        message.thread_id.clone().or_else(|| {
-                                            message
-                                                .conversation_ref
-                                                .as_ref()
-                                                .and_then(|r| r.thread_id.clone())
-                                        });
-                                }
-                                tinychannels_bus::ChannelInteractionResult::Sent(Box::new(outcome))
-                            })
-                            .map_err(|error| Error::failed(error.message)),
-                        ProviderOperation::Interaction(interaction) => match send_legacy.as_ref() {
-                            Some(legacy) => {
-                                dispatch_interaction(legacy.clone(), *interaction, &mut typing)
-                                    .await
                             }
-                            None => Err(Error::failed(
-                                "provider interaction is not supported by this adapter",
-                            )),
+                            if outcome.receipt.thread_id.is_none() {
+                                outcome.receipt.thread_id =
+                                    message.thread_id.clone().or_else(|| {
+                                        message
+                                            .conversation_ref
+                                            .as_ref()
+                                            .and_then(|r| r.thread_id.clone())
+                                    });
+                            }
+                            Ok(tinychannels_bus::ChannelInteractionResult::Sent(Box::new(
+                                outcome,
+                            )))
+                        }
+                        ProviderOperation::Interaction(interaction) => match *interaction {
+                            tinychannels_bus::ChannelInteraction::UpsertDraft {
+                                previous,
+                                intent,
+                            } => match send_drafts.as_ref() {
+                                Some(drafts) => {
+                                    dispatch_draft_upsert(
+                                        drafts.as_ref(),
+                                        &configured_instance,
+                                        previous,
+                                        intent,
+                                    )
+                                    .await
+                                }
+                                None => Err(Error::failed(
+                                    "provider draft upsert is not supported by this adapter",
+                                )),
+                            },
+                            tinychannels_bus::ChannelInteraction::SendReaction {
+                                channel,
+                                conversation,
+                                provider_message_id,
+                                reaction,
+                                remove,
+                            } => match send_reactions.as_ref() {
+                                Some(reactions) => reactions
+                                    .send_reaction(
+                                        &channel,
+                                        &conversation,
+                                        &provider_message_id,
+                                        &reaction,
+                                        remove,
+                                    )
+                                    .await
+                                    .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
+                                    .map_err(|error| Error::failed(error.message)),
+                                None => Err(Error::failed(
+                                    "provider reaction is not supported by this adapter",
+                                )),
+                            },
+                            tinychannels_bus::ChannelInteraction::Describe => {
+                                match send_legacy.as_ref() {
+                                    Some(legacy) => {
+                                        dispatch_interaction(
+                                            legacy.clone(),
+                                            tinychannels_bus::ChannelInteraction::Describe,
+                                            &mut typing,
+                                        )
+                                        .await
+                                    }
+                                    None => Ok(crate::interaction::describe_adapter(
+                                        send_adapter.as_ref(),
+                                        true,
+                                    )),
+                                }
+                            }
+                            tinychannels_bus::ChannelInteraction::DescribeV2 => {
+                                match send_legacy.as_ref() {
+                                    Some(legacy) => {
+                                        dispatch_interaction(
+                                            legacy.clone(),
+                                            tinychannels_bus::ChannelInteraction::DescribeV2,
+                                            &mut typing,
+                                        )
+                                        .await
+                                    }
+                                    None => Ok(crate::interaction::describe_adapter(
+                                        send_adapter.as_ref(),
+                                        false,
+                                    )),
+                                }
+                            }
+                            interaction => {
+                                match crate::interaction::dispatch_native_webhook(
+                                    send_adapter.as_ref(),
+                                    interaction.clone(),
+                                )
+                                .await
+                                {
+                                    Some(result) => result,
+                                    None => match send_legacy.as_ref() {
+                                        Some(legacy) => {
+                                            dispatch_interaction(
+                                                legacy.clone(),
+                                                interaction,
+                                                &mut typing,
+                                            )
+                                            .await
+                                        }
+                                        None => Err(Error::failed(
+                                            "provider interaction is not supported by this adapter",
+                                        )),
+                                    },
+                                }
+                            }
                         },
                     };
                     let _ = command.reply.send(result);

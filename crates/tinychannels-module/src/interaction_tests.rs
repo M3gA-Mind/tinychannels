@@ -2,6 +2,107 @@ use super::*;
 use std::sync::Mutex;
 use tinychannels::SendMessage;
 
+struct LegacyInteractionChannel;
+
+#[async_trait::async_trait]
+impl tinychannels::channel::Channel for LegacyInteractionChannel {
+    fn name(&self) -> &str {
+        "legacy-fixture"
+    }
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn legacy_interaction_boundary_handles_only_v21_operations() {
+    let channel = LegacyInteractionChannel;
+    for interaction in [
+        ChannelInteraction::StartTyping {
+            recipient: "room".into(),
+        },
+        ChannelInteraction::StopTyping {
+            recipient: "room".into(),
+        },
+    ] {
+        assert!(matches!(
+            dispatch(&channel, interaction).await.unwrap(),
+            ChannelInteractionResult::Completed
+        ));
+    }
+    assert!(matches!(
+        dispatch(
+            &channel,
+            ChannelInteraction::SendDraft {
+                message: SendMessage::new("partial", "room"),
+            },
+        )
+        .await
+        .unwrap(),
+        ChannelInteractionResult::Draft(None)
+    ));
+    assert!(matches!(
+        dispatch(&channel, ChannelInteraction::Describe)
+            .await
+            .unwrap(),
+        ChannelInteractionResult::Info(_)
+    ));
+    assert!(matches!(
+        dispatch(&channel, ChannelInteraction::DescribeV2)
+            .await
+            .unwrap(),
+        ChannelInteractionResult::InfoV2(_)
+    ));
+    assert!(
+        dispatch(
+            &channel,
+            ChannelInteraction::UpdateDraft {
+                recipient: "room".into(),
+                message_id: "draft-1".into(),
+                text: "updated".into(),
+            },
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[test]
+#[allow(deprecated)]
+fn compatibility_text_and_telegram_address_preserve_legacy_conventions() {
+    let email = SendMessage::with_subject("body", "recipient", "  first\nsecond\rline  ");
+    assert_eq!(
+        compatibility_text("email:account", &email),
+        "Subject: first second line\nbody"
+    );
+    assert_eq!(compatibility_text("slack", &email), "body");
+
+    let message = SendMessage::new("body", "-100:topic-9").in_thread(Some("reply-4".into()));
+    let mut intent = tinychannels::outbound_intent_from_send_message("telegram", &message);
+    normalize_telegram_v1_address(&mut intent, &message);
+    assert_eq!(intent.conversation_id, "-100");
+    assert_eq!(
+        intent
+            .conversation_ref
+            .as_ref()
+            .unwrap()
+            .topic_id
+            .as_deref(),
+        Some("topic-9")
+    );
+    assert_eq!(intent.reply_to_id.as_deref(), Some("reply-4"));
+    assert_eq!(intent.thread_id, None);
+}
+
 struct NativeDescribeAdapter;
 
 #[async_trait::async_trait]
@@ -87,6 +188,48 @@ impl tinychannels::channel::ChannelAdapter for NativeDescribeAdapter {
 
 #[derive(Default)]
 struct NativeDraftLifecyclePort(Mutex<Vec<String>>);
+
+struct UnsupportedDraftPort;
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelStreamingDraft for UnsupportedDraftPort {}
+
+struct FailedDraftPort;
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelStreamingDraft for FailedDraftPort {
+    async fn start_draft(
+        &self,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<Option<String>, tinychannels::channel::ChannelSendError> {
+        Err(tinychannels::channel::ChannelSendError {
+            message: "provider failed".into(),
+            ..Default::default()
+        })
+    }
+
+    async fn update_draft(
+        &self,
+        _draft_id: &str,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<(), tinychannels::channel::ChannelSendError> {
+        Err(tinychannels::channel::ChannelSendError {
+            message: "provider failed".into(),
+            ..Default::default()
+        })
+    }
+
+    async fn finalize_draft(
+        &self,
+        _draft_id: &str,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<(), tinychannels::channel::ChannelSendError> {
+        Err(tinychannels::channel::ChannelSendError {
+            message: "provider failed".into(),
+            ..Default::default()
+        })
+    }
+}
 
 #[async_trait::async_trait]
 impl tinychannels::channel::ChannelStreamingDraft for NativeDraftLifecyclePort {
@@ -222,6 +365,65 @@ async fn native_draft_lifecycle_converts_v1_interactions_to_scoped_typed_intents
             "finalize:draft-id:final"
         ]
     );
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn native_draft_dispatch_falls_back_only_for_unsupported_provider_operations() {
+    let adapter = NativeDescribeAdapter;
+    let drafts = UnsupportedDraftPort;
+    for interaction in [
+        ChannelInteraction::SendDraft {
+            message: SendMessage::new("partial", "room"),
+        },
+        ChannelInteraction::UpdateDraft {
+            recipient: "room".into(),
+            message_id: "draft-1".into(),
+            text: "updated".into(),
+        },
+        ChannelInteraction::FinalizeDraft {
+            recipient: "room".into(),
+            message_id: "draft-1".into(),
+            text: "final".into(),
+            thread_ts: None,
+        },
+    ] {
+        assert!(
+            dispatch_native_draft(&adapter, &drafts, "fixture:configured", interaction)
+                .await
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn native_draft_dispatch_keeps_provider_failures_as_errors() {
+    let adapter = NativeDescribeAdapter;
+    let drafts = FailedDraftPort;
+    for interaction in [
+        ChannelInteraction::SendDraft {
+            message: SendMessage::new("partial", "room"),
+        },
+        ChannelInteraction::UpdateDraft {
+            recipient: "room".into(),
+            message_id: "draft-1".into(),
+            text: "updated".into(),
+        },
+        ChannelInteraction::FinalizeDraft {
+            recipient: "room".into(),
+            message_id: "draft-1".into(),
+            text: "final".into(),
+            thread_ts: None,
+        },
+    ] {
+        assert!(
+            dispatch_native_draft(&adapter, &drafts, "fixture:configured", interaction)
+                .await
+                .expect("operation is supported")
+                .is_err()
+        );
+    }
 }
 
 #[tokio::test]

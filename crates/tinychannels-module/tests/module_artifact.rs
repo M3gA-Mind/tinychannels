@@ -2532,7 +2532,7 @@ async fn compiled_artifact_authenticates_whatsapp_cloud_webhooks_and_runs_native
         }),
         ..Default::default()
     };
-    runtime
+    let configured_start = runtime
         .call_confidential::<()>(
             "StartChannelConfigured",
             (
@@ -2542,7 +2542,22 @@ async fn compiled_artifact_authenticates_whatsapp_cloud_webhooks_and_runs_native
             ),
         )
         .await
-        .expect("the compiled module serves WhatsApp Cloud webhook ingress");
+        .expect_err("the module must not claim host-owned webhook ingress");
+    assert_eq!(
+        configured_start.wire_name(),
+        "ai.tinyhumans.tinychannels.Error.NoWebhookIngress"
+    );
+    runtime
+        .call_confidential::<()>(
+            "StartOutboundChannel",
+            (
+                "whatsapp",
+                config.clone(),
+                tinychannels_bus::HttpProxyPolicy::default(),
+            ),
+        )
+        .await
+        .expect("the compiled module accepts host-forwarded WhatsApp Cloud webhooks");
 
     let interact = |interaction: ChannelInteraction| {
         let runtime = runtime.clone();

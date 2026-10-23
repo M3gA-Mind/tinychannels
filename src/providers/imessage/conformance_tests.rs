@@ -4,7 +4,8 @@
 
 use super::*;
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction as ReactionPort, ChannelTyping,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelTyping,
+    LegacyChannelReaction as ReactionPort,
 };
 use crate::providers::imessage::fixtures::*;
 use serde_json::{Value, json};
@@ -116,7 +117,12 @@ impl IMessageFixture {
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         ChannelAdapter::send(&self.rig.channel, intent)
             .await
-            .map(Some)
+            .map(|receipt| {
+                Some(ChannelSendOutcome {
+                    receipt,
+                    error: None,
+                })
+            })
     }
 
     fn push(

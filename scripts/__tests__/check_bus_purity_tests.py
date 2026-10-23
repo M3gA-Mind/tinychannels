@@ -40,13 +40,13 @@ class ForbiddenDependencyTests(unittest.TestCase):
     def test_storage_exemption_does_not_hide_unrelated_optional_dependencies(self):
         manifest = {
             'dependencies': {
-                'tinystoragedrivers-core': {'optional': True},
+                'tinystoragedrivers-types': {'optional': True},
                 'optional-http-client': {'optional': True},
             },
         }
         packages = {
             'bus': 'tinychannels-bus',
-            'storage': 'tinystoragedrivers-core',
+            'storage': 'tinystoragedrivers-types',
             'storage-port': 'tinystoragedrivers-bus',
             'http': 'optional-http-client',
         }

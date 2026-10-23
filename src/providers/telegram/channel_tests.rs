@@ -47,6 +47,75 @@ fn typing_capability_is_declared() {
     );
 }
 
+struct CapabilityMediaRepository;
+
+#[async_trait::async_trait]
+impl crate::host::MediaRepository for CapabilityMediaRepository {
+    async fn store_media(
+        &self,
+        _request: crate::host::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        anyhow::bail!("capability fixture does not store media")
+    }
+
+    async fn read_media(
+        &self,
+        _scope: crate::host::MediaScope,
+        _opaque_id: String,
+        _max_bytes: u64,
+    ) -> anyhow::Result<crate::host::StoredMedia> {
+        anyhow::bail!("capability fixture does not read media")
+    }
+}
+
+struct CapabilityVoiceStore;
+
+#[async_trait::async_trait]
+impl crate::host::VoiceMediaStore for CapabilityVoiceStore {
+    async fn store_voice(
+        &self,
+        _request: crate::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        anyhow::bail!("capability fixture does not store voice")
+    }
+}
+
+#[test]
+fn configured_media_and_voice_ports_expand_capabilities() {
+    let mut channel = TelegramChannel::new("token".into(), vec!["*".into()], false);
+    channel.media_repository = Some(std::sync::Arc::new(CapabilityMediaRepository));
+    channel.voice_media_store = Some(std::sync::Arc::new(CapabilityVoiceStore));
+    channel.voice_synthesis = true;
+
+    let capabilities = channel.declared_capabilities();
+    for part in ["image", "video", "audio", "file", "sticker", "voice_note"] {
+        assert!(capabilities.content.parts.iter().any(|value| value == part));
+    }
+    assert!(capabilities.content.image.inbound && capabilities.content.image.outbound);
+    assert_eq!(
+        capabilities.content.image.max_size_bytes,
+        Some(10 * 1024 * 1024)
+    );
+    assert!(capabilities.content.video.inbound && capabilities.content.video.outbound);
+    assert!(capabilities.content.audio.inbound && capabilities.content.audio.outbound);
+    assert!(capabilities.content.file.inbound && capabilities.content.file.outbound);
+    assert!(capabilities.content.sticker.inbound && capabilities.content.sticker.outbound);
+    assert!(capabilities.voice_in.supported);
+    assert!(capabilities.voice_out.supported && capabilities.voice_out.synthesis);
+    assert!(
+        capabilities
+            .voice_in
+            .transcript_sources
+            .contains(&tinychannels_bus::VoiceTranscriptSource::HostStt)
+    );
+    assert!(
+        capabilities
+            .voice_out
+            .accepted_codecs
+            .contains(&"ogg_opus".into())
+    );
+}
+
 #[tokio::test]
 async fn typed_stop_typing_is_idempotent() {
     let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);

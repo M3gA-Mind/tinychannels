@@ -96,7 +96,7 @@ pub use names::{
     deprecated,
     reason = "re-export the one-release v21 compatibility DTOs"
 )]
-pub use traits::{Channel, ChannelIngress, ChannelMessage, ChannelSendExt, SendMessage};
+pub use traits::{ChannelIngress, ChannelMessage, SendMessage};
 pub use version::{CONTRACT_VERSION, is_compatible};
 pub use web::{
     ChatRequestMetadata, ChatSuggestion, GuardrailPayload, GuardrailReason,
