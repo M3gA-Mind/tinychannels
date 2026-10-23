@@ -2388,10 +2388,7 @@ fn typed_send_errors_preserve_dispatch_certainty_and_provider_classification() {
 
 #[test]
 fn typed_interaction_errors_distinguish_preflight_from_provider_failure() {
-    let preflight = typed_interaction_error(
-        anyhow::Error::new(TelegramPreDispatchError),
-        "edit",
-    );
+    let preflight = typed_interaction_error(anyhow::Error::new(TelegramPreDispatchError), "edit");
     assert_eq!(preflight.kind, crate::channel::SendErrorKind::Forbidden);
     assert_eq!(
         preflight.message,
@@ -2553,7 +2550,11 @@ async fn reaction_add_rejects_invalid_message_and_empty_reaction_before_io() {
         )
         .await
         .unwrap_err();
-    assert!(invalid_message.downcast_ref::<TelegramPreDispatchError>().is_some());
+    assert!(
+        invalid_message
+            .downcast_ref::<TelegramPreDispatchError>()
+            .is_some()
+    );
 
     let empty_reaction = channel
         .send_reaction_v2(
@@ -2564,7 +2565,11 @@ async fn reaction_add_rejects_invalid_message_and_empty_reaction_before_io() {
         )
         .await
         .unwrap_err();
-    assert!(empty_reaction.downcast_ref::<TelegramPreDispatchError>().is_some());
+    assert!(
+        empty_reaction
+            .downcast_ref::<TelegramPreDispatchError>()
+            .is_some()
+    );
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
