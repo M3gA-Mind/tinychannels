@@ -1,5 +1,8 @@
 use super::*;
-use crate::channel::{ChannelAdapter, ChannelDelete, ChannelInboundSink, ChannelTyping};
+use crate::channel::{
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelInboundSink, ChannelTyping,
+    LegacyChannelReaction,
+};
 use crate::providers::telegram::fixtures::*;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -673,6 +676,33 @@ async fn adapter_status_reports_health_and_send_returns_typed_receipt() {
         ok_with(serde_json::json!({"message_id": 94})),
     )
     .await;
+    mount_post(
+        &server,
+        "sendChatAction",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })),
+    )
+    .await;
+    mount_post(
+        &server,
+        "setMessageReaction",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })),
+    )
+    .await;
+    mount_post(
+        &server,
+        "editMessageText",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })),
+    )
+    .await;
+    mount_post(
+        &server,
+        "deleteMessage",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": true
+        })),
+    )
+    .await;
     let channel = channel_for(&server, &["*"]);
 
     let descriptor = ChannelAdapter::descriptor(&channel);
@@ -695,6 +725,37 @@ async fn adapter_status_reports_health_and_send_returns_typed_receipt() {
     let receipt = ChannelAdapter::send(&channel, intent).await.unwrap();
     assert_eq!(receipt.platform_message_ids, ["94"]);
     assert_eq!(receipt.idempotency_key.as_deref(), Some("adapter-send"));
+
+    ChannelTyping::start_typing(&channel, "-10042")
+        .await
+        .unwrap();
+    ChannelTyping::stop_typing(&channel, "-10042")
+        .await
+        .unwrap();
+    LegacyChannelReaction::send_reaction(
+        &channel,
+        &tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: None,
+        },
+        &tinychannels_bus::ConversationRef {
+            id: "-10042".into(),
+            ..Default::default()
+        },
+        "94",
+        &tinychannels_bus::channel::ChannelReaction {
+            value: "🔥".into(),
+            ..Default::default()
+        },
+        false,
+    )
+    .await
+    .unwrap();
+    let edit = ChannelEdit::edit(&channel, &receipt, edit_intent("-10042"))
+        .await
+        .unwrap();
+    assert_eq!(edit, receipt);
+    ChannelDelete::delete(&channel, &receipt).await.unwrap();
 }
 
 #[tokio::test]
