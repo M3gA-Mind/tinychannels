@@ -328,7 +328,7 @@ async fn media_upload_includes_routing_caption_title_and_rounded_duration() {
     for field in [
         "name=\"chat_id\"\r\n\r\nchat-1",
         "name=\"message_thread_id\"\r\n\r\ntopic-2",
-        "name=\"reply_parameters\"\r\n\r\n{\\\"message_id\\\":17}",
+        "name=\"reply_parameters\"\r\n\r\n{\"message_id\":17}",
         "name=\"caption\"\r\n\r\nA recording",
         "name=\"title\"\r\n\r\nMeeting",
         "name=\"duration\"\r\n\r\n2",
