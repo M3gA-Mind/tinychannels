@@ -218,6 +218,14 @@ pub enum ProgressiveCommand {
     Open {
         channel: String,
     },
+    /// Open a handle bound to one provider target and host-authorized turn.
+    /// Subsequent `FeedOutput` requests must repeat the same turn scope.
+    OpenScoped {
+        channel: String,
+        turn_id: Option<String>,
+        channel_ref: Option<Box<crate::channel::ChannelRef>>,
+        conversation: Option<Box<crate::channel::ConversationRef>>,
+    },
     Feed {
         handle: String,
         events: Vec<ProgressiveEvent>,
