@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use super::bubbles::{flush_thinking_message, send_filler_message, send_typing_indicator};
 use super::draft::flush_streaming_edit;
-use super::finalize::{abort_channel_reply, finalize_channel_reply, send_channel_reply};
+use super::finalize::{
+    abort_channel_reply, cleanup_after_external_reply, finalize_channel_reply, send_channel_reply,
+};
 use super::state::{StreamingState, TypingState};
 use super::{ProgressiveOutputContext, ProgressiveSender, channel_supports_progressive_ui};
 use tinychannels_bus::ChannelCapabilities;
@@ -657,6 +659,21 @@ impl ProgressiveReply {
             });
         }
         Ok(outcome)
+    }
+
+    /// Clean transient UI after a final message was delivered by another
+    /// transport path. A successful delivery also removes the now-stale draft;
+    /// a failed delivery leaves it visible while still removing filler and
+    /// thinking bubbles.
+    pub async fn cleanup_after_external_final(&mut self, final_delivered: bool) {
+        let sender = Arc::clone(&self.sender);
+        cleanup_after_external_reply(
+            sender.as_ref(),
+            &self.channel,
+            &mut self.state,
+            final_delivered,
+        )
+        .await;
     }
 
     /// Send a standalone reply without touching the turn's draft state (for a

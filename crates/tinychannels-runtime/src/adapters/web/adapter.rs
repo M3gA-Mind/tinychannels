@@ -1,11 +1,11 @@
 //! The in-app chat as a TinyChannels channel.
 
-use super::inbound::{WEB_CHANNEL_ID, WebChatStart, normalize_chat_start};
+use super::inbound::{WEB_CHANNEL_ID, normalize_chat_start};
 use super::project::WebTurnProjector;
 use super::sink::{WebEventSink, WebScope};
 use crate::channel::{
     ChannelAdapter, ChannelDescriptor, ChannelInboundSink, ChannelOutboundIntent, ChannelSendError,
-    MessageReceipt,
+    ChannelSendOutcome, MessageReceipt,
 };
 use crate::controllers::{ChannelAccountSnapshot, ChannelAccountState};
 use async_trait::async_trait;
@@ -18,10 +18,12 @@ use tinychannels_bus::channel::{
     ChannelRef, ContentPart, ConversationRef, OutboundContentPart, OutboundPayload, SendErrorKind,
 };
 use tinychannels_bus::module_progressive::ChannelOutputEvent;
+use tinychannels_bus::web::WebChatStart;
 use tinychannels_bus::web::{WebChannelEvent, WebEventContext};
 use tinychannels_bus::{
-    ActionCapabilities, ChannelCapabilities, ChannelIngress, ContentCapabilities,
-    ContentCapability, EventCapabilities, VoiceCapabilities, VoiceTranscriptSource,
+    ActionCapabilities, AddressingCapabilities, ChannelCapabilities, ChannelIngress,
+    ContentCapabilities, ContentCapability, EventCapabilities, VoiceCapabilities,
+    VoiceTranscriptSource,
 };
 
 /// `client_id` stamped on events that no browser client originated.
@@ -46,6 +48,7 @@ pub struct WebChannelAdapter {
     running: AtomicBool,
     clock: fn() -> u64,
     turns: Mutex<HashMap<TurnKey, WebTurnProjector>>,
+    publish_lock: tokio::sync::Mutex<()>,
 }
 
 fn unix_ms() -> u64 {
@@ -77,6 +80,7 @@ impl WebChannelAdapter {
             running: AtomicBool::new(false),
             clock: unix_ms,
             turns: Mutex::new(HashMap::new()),
+            publish_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -127,6 +131,11 @@ impl WebChannelAdapter {
             },
             voice_in: voice.clone(),
             voice_out: voice,
+            addressing: AddressingCapabilities {
+                conversation_types: vec!["dm".into()],
+                thread_id: true,
+                ..Default::default()
+            },
             events: EventCapabilities {
                 supported: ["message", "cancel"].map(String::from).into(),
             },
@@ -176,33 +185,49 @@ impl WebChannelAdapter {
         request_id: &str,
         event: ChannelOutputEvent,
     ) -> Result<usize, ChannelSendError> {
+        // Keep sequence assignment and sink delivery in one order. The sink is
+        // scoped to this adapter instance, so serializing its publications also
+        // preserves each turn's increasing sequence numbers on the wire.
+        let _publish = self.publish_lock.lock().await;
         let key = (
             client_id.to_owned(),
             thread_id.to_owned(),
             request_id.to_owned(),
         );
-        let projected = {
+        let (projected, terminal) = {
             let mut turns = self.turns.lock();
             let projector = turns
                 .entry(key.clone())
                 .or_insert_with(|| WebTurnProjector::new(client_id, thread_id, request_id));
             let projected = projector.project(event, (self.clock)());
-            if projected.iter().any(is_terminal) {
-                turns.remove(&key);
-            }
-            projected
+            let terminal = projected.iter().any(is_terminal);
+            (projected, terminal)
         };
         let count = projected.len();
         for event in projected {
             self.sink.publish(&self.scope, event).await?;
+        }
+        if terminal {
+            self.turns.lock().remove(&key);
         }
         Ok(count)
     }
 
     /// Publish a host-authored event unchanged (queue, goal, todo, error and
     /// other events with no `ChannelOutputEvent` form).
-    pub async fn publish_event(&self, event: WebChannelEvent) -> Result<(), ChannelSendError> {
-        self.sink.publish(&self.scope, event).await
+    pub async fn publish_event(&self, mut event: WebChannelEvent) -> Result<(), ChannelSendError> {
+        let _publish = self.publish_lock.lock().await;
+        let terminal_key = if is_terminal(&event) {
+            let context = event.context_mut().clone();
+            Some((context.client_id, context.thread_id, context.request_id))
+        } else {
+            None
+        };
+        self.sink.publish(&self.scope, event).await?;
+        if let Some(key) = terminal_key {
+            self.turns.lock().remove(&key);
+        }
+        Ok(())
     }
 
     fn proactive_event(
@@ -222,31 +247,42 @@ impl WebChannelAdapter {
             }
             OutboundPayload::Parts { parts } => {
                 for part in parts {
-                    if let OutboundContentPart::Content {
-                        part: ContentPart::Text { text: body, .. },
-                    } = part
-                    {
-                        if !text.is_empty() {
-                            text.push('\n');
+                    match part {
+                        OutboundContentPart::Content { part } => {
+                            if !web_content_supported(part) {
+                                return Err(ChannelSendError::unsupported(
+                                    "web adapter does not declare this content part",
+                                ));
+                            }
+                            if let ContentPart::Text { text: body, .. } = part {
+                                if !text.is_empty() {
+                                    text.push('\n');
+                                }
+                                text.push_str(body);
+                            }
                         }
-                        text.push_str(body);
+                        OutboundContentPart::Voice { .. } => {}
                     }
                 }
                 parts.clone()
             }
             _ => {
-                return Err(ChannelSendError {
-                    kind: SendErrorKind::BadFormat,
-                    message: "web adapter does not declare this outbound payload".into(),
-                    unsupported: true,
-                    retryable: false,
-                    ..Default::default()
-                });
+                return Err(ChannelSendError::unsupported(
+                    "web adapter does not declare this outbound payload",
+                ));
             }
         };
         let thread_id = intent
             .thread_id
             .clone()
+            .filter(|thread_id| !thread_id.trim().is_empty())
+            .or_else(|| {
+                intent
+                    .conversation_ref
+                    .as_ref()
+                    .and_then(|conversation| conversation.thread_id.clone())
+                    .filter(|thread_id| !thread_id.trim().is_empty())
+            })
             .unwrap_or_else(|| intent.conversation_id.clone());
         Ok(WebChannelEvent::ProactiveMessage {
             context: WebEventContext {
@@ -267,6 +303,18 @@ impl WebChannelAdapter {
             parts: (!parts.is_empty()).then_some(parts),
         })
     }
+}
+
+fn web_content_supported(part: &ContentPart) -> bool {
+    matches!(
+        part,
+        ContentPart::Text { .. }
+            | ContentPart::Image { .. }
+            | ContentPart::Video { .. }
+            | ContentPart::Audio { .. }
+            | ContentPart::File { .. }
+            | ContentPart::VoiceNote { .. }
+    )
 }
 
 fn is_terminal(event: &WebChannelEvent) -> bool {
@@ -297,6 +345,7 @@ impl ChannelAdapter for WebChannelAdapter {
     }
 
     async fn stop(&self) -> Result<(), ChannelSendError> {
+        let _publish = self.publish_lock.lock().await;
         self.running.store(false, Ordering::SeqCst);
         self.turns.lock().clear();
         Ok(())
@@ -306,6 +355,15 @@ impl ChannelAdapter for WebChannelAdapter {
         &self,
         intent: ChannelOutboundIntent,
     ) -> Result<MessageReceipt, ChannelSendError> {
+        self.send_outcome(intent)
+            .await
+            .map(|outcome| outcome.receipt)
+    }
+
+    async fn send_outcome(
+        &self,
+        intent: ChannelOutboundIntent,
+    ) -> Result<ChannelSendOutcome, ChannelSendError> {
         if tinychannels_bus::provider_id(&intent.channel_id) != WEB_CHANNEL_ID
             || intent.conversation_id.trim().is_empty()
         {
@@ -326,17 +384,46 @@ impl ChannelAdapter for WebChannelAdapter {
             thread_id: intent.thread_id.clone(),
             ..Default::default()
         });
-        Ok(MessageReceipt {
-            idempotency_key: Some(intent.idempotency_key.clone()),
-            channel: Some(channel),
-            conversation: Some(conversation),
-            primary_platform_message_id: Some(intent.idempotency_key.clone()),
-            platform_message_ids: vec![intent.idempotency_key],
-            thread_id: intent.thread_id,
-            reply_to_id: intent.reply_to_id,
-            sent_at: (self.clock)(),
+        Ok(ChannelSendOutcome {
+            receipt: MessageReceipt {
+                idempotency_key: Some(intent.idempotency_key.clone()),
+                channel: Some(channel),
+                conversation: Some(conversation),
+                thread_id: intent.thread_id,
+                reply_to_id: intent.reply_to_id,
+                sent_at: (self.clock)(),
+                ..Default::default()
+            },
+            error: None,
+        })
+    }
+
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<ChannelSendOutcome, ChannelSendError> {
+        if message.parts.is_empty() {
+            return Err(err(
+                SendErrorKind::BadFormat,
+                "typed outbound message must contain at least one content part",
+                false,
+            ));
+        }
+        self.send_outcome(ChannelOutboundIntent {
+            idempotency_key: message.idempotency_key.clone(),
+            channel_id: message.channel_id.clone(),
+            conversation_id: message.conversation_id.clone(),
+            channel_ref: message.channel_ref.clone(),
+            conversation_ref: message.conversation_ref.clone(),
+            reply_to_id: message.reply_to_id.clone(),
+            thread_id: message.thread_id.clone(),
+            turn_id: message.turn_id.clone(),
+            payload: OutboundPayload::Parts {
+                parts: message.parts.clone(),
+            },
             ..Default::default()
         })
+        .await
     }
 
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError> {

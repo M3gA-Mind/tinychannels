@@ -211,6 +211,32 @@ pub(super) async fn finalize_channel_reply(
         send_channel_reply(sender, channel, final_text).await;
     }
 
+    cleanup_ephemeral_bubbles(sender, channel, state).await;
+}
+
+/// Remove transient filler and thinking messages after another path has
+/// handled the canonical final delivery. A delivered final also removes the
+/// now-stale draft (every part, using its retained receipt authority); a failed
+/// delivery leaves the draft visible.
+pub(super) async fn cleanup_after_external_reply(
+    sender: &dyn ProgressiveSender,
+    channel: &str,
+    state: &mut StreamingState,
+    final_delivered: bool,
+) {
+    if final_delivered {
+        delete_draft_parts(sender, channel, state).await;
+        state.draft_sent = false;
+        state.dirty = false;
+    }
+    cleanup_ephemeral_bubbles(sender, channel, state).await;
+}
+
+async fn cleanup_ephemeral_bubbles(
+    sender: &dyn ProgressiveSender,
+    channel: &str,
+    state: &mut StreamingState,
+) {
     // Fillers first (oldest first), then the thinking bubble.
     delete_ephemeral_messages(
         sender,
@@ -229,12 +255,11 @@ pub(super) async fn finalize_channel_reply(
         .into_iter()
         .collect();
     delete_ephemeral_messages(sender, channel, thinking_ids, thinking_receipts).await;
+    state.thinking_dirty = false;
 }
 
-/// Remove only drafts and ephemeral status messages after an ambiguous or
-/// failed delivery. This path never sends a replacement reply, because the
-/// host may have observed a partial or unknown result already.
-pub(super) async fn abort_channel_reply(
+/// Delete every known draft part, using its retained receipt authority.
+async fn delete_draft_parts(
     sender: &dyn ProgressiveSender,
     channel: &str,
     state: &mut StreamingState,
@@ -260,23 +285,18 @@ pub(super) async fn abort_channel_reply(
         }
         state.message_id = None;
     }
-    delete_ephemeral_messages(
-        sender,
-        channel,
-        std::mem::take(&mut state.filler_message_ids),
-        std::mem::take(&mut state.filler_message_receipts),
-    )
-    .await;
-    let mut thinking_ids = std::mem::take(&mut state.thinking_message_ids);
-    if let Some(id) = state.thinking_message_id.take()
-        && !thinking_ids.contains(&id)
-    {
-        thinking_ids.push(id);
-    }
-    let thinking_receipts = std::mem::take(&mut state.thinking_message_receipt)
-        .into_iter()
-        .collect();
-    delete_ephemeral_messages(sender, channel, thinking_ids, thinking_receipts).await;
+}
+
+/// Remove only drafts and ephemeral status messages after an ambiguous or
+/// failed delivery. This path never sends a replacement reply, because the
+/// host may have observed a partial or unknown result already.
+pub(super) async fn abort_channel_reply(
+    sender: &dyn ProgressiveSender,
+    channel: &str,
+    state: &mut StreamingState,
+) {
+    delete_draft_parts(sender, channel, state).await;
+    cleanup_ephemeral_bubbles(sender, channel, state).await;
 }
 
 pub(super) fn receipt_for_part(

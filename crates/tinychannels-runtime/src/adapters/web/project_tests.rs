@@ -392,6 +392,9 @@ fn subagent_states_map_to_subagent_events_with_detail() {
         assert_eq!(projected["subagent"]["agent_id"], "researcher");
         assert_eq!(projected["subagent"]["cost_usd"], 0.5);
         assert_eq!(projected["subagent"]["changed_files"][0], "a.rs");
+        if state == "completed" {
+            assert_eq!(projected["subagent"]["output"], "Found results");
+        }
     }
     let result = wire(&one(ChannelOutputEvent::Subagent(Box::new(subagent(
         "tool_result",
@@ -442,6 +445,16 @@ fn oversized_subagent_output_is_capped() {
 }
 
 #[test]
+fn completed_subagent_output_in_detail_is_capped() {
+    let mut completed = subagent("completed");
+    completed.output = Some("x".repeat(tinychannels_bus::web::MAX_WEB_TOOL_PAYLOAD_BYTES + 10));
+    let projected = wire(&one(ChannelOutputEvent::Subagent(Box::new(completed))));
+    let output = projected["subagent"]["output"].as_str().unwrap();
+    assert!(output.len() <= tinychannels_bus::web::MAX_WEB_TOOL_PAYLOAD_BYTES);
+    assert!(output.contains("truncated"));
+}
+
+#[test]
 fn context_mut_reaches_every_event_kind() {
     let mut event = WebChannelEvent::QueueItemQueued {
         context: WebEventContext::default(),
@@ -449,4 +462,37 @@ fn context_mut_reaches_every_event_kind() {
     };
     context_mut(&mut event).client_id = "c".into();
     assert_eq!(wire(&event)["client_id"], "c");
+}
+
+#[test]
+fn context_mut_supports_current_channel_bus_events() {
+    let mut outbound = WebChannelEvent::ChannelOutbound {
+        context: WebEventContext::default(),
+        full_response: Some("sent".into()),
+        structured: None,
+    };
+    context_mut(&mut outbound).seq = Some(3);
+    assert_eq!(wire(&outbound)["seq"], 3);
+
+    let mut channel_event = WebChannelEvent::ChannelEvent {
+        context: WebEventContext::default(),
+        openhuman_message_id: None,
+        channel_event: tinychannels_bus::channel::ChannelEvent {
+            version: 2,
+            event_id: "event-1".into(),
+            source_event_id: None,
+            source_timestamp: None,
+            channel: tinychannels_bus::channel::ChannelRef {
+                id: "telegram".into(),
+                account_id: None,
+            },
+            conversation: None,
+            event: tinychannels_bus::channel::ChannelEventKind::Lifecycle {
+                state: "connected".into(),
+                reason: None,
+            },
+        },
+    };
+    context_mut(&mut channel_event).request_id = "request-1".into();
+    assert_eq!(wire(&channel_event)["request_id"], "request-1");
 }
