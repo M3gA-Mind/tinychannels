@@ -122,6 +122,14 @@ pub enum WebChannelEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         round: Option<u32>,
     },
+    /// The turn started summarizing earlier conversation to fit the context
+    /// window; the next `iteration_start` ends it.
+    ContextCompacting {
+        #[serde(flatten)]
+        context: WebEventContext,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        round: Option<u32>,
+    },
     ToolCall {
         #[serde(flatten)]
         context: WebEventContext,
@@ -562,6 +570,7 @@ impl WebChannelEvent {
             E::InferenceStart { .. } => "inference_start",
             E::InferenceHeartbeat { .. } => "inference_heartbeat",
             E::IterationStart { .. } => "iteration_start",
+            E::ContextCompacting { .. } => "context_compacting",
             E::ToolCall { .. } => "tool_call",
             E::ToolProgress { .. } => "tool_progress",
             E::ToolResult { .. } => "tool_result",
@@ -616,6 +625,7 @@ impl WebChannelEvent {
             | E::InferenceStart { context }
             | E::InferenceHeartbeat { context }
             | E::IterationStart { context, .. }
+            | E::ContextCompacting { context, .. }
             | E::ToolCall { context, .. }
             | E::ToolProgress { context, .. }
             | E::ToolResult { context, .. }
@@ -670,6 +680,7 @@ impl WebChannelEvent {
             | E::InferenceStart { context }
             | E::InferenceHeartbeat { context }
             | E::IterationStart { context, .. }
+            | E::ContextCompacting { context, .. }
             | E::ToolCall { context, .. }
             | E::ToolProgress { context, .. }
             | E::ToolResult { context, .. }

@@ -650,6 +650,7 @@ const HISTORICAL_EVENT_NAMES: &[&str] = &[
     "inference_start",
     "inference_heartbeat",
     "iteration_start",
+    "context_compacting",
     "tool_call",
     "tool_progress",
     "tool_result",

@@ -368,6 +368,9 @@ fn artifacts_and_lifecycle_stages_map_by_name() {
     let iteration = wire(&one(lifecycle("iteration_start")));
     assert_eq!(iteration["event"], "iteration_start");
     assert_eq!(iteration["round"], 2);
+    let compacting = wire(&one(lifecycle("context_compacting")));
+    assert_eq!(compacting["event"], "context_compacting");
+    assert_eq!(compacting["round"], 2);
     assert!(projector().project(lifecycle("compaction"), 1).is_empty());
 }
 

@@ -184,7 +184,7 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
     )
     .unwrap();
     assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
-    assert_eq!(tinychannels_bus::CONTRACT_VERSION, 32);
+    assert_eq!(tinychannels_bus::CONTRACT_VERSION, 33);
     let interface = info
         .manifest
         .provides

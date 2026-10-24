@@ -282,6 +282,10 @@ fn project_event(ctx: &WebEventContext, event: ChannelOutputEvent) -> Option<Vec
                 message,
                 round: iteration,
             }),
+            "context_compacting" => one(WebChannelEvent::ContextCompacting {
+                context,
+                round: iteration,
+            }),
             _ => None,
         },
         O::Native { .. } => None,
