@@ -99,7 +99,7 @@ fn hosted_progressive_open_keeps_scoped_address_and_is_a_new_contract_revision()
     assert_eq!(wire["conversation"]["topicId"], "topic-3");
     assert_eq!(wire["turn_id"], "turn-1");
     assert_eq!(wire["lifetime_ms"], 30_000);
-    assert_eq!(CONTRACT_VERSION, 32);
+    assert_eq!(CONTRACT_VERSION, 33);
     assert!(!is_compatible(31));
     assert!(!is_compatible(30));
     assert!(is_compatible(CONTRACT_VERSION));
@@ -454,7 +454,7 @@ fn defaults_keep_safe_delivery_and_disconnection_wire_values() {
     }
     assert!(is_compatible(CONTRACT_VERSION));
     assert!(!is_compatible(CONTRACT_VERSION + 1));
-    assert_eq!(CONTRACT_VERSION, 32);
+    assert_eq!(CONTRACT_VERSION, 33);
     assert!(!is_compatible(31));
     assert!(!is_compatible(25));
     assert!(!is_compatible(24));
