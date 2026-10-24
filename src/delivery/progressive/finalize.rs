@@ -152,6 +152,32 @@ pub(super) async fn finalize_channel_reply(
         send_channel_reply(sender, channel, final_text).await;
     }
 
+    cleanup_ephemeral_bubbles(sender, channel, state).await;
+}
+
+/// Remove transient filler and thinking messages after another path has
+/// handled the canonical final delivery.
+pub(super) async fn cleanup_after_external_reply(
+    sender: &dyn ProgressiveSender,
+    channel: &str,
+    state: &mut StreamingState,
+    final_delivered: bool,
+) {
+    if final_delivered {
+        if let Some(message_id) = state.message_id.take() {
+            delete_channel_message(sender, channel, &message_id).await;
+        }
+        state.draft_sent = false;
+        state.dirty = false;
+    }
+    cleanup_ephemeral_bubbles(sender, channel, state).await;
+}
+
+async fn cleanup_ephemeral_bubbles(
+    sender: &dyn ProgressiveSender,
+    channel: &str,
+    state: &mut StreamingState,
+) {
     // Fillers first (oldest first), then the thinking bubble.
     for id in std::mem::take(&mut state.filler_message_ids) {
         delete_channel_message(sender, channel, &id).await;
@@ -159,4 +185,5 @@ pub(super) async fn finalize_channel_reply(
     if let Some(thinking_id) = state.thinking_message_id.take() {
         delete_channel_message(sender, channel, &thinking_id).await;
     }
+    state.thinking_dirty = false;
 }
