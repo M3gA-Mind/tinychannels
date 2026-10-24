@@ -53,6 +53,13 @@ exact-version: a v21 host cannot bind a v22 module, so this shim is for source
 migration and same-version legacy provider adapters, not cross-version callback
 compatibility.
 
+`ChannelsHost` exposes scoped voice callbacks. `TranscribeVoice`,
+`SynthesizeSpeech`, `StoreVoiceMedia`, and `GetVoiceReplyPolicy` carry the
+configured channel, provider account, conversation, and originating turn in a
+`HostVoiceScope`. Hosts own transcription, synthesis, durable voice media, and
+the authoritative reply mode. Outbound speech remains an explicit typed
+`OutboundVoice` intent, so synthesis is never inferred from text alone.
+
 This source contract still requires a compatible published native module before
 a downstream host can claim released composition.
 

@@ -128,6 +128,14 @@ pub mod host_methods {
     pub const PERSIST_ALLOWED_IDENTITY: &str = "PersistAllowedIdentity";
     /// `Transcribe` — use the host's configured speech recognition provider.
     pub const TRANSCRIBE: &str = "Transcribe";
+    /// `TranscribeVoice` — transcribe media scoped to one authenticated turn.
+    pub const TRANSCRIBE_VOICE: &str = "TranscribeVoice";
+    /// `SynthesizeSpeech` — synthesize a scoped spoken reply through the host.
+    pub const SYNTHESIZE_SPEECH: &str = "SynthesizeSpeech";
+    /// `StoreVoiceMedia` — durably store scoped inbound or outbound audio.
+    pub const STORE_VOICE_MEDIA: &str = "StoreVoiceMedia";
+    /// `GetVoiceReplyPolicy` — resolve host-authoritative spoken reply policy.
+    pub const GET_VOICE_REPLY_POLICY: &str = "GetVoiceReplyPolicy";
     /// `PublishEvent` — publish one provider event through the host event sink.
     pub const PUBLISH_EVENT: &str = "PublishEvent";
     /// Call a narrow host credential or managed API capability. Durable state is not
@@ -184,11 +192,15 @@ pub const METHODS: [&str; 44] = [
 ];
 
 /// All host-callback method names in declaration order.
-pub const HOST_METHODS: [&str; 8] = [
+pub const HOST_METHODS: [&str; 12] = [
     host_methods::DELIVER_INBOUND,
     host_methods::REPORT_STATUS,
     host_methods::PERSIST_ALLOWED_IDENTITY,
     host_methods::TRANSCRIBE,
+    host_methods::TRANSCRIBE_VOICE,
+    host_methods::SYNTHESIZE_SPEECH,
+    host_methods::STORE_VOICE_MEDIA,
+    host_methods::GET_VOICE_REPLY_POLICY,
     host_methods::PUBLISH_EVENT,
     host_methods::DISPATCH_CONTROLLER_BACKEND,
     host_methods::PROCESS_INBOUND,

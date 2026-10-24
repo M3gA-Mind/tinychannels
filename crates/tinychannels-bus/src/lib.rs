@@ -62,8 +62,10 @@ pub use controllers::{ChannelAuthMode, ChannelDefinition};
 pub use error::{Result, TinyChannelsError};
 pub use health::{ChannelHealthReport, ChannelHealthState};
 pub use host::{
-    HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult,
-    HostVoiceMediaDirection, HostVoiceScope,
+    HostEventPublication, HostSpeechSynthesisRequest, HostSpeechSynthesisResult,
+    HostStoreVoiceMediaRequest, HostStoreVoiceMediaResult, HostTranscriptionRequest,
+    HostTranscriptionResult, HostVoiceMediaDirection, HostVoiceReplyMode, HostVoiceReplyPolicy,
+    HostVoiceReplyPolicyRequest, HostVoiceScope, HostVoiceTranscriptionRequest,
 };
 pub use http::HttpProxyPolicy;
 pub use module_controller::{
