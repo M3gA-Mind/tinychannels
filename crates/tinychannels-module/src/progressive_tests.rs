@@ -2039,3 +2039,51 @@ fn output_scope_accepts_a_hosted_turn_lease_and_rejects_longer_ones() {
     assert!(scope(3_700_001).is_err());
     assert!(scope(0).is_err());
 }
+
+#[tokio::test(start_paused = true)]
+async fn closing_a_handle_after_a_module_sequenced_final_does_not_announce_a_cancellation() {
+    let (replies, callback) = fixture(true).await;
+    let provider = Running::start_outbound(
+        Arc::new(ProgressiveChannel),
+        Arc::new(Hooks::default()),
+        replies.host.clone(),
+    );
+    replies
+        .running
+        .lock()
+        .await
+        .insert("discord".into(), provider.clone());
+    let handle = open(&replies).await;
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            turn_id: None,
+            channel_ref: None,
+            conversation: None,
+            sequence: None,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "final answer".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    tokio::task::yield_now().await;
+    let _ = replies
+        .execute(ProgressiveCommand::Close {
+            handle: handle.clone(),
+        })
+        .await;
+    let requests = callback.requests.lock().await;
+    assert!(
+        requests.iter().all(|request| !matches!(
+            request,
+            ProgressiveTransportRequest::Send { content, .. } if content.contains("Cancelled")
+        )),
+        "a completed reply must not be followed by a cancellation notice: {requests:?}"
+    );
+    drop(requests);
+    replies.shutdown().await.unwrap();
+    provider.stop().await.unwrap();
+}
