@@ -1148,7 +1148,7 @@ fn output_scope(
         || conversation.id.trim().is_empty()
         || turn_id.trim().is_empty()
         || lifetime_ms == 0
-        || lifetime_ms > TURN_LIFETIME.as_millis() as u64
+        || lifetime_ms > 3_700_000
     {
         return Err(Error::failed("invalid progressive output scope"));
     }

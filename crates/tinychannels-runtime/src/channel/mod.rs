@@ -25,6 +25,7 @@ pub use envelope::{
     AccessContext, ChannelInboundEnvelope, GroupAccessPolicy, InboundMediaPayload,
     InboundMediaPayloadExt, MediaKind, MediaReference, MentionGate, SenderDmDecision,
     inbound_envelope_from_legacy_message, legacy_message_from_inbound_envelope,
+    typed_message_from_inbound_envelope,
 };
 pub use error::{
     ChannelSendError, ChannelSendErrorExt, SendErrorKind, classify_send_error,
