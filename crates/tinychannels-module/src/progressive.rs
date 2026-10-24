@@ -898,12 +898,23 @@ async fn run(
                     let _ = response.send(result);
                 }
                 Some(Command::FeedOutput(events, response)) => {
+                    // A delivered `FinalMessage` ends the module-sequenced
+                    // handle, as it does for host-sequenced output: a later
+                    // `Close` must not announce a cancellation.
+                    let is_final = events.iter().any(|event| {
+                        matches!(event, ChannelOutputEvent::FinalMessage { .. })
+                    });
                     let result = match &target {
                         WorkerTarget::Hosted(scope) => feed_output(&host, &channel, Some(scope), &next_sequence, events).await,
                         WorkerTarget::Adapter(_, _) => feed_adapter_output(&mut reply, events).await,
                         WorkerTarget::Legacy => Err(Error::failed("canonical output requires an opened output scope")),
                     };
+                    let terminal = is_final && result.is_ok();
                     let _ = response.send(result);
+                    if terminal {
+                        reply.cleanup_after_external_final(true).await;
+                        break;
+                    }
                 }
                 Some(Command::FeedSequencedOutput(batch, response)) => {
                     let scope = OutputScope {

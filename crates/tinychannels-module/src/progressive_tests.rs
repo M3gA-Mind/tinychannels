@@ -2039,3 +2039,96 @@ fn output_scope_accepts_a_hosted_turn_lease_and_rejects_longer_ones() {
     assert!(scope(3_700_001).is_err());
     assert!(scope(0).is_err());
 }
+
+#[derive(Default)]
+struct RecordingChannel {
+    sent: Arc<Mutex<Vec<String>>>,
+}
+
+#[allow(deprecated)]
+#[async_trait::async_trait]
+impl tinychannels::Channel for RecordingChannel {
+    fn name(&self) -> &str {
+        "discord"
+    }
+
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        tinychannels_bus::ChannelCapabilities {
+            progressive_edits: true,
+            ..Default::default()
+        }
+    }
+
+    async fn send(&self, message: &tinychannels::SendMessage) -> anyhow::Result<()> {
+        self.sent.lock().await.push(message.content.clone());
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn closing_a_handle_after_a_module_sequenced_final_does_not_announce_a_cancellation() {
+    let (replies, _callback) = fixture(true).await;
+    let channel = Arc::new(RecordingChannel::default());
+    let sent = channel.sent.clone();
+    let provider =
+        Running::start_outbound(channel, Arc::new(Hooks::default()), replies.host.clone());
+    replies
+        .running
+        .lock()
+        .await
+        .insert("discord".into(), provider.clone());
+    let handle = match replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                ..Default::default()
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "turn-1".into(),
+            lifetime_ms: 60_000,
+        })
+        .await
+        .unwrap()
+    {
+        ProgressiveResult::Opened { handle } => handle,
+        _ => panic!("expected opened handle"),
+    };
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            turn_id: Some("turn-1".into()),
+            channel_ref: None,
+            conversation: None,
+            sequence: None,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "final answer".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    tokio::task::yield_now().await;
+    let _ = replies
+        .execute(ProgressiveCommand::Close {
+            handle: handle.clone(),
+        })
+        .await;
+    let sent = sent.lock().await.clone();
+    assert!(
+        sent.iter().all(|content| !content.contains("Cancelled")),
+        "a completed reply must not be followed by a cancellation notice: {sent:?}"
+    );
+    replies.shutdown().await.unwrap();
+    provider.stop().await.unwrap();
+}
