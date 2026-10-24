@@ -52,13 +52,19 @@ use tinybus::{Connection, Error, Result};
 use tinychannels_bus::ChannelEvent;
 use tinychannels_bus::names::{HOST_BUS_NAME, HOST_OBJECT_PATH, host_methods};
 use tinychannels_bus::{ChannelBackendRequest, ChannelBackendResult};
-use tinychannels_bus::{HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult};
+use tinychannels_bus::{
+    HostEventPublication, HostSpeechSynthesisRequest, HostSpeechSynthesisResult,
+    HostStoreVoiceMediaRequest, HostStoreVoiceMediaResult, HostTranscriptionRequest,
+    HostTranscriptionResult, HostVoiceReplyPolicy, HostVoiceReplyPolicyRequest,
+    HostVoiceTranscriptionRequest,
+};
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 const OUTBOX_CAPACITY: usize = 256;
 const MAX_CALLBACK_BYTES: usize = 128 * 1024;
 const MAX_TRANSCRIPTION_REQUEST_BYTES: usize = 12 * 1024 * 1024;
+const MAX_VOICE_CALLBACK_BYTES: usize = 12 * 1024 * 1024;
 const MAX_ACTIVE_HOST_CALLBACKS: usize = 16;
 const MAX_CONTROLLER_PAYLOAD_BYTES: usize = 1024 * 1024;
 
@@ -388,6 +394,114 @@ impl HostChannels {
         });
         wait.await
             .map_err(|_| Error::failed("transcription callback was interrupted"))?
+    }
+
+    /// Transcribe audio while preserving its authenticated channel-turn scope.
+    pub async fn transcribe_voice(
+        &self,
+        request: HostVoiceTranscriptionRequest,
+    ) -> Result<HostTranscriptionResult> {
+        self.call_host_voice(
+            host_methods::TRANSCRIBE_VOICE,
+            request,
+            MAX_TRANSCRIPTION_REQUEST_BYTES,
+            MAX_CALLBACK_BYTES,
+        )
+        .await
+    }
+
+    /// Synthesize speech through the host for a scoped channel turn.
+    pub async fn synthesize_speech(
+        &self,
+        request: HostSpeechSynthesisRequest,
+    ) -> Result<HostSpeechSynthesisResult> {
+        let result: HostSpeechSynthesisResult = self
+            .call_host_voice(
+                host_methods::SYNTHESIZE_SPEECH,
+                request,
+                MAX_CALLBACK_BYTES,
+                MAX_VOICE_CALLBACK_BYTES,
+            )
+            .await?;
+        if result.audio_base64.trim().is_empty() || result.mime_type.trim().is_empty() {
+            return Err(Error::failed(
+                "voice callback returned unusable speech audio",
+            ));
+        }
+        Ok(result)
+    }
+
+    /// Store host-produced or provider-received audio under its scoped identity.
+    pub async fn store_voice_media(
+        &self,
+        request: HostStoreVoiceMediaRequest,
+    ) -> Result<HostStoreVoiceMediaResult> {
+        self.call_host_voice(
+            host_methods::STORE_VOICE_MEDIA,
+            request,
+            MAX_VOICE_CALLBACK_BYTES,
+            MAX_CALLBACK_BYTES,
+        )
+        .await
+    }
+
+    /// Ask the host for the authoritative spoken-reply policy for one turn.
+    pub async fn get_voice_reply_policy(
+        &self,
+        request: HostVoiceReplyPolicyRequest,
+    ) -> Result<HostVoiceReplyPolicy> {
+        self.call_host_voice(
+            host_methods::GET_VOICE_REPLY_POLICY,
+            request,
+            MAX_CALLBACK_BYTES,
+            MAX_CALLBACK_BYTES,
+        )
+        .await
+    }
+
+    async fn call_host_voice<Request, Response>(
+        &self,
+        method: &'static str,
+        request: Request,
+        request_limit: usize,
+        response_limit: usize,
+    ) -> Result<Response>
+    where
+        Request: serde::Serialize + Send + 'static,
+        Response: serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
+    {
+        if serde_json::to_vec(&request).map_or(true, |bytes| bytes.len() > request_limit) {
+            return Err(Error::failed("voice callback request exceeds byte limit"));
+        }
+        let publication = self.owner.publication.lock().await;
+        if self.owner.terminal.load(Ordering::SeqCst) {
+            return Err(Error::failed("callback consumer is closed"));
+        }
+        if self.owner.active_callbacks.fetch_add(1, Ordering::SeqCst) >= MAX_ACTIVE_HOST_CALLBACKS {
+            self.owner.active_callbacks.fetch_sub(1, Ordering::SeqCst);
+            return Err(Error::failed("too many active voice callbacks"));
+        }
+        let owner = self.owner.clone();
+        let connection = self.connection.clone();
+        let object_path = self.object_path.clone();
+        let (reply, wait) = oneshot::channel();
+        drop(publication);
+        tokio::spawn(async move {
+            let _active = ActiveHostCallback(owner);
+            let result = async {
+                let proxy = connection.proxy(HOST_BUS_NAME, object_path.as_ref(), HOST_BUS_NAME)?;
+                let response: Response = proxy.call(method, request).await?;
+                if serde_json::to_vec(&response).map_or(true, |bytes| bytes.len() > response_limit)
+                {
+                    return Err(Error::failed("voice callback response exceeds byte limit"));
+                }
+                Ok(response)
+            }
+            .await;
+            let _ = reply.send(result);
+        });
+        wait.await
+            .map_err(|_| Error::failed("voice callback was interrupted"))?
     }
 
     /// Invoke one bounded host-owned credential, persistence, or managed API

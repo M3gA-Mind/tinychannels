@@ -880,6 +880,122 @@ async fn feed_output_returns_prior_and_current_receipts_when_output_event_callba
 }
 
 #[tokio::test]
+async fn feed_output_retries_failed_callbacks_without_repeating_typed_delivery() {
+    let (replies, callback) = fixture(false).await;
+    let sender = Sender::new(replies.host.clone());
+    let scope = OutputScope {
+        handle: "handle-1".into(),
+        channel: "discord:fixture".into(),
+        turn_id: Some("turn-1".into()),
+        channel_ref: None,
+        conversation: None,
+    };
+    let mut reply = ProgressiveReply::new(
+        Arc::new(sender.clone()),
+        "discord:fixture",
+        Default::default(),
+    );
+    let output_replay = Mutex::new(None);
+    let events = vec![ChannelOutputEvent::FinalMessage {
+        text: "done".into(),
+        parts: vec![],
+        receipt: None,
+    }];
+    *callback.failed_output_sequences.lock().await = vec![41];
+
+    let first = apply_output(
+        &mut reply,
+        &sender,
+        &scope,
+        41,
+        events.clone(),
+        &output_replay,
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.output_event_failures, vec![41]);
+    *callback.failed_output_sequences.lock().await = vec![];
+
+    let replay = apply_output(&mut reply, &sender, &scope, 41, events, &output_replay)
+        .await
+        .unwrap();
+    assert!(replay.output_event_failures.is_empty());
+    assert_eq!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .filter(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
+            .count(),
+        1,
+        "replaying an accepted batch must not repeat typed delivery"
+    );
+    assert_eq!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .filter(|request| matches!(request, ProgressiveTransportRequest::OutputEvent { .. }))
+            .count(),
+        2,
+        "replay must retry the failed observation callback"
+    );
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn replayed_feed_output_retries_only_failed_observation_callbacks() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    *callback.failed_output_sequences.lock().await = vec![40];
+    let event = ChannelOutputEvent::TextDelta {
+        text: "once".into(),
+        iteration: Some(1),
+    };
+    let request = || ProgressiveCommand::FeedOutput {
+        handle: handle.clone(),
+        turn_id: Some("turn-1".into()),
+        channel_ref: None,
+        conversation: None,
+        sequence: 40,
+        events: vec![event.clone()],
+    };
+
+    let ProgressiveResult::OutputUpdated {
+        output_event_failures,
+        ..
+    } = replies.execute(request()).await.unwrap()
+    else {
+        panic!("expected the first callback failure to be reported");
+    };
+    assert_eq!(output_event_failures, vec![40]);
+    *callback.failed_output_sequences.lock().await = vec![];
+
+    assert_eq!(
+        replies.execute(request()).await.unwrap(),
+        ProgressiveResult::Updated
+    );
+    assert_eq!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .filter(|request| matches!(request, ProgressiveTransportRequest::OutputEvent { .. }))
+            .count(),
+        2,
+        "the retry must re-run only the failed output callback"
+    );
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn feed_output_retries_reuse_the_previous_result_without_reapplying_deltas() {
     let (replies, callback) = fixture(false).await;
     let handle = open(&replies).await;
@@ -1269,6 +1385,81 @@ async fn rejected_output_keeps_the_previous_progressive_sender_scope() {
         panic!("expected a typing request")
     };
     assert_eq!(turn_id.as_deref(), Some("old-turn"));
+}
+
+#[tokio::test]
+async fn feed_output_rejects_scope_changes_after_first_accepted_batch() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    let first_scope = tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Thread,
+        id: "conversation-1".into(),
+        ..Default::default()
+    };
+    let event = || ChannelOutputEvent::TextDelta {
+        text: "draft".into(),
+        iteration: Some(1),
+    };
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            turn_id: Some("turn-1".into()),
+            channel_ref: None,
+            conversation: Some(Box::new(first_scope)),
+            sequence: 1,
+            events: vec![event()],
+        })
+        .await
+        .unwrap();
+
+    let changed = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            turn_id: Some("turn-2".into()),
+            channel_ref: Some(Box::new(tinychannels_bus::ChannelRef {
+                id: "channel-2".into(),
+                account_id: Some("account-2".into()),
+            })),
+            conversation: Some(Box::new(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Thread,
+                id: "conversation-2".into(),
+                ..Default::default()
+            })),
+            sequence: 2,
+            events: vec![event()],
+        })
+        .await;
+    assert!(
+        changed.is_err(),
+        "a reply handle must retain its first scope"
+    );
+    assert!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .all(|request| match request {
+                ProgressiveTransportRequest::OutputEvent {
+                    turn_id,
+                    channel_ref,
+                    conversation,
+                    ..
+                } => {
+                    turn_id.as_deref() == Some("turn-1")
+                        && channel_ref.is_none()
+                        && conversation
+                            .as_ref()
+                            .is_some_and(|value| value.id == "conversation-1")
+                }
+                _ => true,
+            })
+    );
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    replies.shutdown().await.unwrap();
 }
 
 #[tokio::test]

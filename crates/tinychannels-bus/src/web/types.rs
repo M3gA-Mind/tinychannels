@@ -1,5 +1,31 @@
+use crate::channel::ContentPart;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+/// Host-normalized request for one in-app web chat submission.
+///
+/// The host fills `sender_id` and `command_authorized` after authenticating
+/// the request. Those fields are ignored when deserializing client wire input.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WebChatStart {
+    pub client_id: String,
+    pub thread_id: String,
+    pub request_id: String,
+    pub text: String,
+    pub attachments: Vec<ContentPart>,
+    /// Authenticated user id; the host sets this after session validation.
+    #[serde(skip_deserializing)]
+    pub sender_id: Option<String>,
+    pub sender_name: Option<String>,
+    pub timestamp_unix_ms: Option<u64>,
+    pub queue_mode: QueueMode,
+    pub speak_reply: Option<bool>,
+    pub source: Option<String>,
+    /// Host authorization decision for command execution.
+    #[serde(skip_deserializing)]
+    pub command_authorized: bool,
+}
 
 /// Shared addressing and ordering fields present on historical web events.
 /// Tenant/profile stamps belong to the host and must never cross the wire.
