@@ -2040,14 +2040,45 @@ fn output_scope_accepts_a_hosted_turn_lease_and_rejects_longer_ones() {
     assert!(scope(0).is_err());
 }
 
+#[derive(Default)]
+struct RecordingChannel {
+    sent: Arc<Mutex<Vec<String>>>,
+}
+
+#[allow(deprecated)]
+#[async_trait::async_trait]
+impl tinychannels::Channel for RecordingChannel {
+    fn name(&self) -> &str {
+        "discord"
+    }
+
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        tinychannels_bus::ChannelCapabilities {
+            progressive_edits: true,
+            ..Default::default()
+        }
+    }
+
+    async fn send(&self, message: &tinychannels::SendMessage) -> anyhow::Result<()> {
+        self.sent.lock().await.push(message.content.clone());
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn closing_a_handle_after_a_module_sequenced_final_does_not_announce_a_cancellation() {
-    let (replies, callback) = fixture(true).await;
-    let provider = Running::start_outbound(
-        Arc::new(ProgressiveChannel),
-        Arc::new(Hooks::default()),
-        replies.host.clone(),
-    );
+    let (replies, _callback) = fixture(true).await;
+    let channel = Arc::new(RecordingChannel::default());
+    let sent = channel.sent.clone();
+    let provider =
+        Running::start_outbound(channel, Arc::new(Hooks::default()), replies.host.clone());
     replies
         .running
         .lock()
@@ -2075,15 +2106,11 @@ async fn closing_a_handle_after_a_module_sequenced_final_does_not_announce_a_can
             handle: handle.clone(),
         })
         .await;
-    let requests = callback.requests.lock().await;
+    let sent = sent.lock().await.clone();
     assert!(
-        requests.iter().all(|request| !matches!(
-            request,
-            ProgressiveTransportRequest::Send { content, .. } if content.contains("Cancelled")
-        )),
-        "a completed reply must not be followed by a cancellation notice: {requests:?}"
+        sent.iter().all(|content| !content.contains("Cancelled")),
+        "a completed reply must not be followed by a cancellation notice: {sent:?}"
     );
-    drop(requests);
     replies.shutdown().await.unwrap();
     provider.stop().await.unwrap();
 }
