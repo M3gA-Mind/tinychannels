@@ -980,6 +980,10 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                 self.replies
                     .execute(ProgressiveCommand::FeedOutput {
                         handle: handle.clone(),
+                        turn_id: None,
+                        channel_ref: None,
+                        conversation: None,
+                        sequence: None,
                         events: vec![ChannelOutputEvent::TextDelta {
                             text: "managed draft".into(),
                             iteration: Some(1),
@@ -1003,6 +1007,10 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                     .replies
                     .execute(ProgressiveCommand::FeedOutput {
                         handle: handle.clone(),
+                        turn_id: None,
+                        channel_ref: None,
+                        conversation: None,
+                        sequence: None,
                         events: vec![ChannelOutputEvent::FinalMessage {
                             text: "managed draft finalized".into(),
                             parts: Vec::new(),

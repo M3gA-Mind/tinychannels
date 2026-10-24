@@ -238,14 +238,39 @@ pub enum ProgressiveCommand {
         /// Host-owned output lease in milliseconds.
         lifetime_ms: u64,
     },
+    /// Open a handle bound to one provider target and host-authorized turn.
+    /// Subsequent `FeedOutput` requests carry a host-assigned `sequence` and
+    /// must repeat the same turn scope.
+    OpenScoped {
+        channel: String,
+        turn_id: Option<String>,
+        channel_ref: Option<Box<crate::channel::ChannelRef>>,
+        conversation: Option<Box<crate::channel::ConversationRef>>,
+    },
     Feed {
         handle: String,
         events: Vec<ProgressiveEvent>,
     },
     /// Feed canonical output events without converting them through the v1
     /// four-variant progressive projection.
+    ///
+    /// The optional scope fields assert the handle's turn scope: a request
+    /// whose scope differs from the scope bound at open (or, for an unscoped
+    /// `Open`, by the first accepted batch) is rejected. `sequence` is the
+    /// first event's stable position within `turn_id`, so a host can retry the
+    /// same batch without changing its delivery identity. It is required for
+    /// handles from `Open`/`OpenScoped` and must be absent for module-sequenced
+    /// handles from `OpenOutput`/`OpenHostedOutput`.
     FeedOutput {
         handle: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        channel_ref: Option<Box<crate::channel::ChannelRef>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conversation: Option<Box<crate::channel::ConversationRef>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sequence: Option<u64>,
         events: Vec<ChannelOutputEvent>,
     },
     Finish {
@@ -265,6 +290,15 @@ pub enum ProgressiveResult {
         handle: String,
     },
     Updated,
+    /// Canonical output events were observed; typed terminal delivery results
+    /// are returned in event order and retain receipts and partial failures.
+    /// Failed output-event callbacks are reported by sequence without
+    /// discarding provider delivery results.
+    OutputUpdated {
+        deliveries: Vec<ProgressiveTransportResult>,
+        #[serde(default)]
+        output_event_failures: Vec<u64>,
+    },
     Closed,
     /// V2 terminal delivery acknowledgement; carries every known platform
     /// receipt and any partial-send failure from the provider.
@@ -381,7 +415,7 @@ pub enum ProgressiveTransportRequest {
 }
 
 /// Typed transport facts preserve the module's existing recovery rules.
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum ProgressiveTransportResult {
     /// Observation callback accepted the event; this does not acknowledge a

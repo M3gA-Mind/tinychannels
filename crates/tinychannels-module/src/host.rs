@@ -458,8 +458,15 @@ impl HostChannels {
         &self,
         request: tinychannels_bus::HostSpeechSynthesisRequest,
     ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
-        self.voice_callback(host_methods::SYNTHESIZE_SPEECH, request)
-            .await
+        let result: tinychannels_bus::HostSpeechSynthesisResult = self
+            .voice_callback(host_methods::SYNTHESIZE_SPEECH, request)
+            .await?;
+        if result.audio_base64.trim().is_empty() || result.mime_type.trim().is_empty() {
+            return Err(Error::failed(
+                "voice callback returned unusable speech audio",
+            ));
+        }
+        Ok(result)
     }
 
     /// Persist audio through the host and receive its opaque durable reference.

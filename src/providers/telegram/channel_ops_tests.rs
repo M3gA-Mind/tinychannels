@@ -3674,6 +3674,48 @@ async fn listener_projects_authorized_callback_without_provider_update_id() {
     assert_eq!(server.received_requests().await.unwrap().len(), 4);
 }
 
+#[tokio::test]
+async fn a_deduplicated_update_still_advances_the_offset() {
+    let server = mock_api().await;
+    // Update 20 was already seen, so it is skipped; the next poll must still
+    // confirm it, or Telegram re-sends it forever.
+    mount_get_updates_once(
+        &server,
+        1,
+        updates(serde_json::json!([{ "update_id": 20 }])),
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path(api_path("getUpdates")))
+        .respond_with(updates(serde_json::json!([])))
+        .with_priority(10)
+        .mount(&server)
+        .await;
+
+    let ch = Arc::new(fast_backoff(channel_for(&server, &["alice"])));
+    assert!(ch.track_update_id(20));
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let listener = tokio::spawn({
+        let ch = ch.clone();
+        async move { listen_loop(&ch, tx).await }
+    });
+    let polls = tokio::time::timeout(GUARD, async {
+        loop {
+            let polls = json_bodies(&server, "getUpdates").await;
+            if polls.len() >= 2 {
+                return polls;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("polled twice");
+    listener.abort();
+
+    assert_eq!(polls[0]["offset"], 0);
+    assert_eq!(polls[1]["offset"], 21, "{polls:?}");
+}
+
 #[derive(Default)]
 struct RejectingInboundEvents(AtomicUsize);
 

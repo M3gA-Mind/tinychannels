@@ -21,7 +21,7 @@ crate-type = ["rlib", "cdylib"]
 # fails as `NotConfigured`. Hosts that link the module only to exercise the
 # other providers (for example a test fixture) can opt out with
 # `default-features = false`.
-tinychannels = { path = "../..", features = ["email", "lark", "relay-websocket"] }
+tinychannels = { path = "../..", default-features = false, features = ["email", "lark", "relay-websocket"] }
 # The transport-free vocabulary shared with the host.
 tinychannels-bus = { path = "../tinychannels-bus" }
 tinychannels-runtime = { path = "../tinychannels-runtime" }

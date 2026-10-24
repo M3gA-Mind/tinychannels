@@ -1,39 +1,16 @@
 //! Normalization of a web `chat:start` request into the v2 inbound envelope.
 
 use crate::channel::ChannelSendError;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tinychannels_bus::channel::VoiceTranscriptState;
 use tinychannels_bus::channel::{
     AccessContext, ChannelInboundEnvelope, ChannelRef, ContentPart, ConversationKind,
     ConversationRef, MediaReference, SendErrorKind, SenderDmDecision, SenderRef,
 };
-use tinychannels_bus::web::QueueMode;
+use tinychannels_bus::web::WebChatStart;
 
 /// Channel id the in-app chat is registered under.
 pub const WEB_CHANNEL_ID: &str = "web";
-
-/// One user submission from a web surface (Socket.IO `chat:start`, the
-/// `channel.web_chat` RPC, the TUI).
-///
-/// Attachments are typed [`ContentPart`]s, so images, files, audio and voice
-/// notes arrive as structured content instead of text markers.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct WebChatStart {
-    pub client_id: String,
-    pub thread_id: String,
-    pub request_id: String,
-    pub text: String,
-    pub attachments: Vec<ContentPart>,
-    /// Authenticated user id; falls back to `client_id` for anonymous surfaces.
-    pub sender_id: Option<String>,
-    pub sender_name: Option<String>,
-    pub timestamp_unix_ms: Option<u64>,
-    pub queue_mode: QueueMode,
-    pub speak_reply: Option<bool>,
-    pub source: Option<String>,
-}
 
 fn bad(message: &str) -> ChannelSendError {
     ChannelSendError {
@@ -66,8 +43,13 @@ pub fn normalize_chat_start(
     start: &WebChatStart,
     account_id: Option<&str>,
 ) -> Result<ChannelInboundEnvelope, ChannelSendError> {
-    if start.thread_id.trim().is_empty() || start.request_id.trim().is_empty() {
-        return Err(bad("web chat start requires thread_id and request_id"));
+    if start.client_id.trim().is_empty()
+        || start.thread_id.trim().is_empty()
+        || start.request_id.trim().is_empty()
+    {
+        return Err(bad(
+            "web chat start requires client_id, thread_id and request_id",
+        ));
     }
     let mut parts = Vec::with_capacity(start.attachments.len() + 1);
     let mut media = Vec::new();
@@ -95,10 +77,12 @@ pub fn normalize_chat_start(
     if parts.is_empty() {
         return Err(bad("web chat start has no text or attachments"));
     }
-    let sender_id = start
+    let authenticated_sender_id = start
         .sender_id
-        .clone()
-        .filter(|id| !id.trim().is_empty())
+        .as_deref()
+        .filter(|id| !id.trim().is_empty());
+    let sender_id = authenticated_sender_id
+        .map(str::to_owned)
         .unwrap_or_else(|| start.client_id.clone());
     Ok(ChannelInboundEnvelope {
         channel: ChannelRef {
@@ -123,7 +107,7 @@ pub fn normalize_chat_start(
         parts,
         access: AccessContext {
             dm_decision: SenderDmDecision::Allow,
-            command_authorized: true,
+            command_authorized: start.command_authorized && authenticated_sender_id.is_some(),
             ..Default::default()
         },
         media,

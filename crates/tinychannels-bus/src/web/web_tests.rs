@@ -25,6 +25,25 @@ fn assert_historical_fixture_round_trips(fixture: &str) {
     assert_eq!(serde_json::to_value(event).unwrap(), historical);
 }
 
+#[test]
+fn web_chat_start_is_a_host_authoritative_bus_request() {
+    let parsed: WebChatStart = serde_json::from_str(
+        r#"{"clientId":"browser","threadId":"thread","requestId":"request","text":"hello","senderId":"forged","commandAuthorized":true}"#,
+    )
+    .unwrap();
+    assert_eq!(parsed.client_id, "browser");
+    assert_eq!(parsed.sender_id, None);
+    assert!(!parsed.command_authorized);
+
+    let host_request = WebChatStart {
+        sender_id: Some("user-1".into()),
+        command_authorized: true,
+        ..parsed
+    };
+    assert_eq!(host_request.sender_id.as_deref(), Some("user-1"));
+    assert!(host_request.command_authorized);
+}
+
 fn normalize_line_endings(contents: &str) -> String {
     contents.replace("\r\n", "\n")
 }

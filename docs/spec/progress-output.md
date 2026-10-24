@@ -48,9 +48,21 @@ Typed provider sends include a stable per-turn scoped sequence key. A terminal
 feed is fingerprinted before dispatch; an identical retry waits for or returns
 the retained terminal result without sending again, while changed terminal
 content is rejected. `Close` and shutdown remove ephemeral state without
-sending a synthetic cancellation message. Nonterminal `FeedOutput` has no
+sending a synthetic cancellation message. On a module-sequenced handle
+(`OpenOutput`/`OpenHostedOutput`), nonterminal `FeedOutput` has no
 caller-supplied batch identity or retained replay contract: a repeated call
-after a lost reply is a new delivery and must not be blindly retried. A host
+after a lost reply is a new delivery and must not be blindly retried. Such a
+handle rejects a host `sequence`, and any `turnId`, `channelRef` or
+`conversation` the request asserts must equal the scope fixed at open.
+
+Handles from `Open`/`OpenScoped` are host-sequenced instead: every
+`FeedOutput` carries `sequence`, the first event's stable position in the
+turn, and repeats the turn scope bound at open (or by the first accepted batch
+of an unscoped `Open`); a changed scope is rejected. Resending the last batch
+with the same sequence and events returns its retained `OutputUpdated` result
+and retries only the failed observation callbacks; a reused sequence with
+different events, or a stale one, is rejected. Such a handle starts typing only
+once a scoped batch has bound its transport scope. A host
 may retry the exact typed transport request with its stable key, but it must
 reconcile ambiguous nonterminal feed results before resubmitting events. This
 is in-process terminal retention, not crash recovery. Scoped opens currently
