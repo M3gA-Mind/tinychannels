@@ -964,13 +964,43 @@ impl TelegramChannel {
             .get("message_thread_id")
             .and_then(serde_json::Value::as_i64)
             .map(|id| id.to_string());
+        let audio_base64 = BASE64.encode(&bytes);
+        let mime_type = voice
+            .mime_type
+            .clone()
+            .unwrap_or_else(|| "audio/ogg".into());
+        let scope = tinychannels_bus::HostVoiceScope {
+            configured_instance: String::new(),
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: None,
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: match chat.get("type").and_then(serde_json::Value::as_str) {
+                    Some("private") => tinychannels_bus::ConversationKind::Dm,
+                    Some("group" | "supergroup") => tinychannels_bus::ConversationKind::Group,
+                    Some("channel") => tinychannels_bus::ConversationKind::Channel,
+                    _ => tinychannels_bus::ConversationKind::Unknown,
+                },
+                id: chat_id,
+                thread_id: None,
+                topic_id,
+                ..Default::default()
+            },
+            // Match ChannelInboundEnvelope.message_id so the host's
+            // scoped read/STT callbacks resolve the same turn.
+            turn_id: message.id.clone(),
+        };
+        let transcription = crate::host::TranscriptionRequest {
+            audio_base64: audio_base64.clone(),
+            mime_type: Some(mime_type.clone()),
+            file_name: Some(file_name.clone()),
+            language: None,
+        };
         let result = store
             .store_voice(crate::host::VoiceMediaRequest {
-                audio_base64: BASE64.encode(&bytes),
-                mime_type: voice
-                    .mime_type
-                    .clone()
-                    .unwrap_or_else(|| "audio/ogg".into()),
+                audio_base64,
+                mime_type,
                 codec: Some("ogg_opus".into()),
                 duration_ms: source
                     .get("voice")
@@ -979,30 +1009,7 @@ impl TelegramChannel {
                     .map(|seconds| seconds.saturating_mul(1000)),
                 file_name: Some(file_name),
                 direction: tinychannels_bus::HostVoiceMediaDirection::Inbound,
-                scope: tinychannels_bus::HostVoiceScope {
-                    configured_instance: String::new(),
-                    channel: tinychannels_bus::ChannelRef {
-                        id: "telegram".into(),
-                        account_id: None,
-                    },
-                    conversation: tinychannels_bus::ConversationRef {
-                        kind: match chat.get("type").and_then(serde_json::Value::as_str) {
-                            Some("private") => tinychannels_bus::ConversationKind::Dm,
-                            Some("group" | "supergroup") => {
-                                tinychannels_bus::ConversationKind::Group
-                            }
-                            Some("channel") => tinychannels_bus::ConversationKind::Channel,
-                            _ => tinychannels_bus::ConversationKind::Unknown,
-                        },
-                        id: chat_id,
-                        thread_id: None,
-                        topic_id,
-                        ..Default::default()
-                    },
-                    // Match ChannelInboundEnvelope.message_id so the host's
-                    // scoped read/STT callbacks resolve the same turn.
-                    turn_id: message.id.clone(),
-                },
+                scope: scope.clone(),
             })
             .await?;
         let mut media = result.media;
@@ -1028,14 +1035,25 @@ impl TelegramChannel {
                 .as_u64()
                 .map(|s| s.saturating_mul(1000))
         });
-        Ok(Some(tinychannels_bus::VoiceNote {
+        let mut note = tinychannels_bus::VoiceNote {
             media,
             codec: Some("ogg_opus".into()),
             duration_ms,
             waveform: None,
             push_to_talk: true,
             transcript: None,
-        }))
+        };
+        // The host owns speech-to-text; keep the stored note even when it is
+        // unavailable so the turn can still say the voice could not be read.
+        let status = crate::host::enrich_voice_note(
+            &mut note,
+            scope,
+            Some(transcription),
+            self.transcriber.clone(),
+        )
+        .await;
+        tracing::debug!(?status, "[telegram] voice note enriched");
+        Ok(Some(note))
     }
 
     /// A Telegram user's display name: first and last name, else their

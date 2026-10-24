@@ -222,12 +222,20 @@ impl Hooks {
             .unwrap_or_else(|e| e.into_inner()) = media_account_scope.clone();
         ChannelHostBuilder::new()
             .lifecycle(self.clone())
-            .transcriber(Arc::new(ModuleTranscriber(callbacks.clone())))
+            .transcriber(Arc::new(ModuleTranscriber(
+                callbacks.clone(),
+                Some(configured_instance.clone()),
+            )))
             .media_repository(Arc::new(ModuleMediaRepository(
                 callbacks.clone(),
                 configured_instance.clone(),
-                media_account_scope,
+                media_account_scope.clone(),
             )))
+            .voice_media_store(Arc::new(ModuleVoiceMediaStore(ModuleMediaRepository(
+                callbacks.clone(),
+                configured_instance.clone(),
+                media_account_scope,
+            ))))
             .events(Arc::new(ModuleEvents(
                 callbacks.clone(),
                 configured_instance,
@@ -241,6 +249,49 @@ impl Hooks {
         for hook in hooks {
             hook().await;
         }
+    }
+}
+
+/// Persists inbound/outbound voice through the module's own scoped media
+/// repository; the host holds no voice store.
+pub(crate) struct ModuleVoiceMediaStore(pub(crate) ModuleMediaRepository);
+
+#[async_trait::async_trait]
+impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
+    async fn store_voice(
+        &self,
+        request: tinychannels::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        use base64::Engine;
+        const MAX_VOICE_BYTES: usize = 8 * 1024 * 1024;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(request.audio_base64.as_bytes())
+            .map_err(|_| anyhow::anyhow!("voice media payload is invalid"))?;
+        if bytes.is_empty() || bytes.len() > MAX_VOICE_BYTES {
+            anyhow::bail!("voice media exceeds the configured size limit");
+        }
+        let media = <ModuleMediaRepository as tinychannels::host::MediaRepository>::store_media(
+            &self.0,
+            tinychannels::host::MediaStoreRequest {
+                metadata: tinychannels::host::MediaMetadata {
+                    scope: request.scope,
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    content_type: request.mime_type,
+                    file_name: request.file_name,
+                    duration_ms: request.duration_ms,
+                    codec: request.codec,
+                    voice_direction: Some(request.direction),
+                    dedupe_key: None,
+                    max_bytes: MAX_VOICE_BYTES as u64,
+                },
+                bytes,
+            },
+        )
+        .await?;
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media,
+            accessible_url: None,
+        })
     }
 }
 
@@ -357,7 +408,10 @@ impl tinychannels::host::AllowlistStore for ModuleAllowlist {
     }
 }
 
-struct ModuleTranscriber(HostChannels);
+/// Host STT bridge. With a configured instance the module is the authenticated
+/// source of the scope's provider identity, as for media, so a provider that
+/// knows only conversation and turn still produces a scope the host accepts.
+struct ModuleTranscriber(HostChannels, Option<String>);
 
 #[async_trait::async_trait]
 impl tinychannels::host::Transcriber for ModuleTranscriber {
@@ -384,9 +438,14 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
 impl ModuleTranscriber {
     async fn transcribe_with_scope(
         &self,
-        scope: Option<tinychannels_bus::HostVoiceScope>,
+        mut scope: Option<tinychannels_bus::HostVoiceScope>,
         request: tinychannels::host::TranscriptionRequest,
     ) -> anyhow::Result<tinychannels::host::TranscriptionResult> {
+        if let (Some(scope), Some(instance)) = (scope.as_mut(), self.1.as_deref()) {
+            scope.configured_instance = instance.to_owned();
+            scope.channel.id = tinychannels_bus::provider_id(instance).to_owned();
+            scope.channel.account_id = Some(instance.to_owned());
+        }
         let result = self
             .0
             .transcribe(HostTranscriptionRequest {
