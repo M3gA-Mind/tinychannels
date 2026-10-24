@@ -743,6 +743,61 @@
       ]
     },
     {
+      "description": "The turn started summarizing earlier conversation to fit the context\nwindow; the next `iteration_start` ends it.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "context_compacting"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
       "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
       "type": "object",
       "properties": {
