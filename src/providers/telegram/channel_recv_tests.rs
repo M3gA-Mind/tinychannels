@@ -645,6 +645,35 @@ async fn voice_update_parser_preserves_caption_without_claiming_transcription() 
 }
 
 #[tokio::test]
+async fn ingested_voice_note_carries_the_host_transcript() {
+    let server = mock_api().await;
+    mount_voice_download(&server, vec![1, 2, 3]).await;
+    let stt = FixedTranscriber::ok("  spoken words  ");
+    let channel = channel_for(&server, &["alice"])
+        .with_voice_media_store(Arc::new(RecordingVoiceStore::default()))
+        .with_transcriber(stt.clone());
+    let update = voice_update("private", None, Some(3));
+    let message = channel
+        .parse_update_message_or_voice(&update)
+        .await
+        .expect("voice message parsed");
+
+    let note = channel
+        .voice_note_for_ingress(&update, &message)
+        .await
+        .unwrap()
+        .expect("durable voice reference");
+
+    let transcript = note.transcript.expect("transcript attached at ingress");
+    assert_eq!(
+        transcript.state,
+        tinychannels_bus::VoiceTranscriptState::Complete
+    );
+    assert_eq!(transcript.text.trim(), "spoken words");
+    assert_eq!(stt.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn stored_voice_scope_matches_normalized_ingress_turn_and_conversation() {
     let server = mock_api().await;
     mount_voice_download(&server, vec![1, 2, 3]).await;
