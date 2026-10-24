@@ -2084,11 +2084,29 @@ async fn closing_a_handle_after_a_module_sequenced_final_does_not_announce_a_can
         .lock()
         .await
         .insert("discord".into(), provider.clone());
-    let handle = open(&replies).await;
+    let handle = match replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                ..Default::default()
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "turn-1".into(),
+            lifetime_ms: 60_000,
+        })
+        .await
+        .unwrap()
+    {
+        ProgressiveResult::Opened { handle } => handle,
+        _ => panic!("expected opened handle"),
+    };
     replies
         .execute(ProgressiveCommand::FeedOutput {
             handle: handle.clone(),
-            turn_id: None,
+            turn_id: Some("turn-1".into()),
             channel_ref: None,
             conversation: None,
             sequence: None,
