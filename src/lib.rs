@@ -93,6 +93,7 @@ pub use tinychannels_runtime::channel::{
     build_session_key_for_inbound_envelope, inbound_envelope_from_legacy_message,
     legacy_message_from_inbound_envelope, legacy_message_value_from_outbound_intent,
     outbound_intent_from_legacy_message, outbound_intent_from_send_message,
+    typed_message_from_inbound_envelope,
 };
 #[allow(
     deprecated,

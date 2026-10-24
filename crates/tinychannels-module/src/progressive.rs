@@ -29,6 +29,9 @@ const MAX_CONTENT: usize = 384 * 1024;
 // escaping expands a byte to at most six bytes; retain bounded envelope space.
 const MAX_REQUEST: usize = MAX_CONTENT * 12 + 64 * 1024;
 const TURN_LIFETIME: Duration = Duration::from_secs(180);
+/// Longest lifetime a host-scoped output may be opened with: a hosted turn
+/// lease (an hour) plus its grace, which native turns request.
+const MAX_SCOPED_OUTPUT_LIFETIME: Duration = Duration::from_secs(3_700);
 
 #[derive(Clone)]
 struct Sender {
@@ -1148,7 +1151,7 @@ fn output_scope(
         || conversation.id.trim().is_empty()
         || turn_id.trim().is_empty()
         || lifetime_ms == 0
-        || lifetime_ms > TURN_LIFETIME.as_millis() as u64
+        || lifetime_ms > MAX_SCOPED_OUTPUT_LIFETIME.as_millis() as u64
     {
         return Err(Error::failed("invalid progressive output scope"));
     }

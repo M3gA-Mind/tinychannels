@@ -820,14 +820,32 @@ impl Channels {
                         "inbound envelope identity does not match message",
                     ));
                 }
+                let message = match request.preparation_mode {
+                    tinychannels_bus::module_inbound::ChannelInboundPreparationMode::LegacyText => {
+                        message
+                    }
+                    tinychannels_bus::module_inbound::ChannelInboundPreparationMode::Typed => {
+                        tinychannels::typed_message_from_inbound_envelope(
+                            &envelope,
+                            message.timestamp,
+                        )
+                    }
+                };
                 (message, envelope)
             }
             ChannelInboundSource::Envelope {
                 envelope,
                 timestamp,
             } => (
-                tinychannels::legacy_message_from_inbound_envelope(&envelope, timestamp)
-                    .map_err(|error| BusError::failed(error.to_string()))?,
+                match request.preparation_mode {
+                    tinychannels_bus::module_inbound::ChannelInboundPreparationMode::LegacyText => {
+                        tinychannels::legacy_message_from_inbound_envelope(&envelope, timestamp)
+                            .map_err(|error| BusError::failed(error.to_string()))?
+                    }
+                    tinychannels_bus::module_inbound::ChannelInboundPreparationMode::Typed => {
+                        tinychannels::typed_message_from_inbound_envelope(&envelope, timestamp)
+                    }
+                },
                 envelope,
             ),
         };

@@ -2017,3 +2017,25 @@ async fn host_sequenced_output_requires_a_batch_sequence() {
     );
     replies.shutdown().await.unwrap();
 }
+
+#[test]
+fn output_scope_accepts_a_hosted_turn_lease_and_rejects_longer_ones() {
+    let scope = |lifetime_ms| {
+        output_scope(
+            tinychannels_bus::ChannelRef {
+                id: "bot".into(),
+                ..Default::default()
+            },
+            tinychannels_bus::ConversationRef {
+                id: "room".into(),
+                ..Default::default()
+            },
+            "turn-1".into(),
+            lifetime_ms,
+        )
+    };
+    assert!(scope(3_660_000).is_ok(), "a one-hour turn lease must open");
+    assert!(scope(3_700_000).is_ok());
+    assert!(scope(3_700_001).is_err());
+    assert!(scope(0).is_err());
+}
