@@ -2786,6 +2786,24 @@ async fn inbound_preparation_refuses_mismatched_identity_oversized_payload_and_s
             .await
             .is_err()
     );
+    // A typed preparation keeps the envelope's content instead of flattening it.
+    let typed = PrepareChannelInboundRequest {
+        source: ChannelInboundSource::Legacy {
+            message: tinychannels_bus::ChannelMessage {
+                channel: "discord".into(),
+                id: "typed".into(),
+                sender: "user".into(),
+                reply_target: "room".into(),
+                content: "hello".into(),
+                ..Default::default()
+            },
+            envelope: None,
+        },
+        namespace: "tenant".into(),
+        session_policy: Default::default(),
+        preparation_mode: tinychannels_bus::module_inbound::ChannelInboundPreparationMode::Typed,
+    };
+    assert!(service.prepare_channel_inbound(typed).await.is_ok());
     service.shutdown().await.unwrap();
     assert!(service.prepare_channel_inbound(request).await.is_err());
     assert!(service.prepare_channel_identity(identity).await.is_err());
