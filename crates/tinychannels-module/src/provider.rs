@@ -50,57 +50,131 @@ async fn dispatch_interaction(
             recipient,
             interval_secs,
         } => {
-            if interval_secs == 0 || interval_secs > MAX_TYPING_REFRESH_INTERVAL_SECS {
-                return Err(Error::failed(
-                    "typing refresh interval is outside its limit",
-                ));
-            }
-            if typing.len() >= MAX_TYPING_REFRESH_RECIPIENTS {
-                return Err(Error::failed("typing refresh capacity is full"));
-            }
-            let (cancel, mut canceled) = watch::channel(false);
             let refresh_channel = Arc::clone(&channel);
-            let refresh_recipient = recipient.clone();
-            let interval = Duration::from_secs(interval_secs);
-            let task = tokio::spawn(async move {
-                loop {
-                    tokio::select! {
-                        biased;
-                        _ = async { let _ = canceled.wait_for(|value| *value).await; } => break,
-                        _ = tokio::time::sleep(interval) => {
-                            let refresh = refresh_channel.start_typing(&refresh_recipient);
-                            tokio::select! {
-                                biased;
-                                _ = async { let _ = canceled.wait_for(|value| *value).await; } => break,
-                                result = refresh => if let Err(error) = result {
-                                tracing::debug!(channel = refresh_channel.name(), "typing refresh failed: {error}");
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-            let handle = loop {
-                let candidate = uuid::Uuid::new_v4().simple().to_string();
-                if !typing.contains_key(&candidate) {
-                    break candidate;
-                }
-            };
-            typing.insert(
-                handle.clone(),
-                TypingRefreshTask {
-                    recipient,
-                    cancel,
-                    task,
-                },
-            );
-            Ok(tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle })
+            let name = channel.name();
+            start_typing_refresh(typing, recipient, interval_secs, name, move |recipient| {
+                let channel = Arc::clone(&refresh_channel);
+                Box::pin(async move {
+                    channel
+                        .start_typing(&recipient)
+                        .await
+                        .map_err(|error| error.to_string())
+                })
+            })
         }
         Op::StopTypingRefresh { handle } => {
             stop_typing_refresh(&handle, typing).await;
             Ok(tinychannels_bus::ChannelInteractionResult::Completed)
         }
         interaction => crate::interaction::dispatch(channel.as_ref(), interaction).await,
+    }
+}
+
+type TypingStartFuture = std::pin::Pin<Box<dyn std::future::Future<Output = std::result::Result<(), String>> + Send>>;
+
+/// Spawn the module-owned refresh task for one recipient. `start` re-issues the
+/// provider typing action; the task is cancelled and joined by
+/// `StopTypingRefresh`.
+fn start_typing_refresh(
+    typing: &mut TypingRefreshes,
+    recipient: String,
+    interval_secs: u64,
+    name: String,
+    start: impl Fn(String) -> TypingStartFuture + Send + 'static,
+) -> Result<tinychannels_bus::ChannelInteractionResult> {
+    if interval_secs == 0 || interval_secs > MAX_TYPING_REFRESH_INTERVAL_SECS {
+        return Err(Error::failed(
+            "typing refresh interval is outside its limit",
+        ));
+    }
+    if typing.len() >= MAX_TYPING_REFRESH_RECIPIENTS {
+        return Err(Error::failed("typing refresh capacity is full"));
+    }
+    let (cancel, mut canceled) = watch::channel(false);
+    let refresh_recipient = recipient.clone();
+    let interval = Duration::from_secs(interval_secs);
+    let task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                biased;
+                _ = async { let _ = canceled.wait_for(|value| *value).await; } => break,
+                _ = tokio::time::sleep(interval) => {
+                    let refresh = start(refresh_recipient.clone());
+                    tokio::select! {
+                        biased;
+                        _ = async { let _ = canceled.wait_for(|value| *value).await; } => break,
+                        result = refresh => if let Err(error) = result {
+                            tracing::debug!(channel = %name, "typing refresh failed: {error}");
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let handle = loop {
+        let candidate = uuid::Uuid::new_v4().simple().to_string();
+        if !typing.contains_key(&candidate) {
+            break candidate;
+        }
+    };
+    typing.insert(
+        handle.clone(),
+        TypingRefreshTask {
+            recipient,
+            cancel,
+            task,
+        },
+    );
+    Ok(tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle })
+}
+
+/// Typing interactions for a factory-built adapter, through its typing port.
+/// `None` when the interaction is not a typing operation.
+async fn dispatch_adapter_typing(
+    port: &Arc<dyn tinychannels::channel::ChannelTyping>,
+    name: &str,
+    interaction: &tinychannels_bus::ChannelInteraction,
+    typing: &mut TypingRefreshes,
+) -> Option<Result<tinychannels_bus::ChannelInteractionResult>> {
+    use tinychannels_bus::ChannelInteraction as Op;
+    match interaction {
+        Op::StartTyping { recipient } => Some(
+            port.start_typing(recipient)
+                .await
+                .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
+                .map_err(|_| Error::failed("provider typing start failed")),
+        ),
+        Op::StopTyping { recipient } => Some(
+            port.stop_typing(recipient)
+                .await
+                .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
+                .map_err(|_| Error::failed("provider typing stop failed")),
+        ),
+        Op::StartTypingRefresh {
+            recipient,
+            interval_secs,
+        } => {
+            let port = Arc::clone(port);
+            Some(start_typing_refresh(
+                typing,
+                recipient.clone(),
+                *interval_secs,
+                name.to_owned(),
+                move |recipient| {
+                    let port = Arc::clone(&port);
+                    Box::pin(async move {
+                        port.start_typing(&recipient)
+                            .await
+                            .map_err(|error| error.message)
+                    })
+                },
+            ))
+        }
+        Op::StopTypingRefresh { handle } => {
+            stop_typing_refresh(handle, typing).await;
+            Some(Ok(tinychannels_bus::ChannelInteractionResult::Completed))
+        }
+        _ => None,
     }
 }
 
