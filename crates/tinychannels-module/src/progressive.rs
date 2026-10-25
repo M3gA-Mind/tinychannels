@@ -1218,7 +1218,14 @@ impl ProgressiveSender for AdapterSender {
     }
 
     async fn typing(&self, _channel: &str) -> std::result::Result<(), ProgressiveSendError> {
-        Ok(())
+        // Adapters without a typing port have no indicator to refresh.
+        match self.built.typing() {
+            Some(port) => port
+                .start_typing(&self.scope.conversation.id)
+                .await
+                .map_err(map_send_error),
+            None => Ok(()),
+        }
     }
 }
 
