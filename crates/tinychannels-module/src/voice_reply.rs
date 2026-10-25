@@ -10,7 +10,8 @@
 use crate::host::HostChannels;
 use std::sync::Arc;
 use tinychannels::host::{
-    SpeechSynthesizer, VoiceCodec, VoiceMediaStore, VoiceReplyConstraints, VoiceReplyMode, prepare_voice_reply, should_synthesize_reply,
+    SpeechSynthesizer, VoiceCodec, VoiceMediaStore, VoiceReplyConstraints, VoiceReplyMode,
+    prepare_voice_reply, should_synthesize_reply,
 };
 use tinychannels_bus::{
     ChannelCapabilities, ChannelRef, ConversationRef, HostVoiceReplyMode,
@@ -272,6 +273,120 @@ impl SpokenReply {
                 None
             }
         }
+    }
+}
+
+/// Stub ports shared by the voice pipeline tests.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    pub(crate) struct StubPolicy(pub(crate) Option<HostVoiceReplyMode>);
+
+    #[async_trait::async_trait]
+    impl ReplyPolicy for StubPolicy {
+        async fn reply_policy(
+            &self,
+            _request: HostVoiceReplyPolicyRequest,
+        ) -> anyhow::Result<tinychannels_bus::HostVoiceReplyPolicy> {
+            self.0
+                .map(|mode| tinychannels_bus::HostVoiceReplyPolicy { mode })
+                .ok_or_else(|| anyhow::anyhow!("policy unavailable"))
+        }
+    }
+
+    #[derive(Default)]
+    pub(crate) struct StubSynth {
+        pub(crate) calls: AtomicUsize,
+        pub(crate) fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl SpeechSynthesizer for StubSynth {
+        async fn synthesize(
+            &self,
+            _request: tinychannels::host::SpeechRequest,
+        ) -> anyhow::Result<tinychannels::host::SpeechResult> {
+            self.synthesize_scoped(HostVoiceScope::default(), _request)
+                .await
+        }
+
+        async fn synthesize_scoped(
+            &self,
+            _scope: HostVoiceScope,
+            _request: tinychannels::host::SpeechRequest,
+        ) -> anyhow::Result<tinychannels::host::SpeechResult> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail {
+                anyhow::bail!("synthesis failed");
+            }
+            Ok(tinychannels::host::SpeechResult {
+                audio_base64: "YQ==".into(),
+                mime_type: "audio/wav".into(),
+                duration_ms: Some(900),
+                visemes: None,
+            })
+        }
+    }
+
+    pub(crate) struct StubCodec;
+
+    #[async_trait::async_trait]
+    impl VoiceCodec for StubCodec {
+        async fn transcode(
+            &self,
+            _request: tinychannels::host::VoiceCodecRequest,
+        ) -> anyhow::Result<tinychannels::host::VoiceCodecResult> {
+            Ok(tinychannels::host::VoiceCodecResult {
+                audio_base64: "b2dn".into(),
+                duration_ms: Some(900),
+                waveform: None,
+            })
+        }
+    }
+
+    pub(crate) struct StubStore;
+
+    #[async_trait::async_trait]
+    impl VoiceMediaStore for StubStore {
+        async fn store_voice(
+            &self,
+            _request: tinychannels::host::VoiceMediaRequest,
+        ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+            Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("voice-1".into()),
+                    ..Default::default()
+                },
+                accessible_url: None,
+            })
+        }
+    }
+
+    pub(crate) fn voice_capabilities() -> ChannelCapabilities {
+        let mut capabilities = ChannelCapabilities::unknown();
+        capabilities.voice_out.supported = true;
+        capabilities.voice_out.synthesis = true;
+        capabilities.voice_out.accepted_codecs = vec!["ogg_opus".into()];
+        capabilities
+    }
+
+    pub(crate) fn spoken_with(
+        mode: Option<HostVoiceReplyMode>,
+        synth: Arc<StubSynth>,
+    ) -> SpokenReply {
+        SpokenReply {
+            instance: "telegram".into(),
+            policy: Arc::new(StubPolicy(mode)),
+            synthesizer: synth,
+            codec: Arc::new(StubCodec),
+            store: Arc::new(StubStore),
+        }
+    }
+
+    pub(crate) fn spoken_reply(mode: HostVoiceReplyMode) -> SpokenReply {
+        spoken_with(Some(mode), Arc::new(StubSynth::default()))
     }
 }
 

@@ -2323,29 +2323,55 @@ async fn spoken_context_without_a_voice_pipeline_leaves_the_final_message_unchan
 }
 
 #[tokio::test]
-async fn spoken_reply_stays_text_only_when_the_channel_cannot_synthesize() {
-    let (replies, _callback) = fixture(false).await;
-    let spoken = SpokenReply {
-        host: replies.host.clone(),
-        instance: "telegram".into(),
-        synthesizer: crate::voice_reply::ModuleSynthesizer(replies.host.clone(), "telegram".into()),
-        codec: crate::voice_reply::ModuleVoiceCodec(replies.host.clone()),
-        store: crate::provider::ModuleVoiceMediaStore(crate::provider::ModuleMediaRepository(
-            replies.host.clone(),
-            "telegram".into(),
-            None,
-        )),
+async fn spoken_context_adds_the_voice_part_beside_the_final_text() {
+    use crate::voice_reply::test_support::spoken_reply;
+    let scope = OpenScope {
+        channel: tinychannels_bus::ChannelRef::default(),
+        conversation: tinychannels_bus::ConversationRef {
+            id: "progressive-voice-chat".into(),
+            ..Default::default()
+        },
+        turn_id: "turn-1".into(),
+        lifetime: Duration::from_secs(60),
     };
-    let conversation = tinychannels_bus::ConversationRef {
-        id: "chat-1".into(),
-        ..Default::default()
+    let capabilities = crate::voice_reply::test_support::voice_capabilities();
+    let spoken = spoken_reply(tinychannels_bus::HostVoiceReplyMode::Always);
+    let context = SpokenContext {
+        spoken: Some(&spoken),
+        scope: &scope,
+        capabilities: &capabilities,
     };
-    // `voice_out` is unsupported by default, so no host callback is attempted.
-    let capabilities = tinychannels_bus::ChannelCapabilities::unknown();
-    assert!(
-        spoken
-            .voice_part(&conversation, "turn-1", "hello", &capabilities)
-            .await
-            .is_none()
-    );
+    let event = ChannelOutputEvent::FinalMessage {
+        text: "hello".into(),
+        parts: vec![],
+        receipt: None,
+    };
+    let ChannelOutputEvent::FinalMessage { text, parts, .. } = context.with_voice(event).await
+    else {
+        panic!("final message stays a final message");
+    };
+    assert_eq!(text, "hello");
+    assert_eq!(parts.len(), 2, "{parts:?}");
+    assert!(matches!(
+        parts[0],
+        tinychannels_bus::OutboundContentPart::Content { .. }
+    ));
+    assert!(matches!(
+        parts[1],
+        tinychannels_bus::OutboundContentPart::Voice { .. }
+    ));
+
+    // A final message that already carries voice is not synthesized again, and
+    // non-final events pass through untouched.
+    let with_voice = ChannelOutputEvent::FinalMessage {
+        text: "hello".into(),
+        parts: vec![parts[1].clone()],
+        receipt: None,
+    };
+    assert_eq!(context.with_voice(with_voice.clone()).await, with_voice);
+    let delta = ChannelOutputEvent::TextDelta {
+        text: "partial".into(),
+        iteration: None,
+    };
+    assert_eq!(context.with_voice(delta.clone()).await, delta);
 }

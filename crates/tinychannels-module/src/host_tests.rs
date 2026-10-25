@@ -1493,3 +1493,113 @@ async fn host_without_a_storage_object_has_no_delivery_store_and_refuses_require
     );
     host.shutdown().await.unwrap();
 }
+
+fn voice_scope() -> tinychannels_bus::HostVoiceScope {
+    tinychannels_bus::HostVoiceScope {
+        configured_instance: String::new(),
+        channel: Default::default(),
+        conversation: tinychannels_bus::ConversationRef {
+            id: "chat-7".into(),
+            ..Default::default()
+        },
+        turn_id: "turn-voice".into(),
+    }
+}
+
+#[tokio::test]
+async fn module_synthesizer_binds_the_scope_identity_and_returns_host_audio() {
+    use tinychannels::host::SpeechSynthesizer;
+    let (host, _callback, _server) = connected_host().await;
+    let synthesizer = crate::voice_reply::ModuleSynthesizer(host.clone(), "telegram".into());
+    let request = tinychannels::host::SpeechRequest {
+        text: "hello".into(),
+        voice: None,
+        format: None,
+        thread_id: None,
+    };
+    let speech = synthesizer
+        .synthesize_scoped(voice_scope(), request.clone())
+        .await
+        .unwrap();
+    assert_eq!(speech.mime_type, "audio/wav");
+    assert_eq!(speech.duration_ms, Some(250));
+    assert!(synthesizer.synthesize(request.clone()).await.is_err());
+    let mut unscoped = voice_scope();
+    unscoped.turn_id.clear();
+    assert!(
+        synthesizer
+            .synthesize_scoped(unscoped, request)
+            .await
+            .is_err()
+    );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_voice_codec_transcodes_through_the_loaded_codec_module() {
+    use tinychannels::host::VoiceCodec;
+    let (host, _callback, server) = connected_host().await;
+    server
+        .serve_at(
+            tinyvoice_bus::OBJECT_PATH.try_into().unwrap(),
+            CodecCallback,
+        )
+        .await
+        .unwrap();
+    server.request_name(tinyvoice_bus::BUS_NAME).await.unwrap();
+    let codec = crate::voice_reply::ModuleVoiceCodec(host.clone());
+    for from in ["wav_pcm16", "audio/wav", "mp3", "amr_nb"] {
+        let output = codec
+            .transcode(tinychannels::host::VoiceCodecRequest {
+                audio_base64: "c291cmNl".into(),
+                from: from.into(),
+                target: "ogg_opus".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(output.audio_base64, "dHJhbnNjb2RlZA==");
+    }
+    for target in [
+        "m4a_aac",
+        "audio/ogg",
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/amr",
+    ] {
+        codec
+            .transcode(tinychannels::host::VoiceCodecRequest {
+                audio_base64: "c291cmNl".into(),
+                from: "wav_pcm16".into(),
+                target: target.into(),
+            })
+            .await
+            .unwrap();
+    }
+    assert!(
+        codec
+            .transcode(tinychannels::host::VoiceCodecRequest {
+                audio_base64: "c291cmNl".into(),
+                from: "flac".into(),
+                target: "ogg_opus".into(),
+            })
+            .await
+            .is_err()
+    );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn host_channels_supply_the_reply_policy_for_spoken_replies() {
+    use crate::voice_reply::ReplyPolicy;
+    let (host, _callback, _server) = connected_host().await;
+    let policy = host
+        .reply_policy(tinychannels_bus::HostVoiceReplyPolicyRequest {
+            scope: voice_scope(),
+            inbound_has_voice: true,
+            explicitly_requested: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(policy.mode, tinychannels_bus::HostVoiceReplyMode::Always);
+    host.shutdown().await.unwrap();
+}
