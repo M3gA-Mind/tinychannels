@@ -1,5 +1,6 @@
 //! Owned provider listener, lifecycle hooks and ordered inbound forwarding.
 use crate::host::HostChannels;
+use crate::voice_reply::{ModuleSynthesizer, ModuleVoiceCodec, SpokenReply, inbound_voice};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -1001,6 +1002,7 @@ impl Running {
         let send_drafts = channel.drafts().cloned();
         let send_reactions = channel.reactions().cloned();
         let send_typing = channel.typing().cloned();
+        let spoken = hooks.spoken();
         let listen_adapter = adapter.clone();
         let send_adapter = adapter.clone();
         let stop_adapter = adapter.clone();
@@ -1273,6 +1275,7 @@ impl Running {
         });
         Arc::new(Self {
             channel,
+            spoken,
             send,
             cancel,
             worker: Mutex::new(Some(worker)),
