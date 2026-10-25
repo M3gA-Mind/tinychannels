@@ -251,6 +251,7 @@ impl TelegramChannel {
 }
 
 fn typed_send_error(error: anyhow::Error) -> crate::channel::ChannelSendError {
+    eprintln!("DEBUGVOICE typed_send_error: {error:?}");
     if let Some(partial) = error.downcast_ref::<super::channel_send::PartialTextSendError>() {
         return partial.error.clone();
     }
