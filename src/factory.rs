@@ -932,58 +932,70 @@ pub fn build_channels(
     if config.telegram.is_some()
         && let Some(telegram) = build_telegram_channel(config, host, http)
     {
-        channels.push(BuiltChannel::with_output_ports(
-            telegram.clone(),
-            Some(telegram.clone()),
-            Some(telegram.clone()),
-        )
-        .with_typing_port(telegram));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                telegram.clone(),
+                Some(telegram.clone()),
+                Some(telegram.clone()),
+            )
+            .with_typing_port(telegram),
+        );
     }
 
     if let Some(discord) = build_discord_channel(config, host, http) {
-        channels.push(BuiltChannel::with_output_ports(
-            discord.clone(),
-            Some(discord.clone()),
-            Some(discord.clone()),
-        )
-        .with_typing_port(discord));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                discord.clone(),
+                Some(discord.clone()),
+                Some(discord.clone()),
+            )
+            .with_typing_port(discord),
+        );
     }
 
     if let Some(slack) = build_slack_channel(config, host, http) {
-        channels.push(BuiltChannel::with_output_ports(
-            slack.clone(),
-            Some(slack.clone()),
-            Some(slack.clone()),
-        )
-        .with_typing_port(slack));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                slack.clone(),
+                Some(slack.clone()),
+                Some(slack.clone()),
+            )
+            .with_typing_port(slack),
+        );
     }
 
     if let Some(mattermost) = build_long_tail_channel_with_host(config, host, http, "mattermost") {
-        channels.push(BuiltChannel::with_output_ports(
-            mattermost.clone(),
-            Some(mattermost.clone()),
-            Some(mattermost.clone()),
-        )
-        .with_typing_port(mattermost));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                mattermost.clone(),
+                Some(mattermost.clone()),
+                Some(mattermost.clone()),
+            )
+            .with_typing_port(mattermost),
+        );
     }
 
     #[cfg(feature = "imessage")]
     if let Some(imessage) = build_imessage_channel(config, host) {
-        channels.push(BuiltChannel::with_output_ports(
-            imessage.clone(),
-            Some(imessage.clone()),
-            Some(imessage.clone()),
-        )
-        .with_typing_port(imessage));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                imessage.clone(),
+                Some(imessage.clone()),
+                Some(imessage.clone()),
+            )
+            .with_typing_port(imessage),
+        );
     }
 
     if let Some(signal) = build_signal_channel(config, host, http) {
-        channels.push(BuiltChannel::with_output_ports(
-            signal.clone(),
-            Some(signal.clone()),
-            Some(signal.clone()),
-        )
-        .with_typing_port(signal));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                signal.clone(),
+                Some(signal.clone()),
+                Some(signal.clone()),
+            )
+            .with_typing_port(signal),
+        );
     }
 
     if let Some(wa) = config.whatsapp.as_ref() {
@@ -1018,67 +1030,65 @@ pub fn build_channels(
     }
 
     if let Some(linq) = build_linq_channel(config, host, http) {
-        channels.push(BuiltChannel::with_output_ports(
-            linq.clone(),
-            Some(linq.clone()),
-            Some(linq.clone()),
-        )
-        .with_typing_port(linq));
+        channels.push(
+            BuiltChannel::with_output_ports(linq.clone(), Some(linq.clone()), Some(linq.clone()))
+                .with_typing_port(linq),
+        );
     }
 
     #[cfg(feature = "email")]
     if let Some(email) = build_email_channel(config, host) {
-        channels.push(BuiltChannel::with_output_ports(
-            email.clone(),
-            Some(email.clone()),
-            Some(email.clone()),
-        )
-        .with_typing_port(email));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                email.clone(),
+                Some(email.clone()),
+                Some(email.clone()),
+            )
+            .with_typing_port(email),
+        );
     }
 
     if let Some(irc) = build_long_tail_channel_with_host(config, host, http, "irc") {
-        channels.push(BuiltChannel::with_output_ports(
-            irc.clone(),
-            Some(irc.clone()),
-            Some(irc.clone()),
-        )
-        .with_typing_port(irc));
+        channels.push(
+            BuiltChannel::with_output_ports(irc.clone(), Some(irc.clone()), Some(irc.clone()))
+                .with_typing_port(irc),
+        );
     }
 
     if let Some(lark) = build_long_tail_channel_with_host(config, host, http, "lark") {
-        channels.push(BuiltChannel::with_output_ports(
-            lark.clone(),
-            Some(lark.clone()),
-            Some(lark.clone()),
-        )
-        .with_typing_port(lark));
+        channels.push(
+            BuiltChannel::with_output_ports(lark.clone(), Some(lark.clone()), Some(lark.clone()))
+                .with_typing_port(lark),
+        );
     }
 
     if let Some(dingtalk) = build_long_tail_channel_with_host(config, host, http, "dingtalk") {
-        channels.push(BuiltChannel::with_output_ports(
-            dingtalk.clone(),
-            Some(dingtalk.clone()),
-            Some(dingtalk.clone()),
-        )
-        .with_typing_port(dingtalk));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                dingtalk.clone(),
+                Some(dingtalk.clone()),
+                Some(dingtalk.clone()),
+            )
+            .with_typing_port(dingtalk),
+        );
     }
 
     if let Some(qq) = build_long_tail_channel_with_host(config, host, http, "qq") {
-        channels.push(BuiltChannel::with_output_ports(
-            qq.clone(),
-            Some(qq.clone()),
-            Some(qq.clone()),
-        )
-        .with_typing_port(qq));
+        channels.push(
+            BuiltChannel::with_output_ports(qq.clone(), Some(qq.clone()), Some(qq.clone()))
+                .with_typing_port(qq),
+        );
     }
 
     if let Some(yuanbao) = build_long_tail_channel_with_host(config, host, http, "yuanbao") {
-        channels.push(BuiltChannel::with_output_ports(
-            yuanbao.clone(),
-            Some(yuanbao.clone()),
-            Some(yuanbao.clone()),
-        )
-        .with_typing_port(yuanbao));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                yuanbao.clone(),
+                Some(yuanbao.clone()),
+                Some(yuanbao.clone()),
+            )
+            .with_typing_port(yuanbao),
+        );
     }
 
     channels

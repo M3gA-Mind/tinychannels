@@ -71,7 +71,8 @@ async fn dispatch_interaction(
     }
 }
 
-type TypingStartFuture = std::pin::Pin<Box<dyn std::future::Future<Output = std::result::Result<(), String>> + Send>>;
+type TypingStartFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = std::result::Result<(), String>> + Send>>;
 
 /// Spawn the module-owned refresh task for one recipient. `start` re-issues the
 /// provider typing action; the task is cancelled and joined by
@@ -284,7 +285,10 @@ impl LifecycleRegistry for Hooks {
 impl Hooks {
     /// The outbound voice pipeline bound to the host this provider started with.
     pub(crate) fn spoken(&self) -> Option<Arc<SpokenReply>> {
-        self.spoken.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.spoken
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
     pub(crate) fn host(
         self: &Arc<Self>,
@@ -1218,27 +1222,27 @@ impl Running {
                                 {
                                     result
                                 } else {
-                                match crate::interaction::dispatch_native_webhook(
-                                    send_adapter.as_ref(),
-                                    interaction.clone(),
-                                )
-                                .await
-                                {
-                                    Some(result) => result,
-                                    None => match send_legacy.as_ref() {
-                                        Some(legacy) => {
-                                            dispatch_interaction(
-                                                legacy.clone(),
-                                                interaction,
-                                                &mut typing,
-                                            )
-                                            .await
-                                        }
-                                        None => Err(Error::failed(
-                                            "provider interaction is not supported by this adapter",
-                                        )),
-                                    },
-                                }
+                                    match crate::interaction::dispatch_native_webhook(
+                                        send_adapter.as_ref(),
+                                        interaction.clone(),
+                                    )
+                                    .await
+                                    {
+                                        Some(result) => result,
+                                        None => match send_legacy.as_ref() {
+                                            Some(legacy) => {
+                                                dispatch_interaction(
+                                                    legacy.clone(),
+                                                    interaction,
+                                                    &mut typing,
+                                                )
+                                                .await
+                                            }
+                                            None => Err(Error::failed(
+                                                "provider interaction is not supported by this adapter",
+                                            )),
+                                        },
+                                    }
                                 }
                             }
                         },

@@ -13,8 +13,8 @@ use tinychannels::host::{
     VoiceReplyConstraints, VoiceReplyMode, prepare_voice_reply, should_synthesize_reply,
 };
 use tinychannels_bus::{
-    ChannelCapabilities, ChannelRef, ConversationRef, HostVoiceReplyMode, HostVoiceReplyPolicyRequest,
-    HostVoiceScope, OutboundContentPart, OutboundVoice,
+    ChannelCapabilities, ChannelRef, ConversationRef, HostVoiceReplyMode,
+    HostVoiceReplyPolicyRequest, HostVoiceScope, OutboundContentPart, OutboundVoice,
 };
 
 /// Turns whose inbound message carried a voice note, so a `mirror` reply can
@@ -223,4 +223,3 @@ impl SpokenReply {
 #[cfg(test)]
 #[path = "voice_reply_tests.rs"]
 mod tests;
-

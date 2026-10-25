@@ -1679,11 +1679,19 @@ async fn adapter_typing_port_serves_start_stop_and_refresh_interactions() {
         other => panic!("expected a refresh handle, got {other:?}"),
     };
     tokio::time::sleep(Duration::from_secs(9)).await;
-    assert!(port.starts.load(Ordering::SeqCst) >= 3, "refresh re-issues typing");
-    dispatch_adapter_typing(&dyn_port, "telegram", &Op::StopTypingRefresh { handle }, &mut typing)
-        .await
-        .unwrap()
-        .unwrap();
+    assert!(
+        port.starts.load(Ordering::SeqCst) >= 3,
+        "refresh re-issues typing"
+    );
+    dispatch_adapter_typing(
+        &dyn_port,
+        "telegram",
+        &Op::StopTypingRefresh { handle },
+        &mut typing,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert!(typing.is_empty());
     let stopped = dispatch_adapter_typing(
         &dyn_port,

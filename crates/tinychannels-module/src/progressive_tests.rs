@@ -2278,7 +2278,10 @@ async fn adapter_typing_precedes_the_final_reply() {
         Some("typing:chat-1"),
         "typing must be the first provider call: {log:?}"
     );
-    let send = log.iter().position(|entry| entry == "send").expect("reply sent");
+    let send = log
+        .iter()
+        .position(|entry| entry == "send")
+        .expect("reply sent");
     assert!(send > 0, "the reply follows the typing indicator: {log:?}");
     replies.shutdown().await.unwrap();
     provider.stop().await.unwrap();
