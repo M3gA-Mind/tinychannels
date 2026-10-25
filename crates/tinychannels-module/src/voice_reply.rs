@@ -8,7 +8,7 @@
 //! Every failure falls back to the text reply that was already going out.
 
 use crate::host::HostChannels;
-use crate::provider::{ModuleMediaRepository, ModuleVoiceMediaStore};
+use crate::provider::ModuleVoiceMediaStore;
 use tinychannels::host::{
     VoiceReplyConstraints, VoiceReplyMode, prepare_voice_reply, should_synthesize_reply,
 };
@@ -224,5 +224,3 @@ impl SpokenReply {
 #[path = "voice_reply_tests.rs"]
 mod tests;
 
-#[allow(dead_code, reason = "keeps the media repository type reachable for the store")]
-type _Repo = ModuleMediaRepository;

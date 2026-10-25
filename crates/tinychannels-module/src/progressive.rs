@@ -1,6 +1,7 @@
 //! Bounded module-owned progressive reply workers and retained terminal cleanup.
 use crate::host::HostChannels;
 use crate::provider::Running;
+use crate::voice_reply::SpokenReply;
 use async_trait::async_trait;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -374,7 +375,7 @@ struct Entry {
 enum OutputTarget {
     Legacy,
     Hosted(OpenScope),
-    Adapter(OpenScope, BuiltChannel),
+    Adapter(OpenScope, BuiltChannel, Option<Arc<SpokenReply>>),
 }
 
 /// Full turn scope fixed by `OpenOutput`/`OpenHostedOutput`.
@@ -832,7 +833,7 @@ async fn close_entry(entry: Arc<Entry>, text: String, retain_existing: bool) -> 
 enum WorkerTarget {
     Legacy,
     Hosted(OpenScope),
-    Adapter(OpenScope, BuiltChannel),
+    Adapter(OpenScope, BuiltChannel, Option<Arc<SpokenReply>>),
 }
 
 async fn run(
