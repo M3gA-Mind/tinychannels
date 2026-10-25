@@ -973,6 +973,7 @@ impl Running {
         let adapter = channel.adapter().clone();
         let send_drafts = channel.drafts().cloned();
         let send_reactions = channel.reactions().cloned();
+        let send_typing = channel.typing().cloned();
         let listen_adapter = adapter.clone();
         let send_adapter = adapter.clone();
         let stop_adapter = adapter.clone();
@@ -1177,6 +1178,17 @@ impl Running {
                                 }
                             }
                             interaction => {
+                                if let Some(port) = send_typing.as_ref()
+                                    && let Some(result) = dispatch_adapter_typing(
+                                        port,
+                                        &configured_instance,
+                                        &interaction,
+                                        &mut typing,
+                                    )
+                                    .await
+                                {
+                                    result
+                                } else {
                                 match crate::interaction::dispatch_native_webhook(
                                     send_adapter.as_ref(),
                                     interaction.clone(),
@@ -1197,6 +1209,7 @@ impl Running {
                                             "provider interaction is not supported by this adapter",
                                         )),
                                     },
+                                }
                                 }
                             }
                         },
