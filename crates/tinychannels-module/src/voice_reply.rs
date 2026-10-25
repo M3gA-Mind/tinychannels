@@ -17,38 +17,72 @@ use tinychannels_bus::{
     HostVoiceReplyPolicyRequest, HostVoiceScope, OutboundContentPart, OutboundVoice,
 };
 
-/// Turns whose inbound message carried a voice note, so a `mirror` reply can
-/// answer in kind. The key is the conversation and the inbound message id,
-/// which the host uses as the turn id.
+/// Whether the latest inbound message of each conversation carried a voice
+/// note, so a `mirror` reply can answer in kind. The host's turn id is not the
+/// provider message id, so the fact is keyed by conversation and replaced by
+/// every later inbound message.
 pub(crate) mod inbound_voice {
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, VecDeque};
     use std::sync::{LazyLock, Mutex};
 
     const CAPACITY: usize = 1024;
-    static TURNS: LazyLock<Mutex<VecDeque<(String, String)>>> =
-        LazyLock::new(|| Mutex::new(VecDeque::new()));
 
-    pub(crate) fn record(conversation_id: &str, turn_id: &str) {
-        if conversation_id.trim().is_empty() || turn_id.trim().is_empty() {
-            return;
-        }
-        let mut turns = TURNS.lock().unwrap_or_else(|e| e.into_inner());
-        let key = (conversation_id.to_owned(), turn_id.to_owned());
-        if turns.contains(&key) {
-            return;
-        }
-        if turns.len() >= CAPACITY {
-            turns.pop_front();
-        }
-        turns.push_back(key);
+    pub(super) struct Latest {
+        capacity: usize,
+        by_conversation: HashMap<String, bool>,
+        order: VecDeque<String>,
     }
 
-    pub(crate) fn contains(conversation_id: &str, turn_id: &str) -> bool {
-        TURNS
+    impl Latest {
+        pub(super) fn new(capacity: usize) -> Self {
+            Self {
+                capacity,
+                by_conversation: HashMap::new(),
+                order: VecDeque::new(),
+            }
+        }
+
+        pub(super) fn record(&mut self, conversation_id: &str, has_voice: bool) {
+            if conversation_id.trim().is_empty() {
+                return;
+            }
+            if self
+                .by_conversation
+                .insert(conversation_id.to_owned(), has_voice)
+                .is_none()
+            {
+                self.order.push_back(conversation_id.to_owned());
+                if self.order.len() > self.capacity
+                    && let Some(oldest) = self.order.pop_front()
+                {
+                    self.by_conversation.remove(&oldest);
+                }
+            }
+        }
+
+        pub(super) fn has_voice(&self, conversation_id: &str) -> bool {
+            self.by_conversation
+                .get(conversation_id)
+                .copied()
+                .unwrap_or(false)
+        }
+    }
+
+    static LATEST: LazyLock<Mutex<Latest>> = LazyLock::new(|| Mutex::new(Latest::new(CAPACITY)));
+
+    /// Record whether the newest inbound message in `conversation_id` has voice.
+    pub(crate) fn record(conversation_id: &str, has_voice: bool) {
+        LATEST
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .any(|(conversation, turn)| conversation == conversation_id && turn == turn_id)
+            .record(conversation_id, has_voice);
+    }
+
+    pub(crate) fn latest_has_voice(conversation_id: &str) -> bool {
+        LATEST
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .has_voice(conversation_id)
     }
 }
 
@@ -165,7 +199,7 @@ impl SpokenReply {
             conversation: conversation.clone(),
             turn_id: turn_id.to_owned(),
         };
-        let inbound_has_voice = inbound_voice::contains(&conversation.id, turn_id);
+        let inbound_has_voice = inbound_voice::latest_has_voice(&conversation.id);
         let policy = match self
             .host
             .voice_reply_policy(HostVoiceReplyPolicyRequest {

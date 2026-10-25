@@ -364,9 +364,6 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
     ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         use base64::Engine;
         const MAX_VOICE_BYTES: usize = 8 * 1024 * 1024;
-        if request.direction == tinychannels_bus::HostVoiceMediaDirection::Inbound {
-            inbound_voice::record(&request.scope.conversation.id, &request.scope.turn_id);
-        }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(request.audio_base64.as_bytes())
             .map_err(|_| anyhow::anyhow!("voice media payload is invalid"))?;
@@ -681,6 +678,13 @@ impl tinychannels::channel::ChannelInboundSink for ModuleEvents {
     ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         envelope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
         envelope.channel.account_id = Some(self.1.clone());
+        inbound_voice::record(
+            &envelope.conversation.id,
+            envelope
+                .parts
+                .iter()
+                .any(|part| matches!(part, tinychannels_bus::ContentPart::VoiceNote { .. })),
+        );
         self.0
             .try_deliver_inbound(&self.1, envelope)
             .await
