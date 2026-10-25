@@ -52,7 +52,7 @@ async fn dispatch_interaction(
             interval_secs,
         } => {
             let refresh_channel = Arc::clone(&channel);
-            let name = channel.name();
+            let name = channel.name().to_string();
             start_typing_refresh(typing, recipient, interval_secs, name, move |recipient| {
                 let channel = Arc::clone(&refresh_channel);
                 Box::pin(async move {
