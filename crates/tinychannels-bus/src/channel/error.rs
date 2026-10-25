@@ -24,6 +24,8 @@ pub enum SendErrorKind {
 pub struct ChannelSendError {
     pub kind: SendErrorKind,
     pub message: String,
+    /// True only when the adapter intentionally does not expose this operation.
+    pub unsupported: bool,
     pub retryable: bool,
     /// Provider I/O may have reached the remote service despite the error.
     pub sent_before_error: bool,
@@ -38,6 +40,7 @@ impl Default for ChannelSendError {
         Self {
             kind: SendErrorKind::Unknown,
             message: String::new(),
+            unsupported: false,
             retryable: false,
             sent_before_error: false,
             retry_after: None,
@@ -57,6 +60,7 @@ impl ChannelSendError {
         Self {
             kind: SendErrorKind::BadFormat,
             message: format!("{}{}", Self::UNSUPPORTED_PREFIX, message.into()),
+            unsupported: true,
             ..Default::default()
         }
     }

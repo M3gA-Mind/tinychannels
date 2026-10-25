@@ -39,8 +39,10 @@ mod dispatch;
 mod media;
 mod noop;
 mod services;
+mod voice;
 
 pub use dispatch::{DispatchOptions, DispatchRequest, TurnDispatcher, TurnHandle};
+pub(crate) use media::is_allowed_content_type;
 pub use media::{
     MediaMetadata, MediaScope, MediaStoreRequest, MediaStreamRequest, ScopedMediaStore, StoredMedia,
 };
@@ -50,7 +52,12 @@ pub use services::{
     ConversationStore, EventSink, LifecycleRegistry, MediaRepository, ReactionDecision,
     ReactionGate, ReactionQuery, RunEventAppend, RunLedger, RunTelemetry, RunUpsert, ShutdownHook,
     SpeechRequest, SpeechResult, SpeechSynthesizer, StorageProvider, Transcriber,
-    TranscriptionRequest, TranscriptionResult,
+    TranscriptionRequest, TranscriptionResult, VoiceCodec, VoiceCodecRequest, VoiceCodecResult,
+    VoiceMediaRequest, VoiceMediaStore,
+};
+pub use voice::{
+    PreparedVoiceReply, VoiceEnrichmentStatus, VoiceReplyConstraints, VoiceReplyMode,
+    enrich_voice_note, prepare_voice_reply, should_synthesize_reply,
 };
 
 use crate::config::ChannelsConfig;
@@ -70,6 +77,8 @@ pub struct HostCapabilities {
     pub turn_dispatch: bool,
     pub stt: bool,
     pub tts: bool,
+    pub voice_media_store: bool,
+    pub voice_codec: bool,
     pub media_repository: bool,
     pub approvals: bool,
     pub reaction_gate: bool,
@@ -88,6 +97,8 @@ impl HostCapabilities {
         turn_dispatch: false,
         stt: false,
         tts: false,
+        voice_media_store: false,
+        voice_codec: false,
         media_repository: false,
         approvals: false,
         reaction_gate: false,
@@ -106,6 +117,8 @@ impl HostCapabilities {
             turn_dispatch: host.dispatcher().is_some(),
             stt: host.transcriber().is_some(),
             tts: host.synthesizer().is_some(),
+            voice_media_store: host.voice_media_store().is_some(),
+            voice_codec: host.voice_codec().is_some(),
             media_repository: host.media_repository().is_some(),
             approvals: host.approvals().is_some(),
             reaction_gate: host.reactions().is_some(),
@@ -143,6 +156,12 @@ pub trait ChannelHost: Send + Sync {
     }
     /// Text-to-speech for spoken replies.
     fn synthesizer(&self) -> Option<Arc<dyn SpeechSynthesizer>> {
+        None
+    }
+    fn voice_media_store(&self) -> Option<Arc<dyn VoiceMediaStore>> {
+        None
+    }
+    fn voice_codec(&self) -> Option<Arc<dyn VoiceCodec>> {
         None
     }
     /// Durable media storage with opaque references scoped to a channel turn.
@@ -193,6 +212,8 @@ pub trait ChannelHost: Send + Sync {
             turn_dispatch: self.dispatcher().is_some(),
             stt: self.transcriber().is_some(),
             tts: self.synthesizer().is_some(),
+            voice_media_store: self.voice_media_store().is_some(),
+            voice_codec: self.voice_codec().is_some(),
             media_repository: self.media_repository().is_some(),
             approvals: self.approvals().is_some(),
             reaction_gate: self.reactions().is_some(),

@@ -23,12 +23,38 @@ pub enum ChannelInboundSource {
     },
 }
 
+/// Controls whether inbound preparation must fit the legacy text-only view or
+/// may preserve typed content for a host that consumes the full envelope.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelInboundPreparationMode {
+    /// Require a complete legacy text projection; reject content it cannot
+    /// represent so existing callers remain fail closed.
+    #[default]
+    LegacyText,
+    /// Return the complete typed envelope and its text-compatible routing
+    /// projection for a host that also handles the typed parts.
+    Typed,
+}
+
+impl ChannelInboundPreparationMode {
+    fn is_legacy_text(&self) -> bool {
+        *self == Self::LegacyText
+    }
+}
+
 /// Host-selected namespace and session isolation applied to provider data.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrepareChannelInboundRequest {
     pub source: ChannelInboundSource,
     pub namespace: String,
     pub session_policy: SessionKeyPolicy,
+    /// Existing callers remain text-only unless they explicitly opt in.
+    #[serde(
+        default,
+        skip_serializing_if = "ChannelInboundPreparationMode::is_legacy_text"
+    )]
+    pub preparation_mode: ChannelInboundPreparationMode,
 }
 
 /// Facts used by the host without repeating channel projection or key algorithms.

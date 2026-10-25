@@ -1,25 +1,38 @@
 use super::api::DISCORD_API_BASE;
 use crate::channel::LengthUnit;
 use crate::text::{ChunkMode, TextChunkOptions, chunk_text_with_options};
-use crate::traits::{Channel, ChannelMessage, SendMessage};
-use async_trait::async_trait;
-use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
-use serde_json::json;
-use tokio_tungstenite::tungstenite::Message;
-use uuid::Uuid;
+use std::collections::HashMap;
+use std::sync::Arc;
 
+/// Minimum spacing between streaming-draft edits (Discord allows roughly five
+/// edits per five seconds per channel).
 /// Discord channel — connects via Gateway WebSocket for real-time messages
 pub struct DiscordChannel {
-    bot_token: String,
-    guild_id: Option<String>,
-    channel_id: Option<String>,
-    allowed_users: Vec<String>,
-    listen_to_bots: bool,
-    mention_only: bool,
-    typing_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    pub(super) bot_token: String,
+    pub(super) guild_id: Option<String>,
+    pub(super) channel_id: Option<String>,
+    pub(super) allowed_users: Vec<String>,
+    pub(super) listen_to_bots: bool,
+    pub(super) mention_only: bool,
+    /// Cancellation for the single Gateway session owned by the typed adapter.
+    pub(super) listener_cancel: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
     http_client: reqwest::Client,
-    api_base: String,
+    pub(super) api_base: String,
+    /// Host speech-to-text for inbound voice messages. `None` leaves the
+    /// transcript `Unavailable`; the audio is still delivered.
+    pub(super) transcriber: Option<Arc<dyn crate::host::Transcriber>>,
+    /// Durable voice storage for voice messages in and out.
+    pub(super) voice_media_store: Option<Arc<dyn crate::host::VoiceMediaStore>>,
+    /// Scoped media storage for attachments in and out.
+    pub(super) media_repository: Option<Arc<dyn crate::host::MediaRepository>>,
+    /// TinyVoice codec access used for voice duration and waveform.
+    pub(super) voice_codec: Option<Arc<dyn crate::host::VoiceCodec>>,
+    pub(super) voice_synthesis: bool,
+    /// Module ingress and event sink for provider-specific events.
+    pub(super) events: Option<Arc<dyn crate::host::EventSink>>,
+    /// Channel id -> thread parent, filled from gateway events and REST lookups.
+    pub(super) channel_cache: Mutex<HashMap<String, super::inbound::ChannelInfo>>,
 }
 
 impl DiscordChannel {
@@ -38,9 +51,16 @@ impl DiscordChannel {
             allowed_users,
             listen_to_bots,
             mention_only,
-            typing_handle: Mutex::new(None),
+            listener_cancel: Mutex::new(None),
             http_client: reqwest::Client::new(),
             api_base: DISCORD_API_BASE.to_string(),
+            transcriber: None,
+            voice_media_store: None,
+            media_repository: None,
+            voice_codec: None,
+            voice_synthesis: false,
+            events: None,
+            channel_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -60,9 +80,16 @@ impl DiscordChannel {
             allowed_users,
             listen_to_bots,
             mention_only,
-            typing_handle: Mutex::new(None),
+            listener_cancel: Mutex::new(None),
             http_client,
             api_base: DISCORD_API_BASE.to_string(),
+            transcriber: None,
+            voice_media_store: None,
+            media_repository: None,
+            voice_codec: None,
+            voice_synthesis: false,
+            events: None,
+            channel_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -75,8 +102,63 @@ impl DiscordChannel {
         self
     }
 
-    fn http_client(&self) -> reqwest::Client {
+    /// Attach the host speech-to-text capability for inbound voice messages.
+    #[must_use]
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn crate::host::Transcriber>) -> Self {
+        self.transcriber = Some(transcriber);
+        self
+    }
+
+    /// Attach durable voice storage (voice messages in and out).
+    #[must_use]
+    pub fn with_voice_media_store(mut self, store: Arc<dyn crate::host::VoiceMediaStore>) -> Self {
+        self.voice_media_store = Some(store);
+        self
+    }
+
+    /// Attach scoped media storage (attachments in and out).
+    #[must_use]
+    pub fn with_media_repository(
+        mut self,
+        repository: Arc<dyn crate::host::MediaRepository>,
+    ) -> Self {
+        self.media_repository = Some(repository);
+        self
+    }
+
+    /// Attach the TinyVoice codec used for voice duration and waveform.
+    #[must_use]
+    pub fn with_voice_codec(mut self, codec: Arc<dyn crate::host::VoiceCodec>) -> Self {
+        self.voice_codec = Some(codec);
+        self
+    }
+
+    /// Declare that the host can synthesize and encode spoken replies.
+    #[must_use]
+    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
+        self.voice_synthesis = enabled;
+        self
+    }
+
+    /// Attach the module ingress/event sink.
+    #[must_use]
+    pub fn with_events(mut self, events: Arc<dyn crate::host::EventSink>) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    pub(super) fn http_client(&self) -> reqwest::Client {
         self.http_client.clone()
+    }
+
+    pub(crate) async fn health_status(&self) -> bool {
+        self.http_client()
+            .get(format!("{}/users/@me", self.api_base))
+            .header("Authorization", format!("Bot {}", self.bot_token))
+            .send()
+            .await
+            .map(|response| response.status().is_success())
+            .unwrap_or(false)
     }
 
     /// Check if a Discord user ID is in the allowlist.
@@ -88,7 +170,7 @@ impl DiscordChannel {
     /// replied (issue #3712). This now matches the WhatsApp provider's
     /// empty-⇒-allow-all convention. `"*"` also allows everyone; populate the
     /// list with specific user IDs to restrict.
-    fn is_user_allowed(&self, user_id: &str) -> bool {
+    pub(super) fn is_user_allowed(&self, user_id: &str) -> bool {
         self.allowed_users.is_empty() || self.allowed_users.iter().any(|u| u == "*" || u == user_id)
     }
 
@@ -102,7 +184,7 @@ impl DiscordChannel {
     ///   allow-all (the intended *within-guild* default), but DMs bypass the
     ///   guild filter — so a blank allowlist must not open a guild-scoped bot to
     ///   arbitrary DMs (#3794 review — Codex P1). `"*"` (non-empty) still allows.
-    fn passes_guild_scope(
+    pub(super) fn passes_guild_scope(
         configured_guild: Option<&str>,
         msg_guild: Option<&str>,
         allowlist_empty: bool,
@@ -122,7 +204,8 @@ impl DiscordChannel {
     /// cron/heartbeat delivery (#3794 review — Codex P2). `None` when neither is
     /// available, so the caller surfaces an error instead of POSTing to an empty
     /// channel id.
-    fn resolve_recipient<'a>(
+    #[cfg(test)]
+    pub(super) fn resolve_recipient<'a>(
         msg_recipient: &'a str,
         configured: Option<&'a str>,
     ) -> Option<&'a str> {
@@ -134,7 +217,7 @@ impl DiscordChannel {
         (!recipient.is_empty()).then_some(recipient)
     }
 
-    fn bot_user_id_from_token(token: &str) -> Option<String> {
+    pub(super) fn bot_user_id_from_token(token: &str) -> Option<String> {
         // Discord bot tokens are base64(bot_user_id).timestamp.hmac
         let part = token.split('.').next()?;
         base64_decode(part)
@@ -146,11 +229,11 @@ const BASE64_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstu
 /// Discord's maximum message length for regular messages.
 ///
 /// Discord rejects longer payloads with `50035 Invalid Form Body`.
-const DISCORD_MAX_MESSAGE_LENGTH: usize = 2000;
+pub(super) const DISCORD_MAX_MESSAGE_LENGTH: usize = 2000;
 
 /// Split a message into chunks that respect Discord's 2000-character limit.
 /// Tries to split at word boundaries when possible.
-fn split_message_for_discord(message: &str) -> Vec<String> {
+pub(super) fn split_message_for_discord(message: &str) -> Vec<String> {
     if message.is_empty() {
         return vec![String::new()];
     }
@@ -166,16 +249,16 @@ fn split_message_for_discord(message: &str) -> Vec<String> {
     )
 }
 
-fn mention_tags(bot_user_id: &str) -> [String; 2] {
+pub(super) fn mention_tags(bot_user_id: &str) -> [String; 2] {
     [format!("<@{bot_user_id}>"), format!("<@!{bot_user_id}>")]
 }
 
-fn contains_bot_mention(content: &str, bot_user_id: &str) -> bool {
+pub(super) fn contains_bot_mention(content: &str, bot_user_id: &str) -> bool {
     let tags = mention_tags(bot_user_id);
     content.contains(&tags[0]) || content.contains(&tags[1])
 }
 
-fn normalize_incoming_content(
+pub(super) fn normalize_incoming_content(
     content: &str,
     mention_only: bool,
     bot_user_id: &str,
@@ -205,7 +288,7 @@ fn normalize_incoming_content(
 
 /// Minimal base64 decode (no extra dep) — only needs to decode the user ID portion
 #[allow(clippy::cast_possible_truncation)]
-fn base64_decode(input: &str) -> Option<String> {
+pub(super) fn base64_decode(input: &str) -> Option<String> {
     let padded = match input.len() % 4 {
         2 => format!("{input}=="),
         3 => format!("{input}="),
@@ -239,332 +322,6 @@ fn base64_decode(input: &str) -> Option<String> {
     }
 
     String::from_utf8(bytes).ok()
-}
-
-#[async_trait]
-impl Channel for DiscordChannel {
-    fn name(&self) -> &str {
-        "discord"
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    /// Recipient-less proactive sends (cron/heartbeat) deliver to the bot's
-    /// configured default `channel_id`. `None` when unconfigured, so proactive
-    /// routing skips Discord rather than letting `send` bail on an empty target
-    /// (#3794 review — Codex P2).
-    fn proactive_target(&self) -> Option<String> {
-        self.channel_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-    }
-
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        // Resolve the target channel: explicit recipient (replies) or the
-        // configured default channel (recipient-less proactive sends). Bail with
-        // a clear error rather than POSTing to an empty channel id (#3794 review).
-        let Some(recipient) =
-            Self::resolve_recipient(&message.recipient, self.channel_id.as_deref())
-        else {
-            anyhow::bail!(
-                "Discord send: no target channel — message had no recipient and no channel_id is configured"
-            );
-        };
-
-        let chunks = split_message_for_discord(&message.content);
-
-        for (i, chunk) in chunks.iter().enumerate() {
-            let url = format!("{}/channels/{recipient}/messages", self.api_base);
-
-            let body = json!({ "content": chunk });
-
-            let resp = self
-                .http_client()
-                .post(&url)
-                .header("Authorization", format!("Bot {}", self.bot_token))
-                .json(&body)
-                .send()
-                .await?;
-
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let err = resp
-                    .text()
-                    .await
-                    .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
-                anyhow::bail!("Discord send message failed ({status}): {err}");
-            }
-
-            // Add a small delay between chunks to avoid rate limiting
-            if i < chunks.len() - 1 {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            }
-        }
-
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_lines)]
-    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        let bot_user_id = Self::bot_user_id_from_token(&self.bot_token).unwrap_or_default();
-
-        // Get Gateway URL
-        let gw_resp: serde_json::Value = self
-            .http_client()
-            .get(format!("{}/gateway/bot", self.api_base))
-            .header("Authorization", format!("Bot {}", self.bot_token))
-            .send()
-            .await?
-            .json()
-            .await?;
-
-        let gw_url = gw_resp
-            .get("url")
-            .and_then(|u| u.as_str())
-            .unwrap_or("wss://gateway.discord.gg");
-
-        let ws_url = format!("{gw_url}/?v=10&encoding=json");
-        tracing::info!("Discord: connecting to gateway...");
-
-        let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url).await?;
-        let (mut write, mut read) = ws_stream.split();
-
-        // Read Hello (opcode 10)
-        let hello = read.next().await.ok_or(anyhow::anyhow!("No hello"))??;
-        let hello_data: serde_json::Value = serde_json::from_str(&hello.to_string())?;
-        let heartbeat_interval = hello_data
-            .get("d")
-            .and_then(|d| d.get("heartbeat_interval"))
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(41250);
-
-        // Send Identify (opcode 2)
-        let identify = json!({
-            "op": 2,
-            "d": {
-                "token": self.bot_token,
-                "intents": 37377, // GUILDS | GUILD_MESSAGES | MESSAGE_CONTENT | DIRECT_MESSAGES
-                "properties": {
-                    "os": "linux",
-                    "browser": "openhuman",
-                    "device": "openhuman"
-                }
-            }
-        });
-        write
-            .send(Message::Text(identify.to_string().into()))
-            .await?;
-
-        tracing::info!("Discord: connected and identified");
-
-        // Track the last sequence number for heartbeats and resume.
-        // Only accessed in the select! loop below, so a plain i64 suffices.
-        let mut sequence: i64 = -1;
-
-        // Spawn heartbeat timer — sends a tick signal, actual heartbeat
-        // is assembled in the select! loop where `sequence` lives.
-        let (hb_tx, mut hb_rx) = tokio::sync::mpsc::channel::<()>(1);
-        let hb_interval = heartbeat_interval;
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_millis(hb_interval));
-            loop {
-                interval.tick().await;
-                if hb_tx.send(()).await.is_err() {
-                    break;
-                }
-            }
-        });
-
-        let guild_filter = self.guild_id.clone();
-        let channel_filter = self.channel_id.clone();
-
-        loop {
-            tokio::select! {
-                _ = hb_rx.recv() => {
-                    let d = if sequence >= 0 { json!(sequence) } else { json!(null) };
-                    let hb = json!({"op": 1, "d": d});
-                    if write.send(Message::Text(hb.to_string().into())).await.is_err() {
-                        break;
-                    }
-                }
-                msg = read.next() => {
-                    let msg = match msg {
-                        Some(Ok(Message::Text(t))) => t,
-                        Some(Ok(Message::Close(_))) | None => break,
-                        _ => continue,
-                    };
-
-                    let event: serde_json::Value = match serde_json::from_str(msg.as_ref()) {
-                        Ok(e) => e,
-                        Err(_) => continue,
-                    };
-
-                    // Track sequence number from all dispatch events
-                    if let Some(s) = event.get("s").and_then(serde_json::Value::as_i64) {
-                        sequence = s;
-                    }
-
-                    let op = event.get("op").and_then(serde_json::Value::as_u64).unwrap_or(0);
-
-                    match op {
-                        // Op 1: Server requests an immediate heartbeat
-                        1 => {
-                            let d = if sequence >= 0 { json!(sequence) } else { json!(null) };
-                            let hb = json!({"op": 1, "d": d});
-                            if write.send(Message::Text(hb.to_string().into())).await.is_err() {
-                                break;
-                            }
-                            continue;
-                        }
-                        // Op 7: Reconnect
-                        7 => {
-                            tracing::warn!("Discord: received Reconnect (op 7), closing for restart");
-                            break;
-                        }
-                        // Op 9: Invalid Session
-                        9 => {
-                            tracing::warn!("Discord: received Invalid Session (op 9), closing for restart");
-                            break;
-                        }
-                        _ => {}
-                    }
-
-                    // Only handle MESSAGE_CREATE (opcode 0, type "MESSAGE_CREATE")
-                    let event_type = event.get("t").and_then(|t| t.as_str()).unwrap_or("");
-                    if event_type != "MESSAGE_CREATE" {
-                        continue;
-                    }
-
-                    let Some(d) = event.get("d") else {
-                        continue;
-                    };
-
-                    // Skip messages from the bot itself
-                    let author_id = d.get("author").and_then(|a| a.get("id")).and_then(|i| i.as_str()).unwrap_or("");
-                    if author_id == bot_user_id {
-                        continue;
-                    }
-
-                    // Skip bot messages (unless listen_to_bots is enabled)
-                    if !self.listen_to_bots && d.get("author").and_then(|a| a.get("bot")).and_then(serde_json::Value::as_bool).unwrap_or(false) {
-                        continue;
-                    }
-
-                    // Sender validation
-                    if !self.is_user_allowed(author_id) {
-                        tracing::warn!("Discord: ignoring message from unauthorized user: {author_id}");
-                        continue;
-                    }
-
-                    // Guild filter + DM scoping (#3794 review — Codex P1)
-                    if !Self::passes_guild_scope(
-                        guild_filter.as_deref(),
-                        d.get("guild_id").and_then(serde_json::Value::as_str),
-                        self.allowed_users.is_empty(),
-                    ) {
-                        continue;
-                    }
-
-                    // Channel filter — only process messages from the configured channel
-                    if let Some(ref cid) = channel_filter {
-                        let msg_channel = d.get("channel_id").and_then(serde_json::Value::as_str).unwrap_or("");
-                        if msg_channel != cid {
-                            continue;
-                        }
-                    }
-
-                    let content = d.get("content").and_then(|c| c.as_str()).unwrap_or("");
-                    let Some(clean_content) =
-                        normalize_incoming_content(content, self.mention_only, &bot_user_id)
-                    else {
-                        continue;
-                    };
-
-                    let message_id = d.get("id").and_then(|i| i.as_str()).unwrap_or("");
-                    let channel_id = d.get("channel_id").and_then(|c| c.as_str()).unwrap_or("").to_string();
-
-                    let channel_msg = ChannelMessage {
-                        id: if message_id.is_empty() {
-                            format!("discord_{}", Uuid::new_v4())
-                        } else {
-                            format!("discord_{message_id}")
-                        },
-                        sender: author_id.to_string(),
-                        reply_target: if channel_id.is_empty() {
-                            author_id.to_string()
-                        } else {
-                            channel_id.clone()
-                        },
-                        content: clean_content,
-                        channel: "discord".to_string(),
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                        topic_id: None,
-                        reply_to_id: None,
-                        thread_ts: None,
-                        sender_name: None,
-                    };
-
-                    if tx.send(channel_msg).await.is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn health_check(&self) -> bool {
-        self.http_client()
-            .get(format!("{}/users/@me", self.api_base))
-            .header("Authorization", format!("Bot {}", self.bot_token))
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
-    }
-
-    async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        self.stop_typing(recipient).await?;
-
-        let client = self.http_client();
-        let token = self.bot_token.clone();
-        let url = format!("{}/channels/{recipient}/typing", self.api_base);
-
-        let handle = tokio::spawn(async move {
-            loop {
-                let _ = client
-                    .post(&url)
-                    .header("Authorization", format!("Bot {token}"))
-                    .send()
-                    .await;
-                tokio::time::sleep(std::time::Duration::from_secs(8)).await;
-            }
-        });
-
-        let mut guard = self.typing_handle.lock();
-        *guard = Some(handle);
-
-        Ok(())
-    }
-
-    async fn stop_typing(&self, _recipient: &str) -> anyhow::Result<()> {
-        let mut guard = self.typing_handle.lock();
-        if let Some(handle) = guard.take() {
-            handle.abort();
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]

@@ -9,6 +9,52 @@ use async_trait::async_trait;
 
 use super::{MediaScope, MediaStoreRequest, MediaStreamRequest, StoredMedia};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceCodecRequest {
+    pub audio_base64: String,
+    pub from: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VoiceCodecResult {
+    pub audio_base64: String,
+    pub duration_ms: Option<u64>,
+    pub waveform: Option<Vec<f32>>,
+}
+
+#[async_trait]
+pub trait VoiceCodec: Send + Sync {
+    async fn transcode(&self, request: VoiceCodecRequest) -> anyhow::Result<VoiceCodecResult>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceMediaRequest {
+    pub audio_base64: String,
+    pub mime_type: String,
+    pub codec: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub file_name: Option<String>,
+    pub direction: tinychannels_bus::HostVoiceMediaDirection,
+    pub scope: tinychannels_bus::HostVoiceScope,
+}
+
+#[async_trait]
+pub trait VoiceMediaStore: Send + Sync {
+    async fn store_voice(
+        &self,
+        request: VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult>;
+
+    async fn read_voice(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        _opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        anyhow::bail!("host voice media resolution is unavailable")
+    }
+}
+
 /// Durable channel media persistence with account, conversation, and turn
 /// checks enforced by the store on every operation.
 #[async_trait]
@@ -22,8 +68,10 @@ pub trait MediaRepository: Send + Sync {
     /// Stream an untrusted source under its declared byte limit before storing.
     async fn store_media_stream(
         &self,
-        request: MediaStreamRequest,
-    ) -> anyhow::Result<tinychannels_bus::MediaReference>;
+        _request: MediaStreamRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        anyhow::bail!("media repository does not support streamed storage")
+    }
 
     /// Resolve an opaque reference only for its exact storage scope.
     async fn read_media(
@@ -34,7 +82,9 @@ pub trait MediaRepository: Send + Sync {
     ) -> anyhow::Result<StoredMedia>;
 
     /// Delete one object only after validating its stored scope.
-    async fn delete_media(&self, scope: MediaScope, opaque_id: String) -> anyhow::Result<bool>;
+    async fn delete_media(&self, _scope: MediaScope, _opaque_id: String) -> anyhow::Result<bool> {
+        anyhow::bail!("media repository does not support deletion")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -71,6 +121,14 @@ pub trait Transcriber: Send + Sync {
         &self,
         request: TranscriptionRequest,
     ) -> anyhow::Result<TranscriptionResult>;
+
+    async fn transcribe_scoped(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        request: TranscriptionRequest,
+    ) -> anyhow::Result<TranscriptionResult> {
+        self.transcribe(request).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +152,7 @@ pub struct SpeechRequest {
 pub struct SpeechResult {
     pub audio_base64: String,
     pub mime_type: String,
+    pub duration_ms: Option<u64>,
     /// Provider-specific viseme timeline (mascot lip-sync); opaque JSON.
     pub visemes: Option<serde_json::Value>,
 }
@@ -102,6 +161,14 @@ pub struct SpeechResult {
 #[async_trait]
 pub trait SpeechSynthesizer: Send + Sync {
     async fn synthesize(&self, request: SpeechRequest) -> anyhow::Result<SpeechResult>;
+
+    async fn synthesize_scoped(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        request: SpeechRequest,
+    ) -> anyhow::Result<SpeechResult> {
+        self.synthesize(request).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -250,6 +317,7 @@ pub trait EventSink: Send + Sync {
             tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "message_deleted",
             tinychannels_bus::ChannelEventKind::Presence { .. } => "presence",
             tinychannels_bus::ChannelEventKind::Lifecycle { .. } => "lifecycle",
+            tinychannels_bus::ChannelEventKind::ButtonCallback { .. } => "button_callback",
         };
         self.publish("channel", kind, serde_json::to_value(event)?)
             .await

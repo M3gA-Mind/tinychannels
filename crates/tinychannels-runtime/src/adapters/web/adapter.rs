@@ -21,8 +21,9 @@ use tinychannels_bus::module_progressive::ChannelOutputEvent;
 use tinychannels_bus::web::WebChatStart;
 use tinychannels_bus::web::{WebChannelEvent, WebEventContext};
 use tinychannels_bus::{
-    ActionCapabilities, AddressingCapabilities, ChannelCapabilities, ContentCapabilities,
-    ContentCapability, EventCapabilities, VoiceCapabilities, VoiceTranscriptSource,
+    ActionCapabilities, AddressingCapabilities, ChannelCapabilities, ChannelIngress,
+    ContentCapabilities, ContentCapability, EventCapabilities, VoiceCapabilities,
+    VoiceTranscriptSource,
 };
 
 /// `client_id` stamped on events that no browser client originated.
@@ -166,7 +167,9 @@ impl WebChannelAdapter {
             parts = envelope.parts.len(),
             "web adapter: inbound submission"
         );
-        inbound.push(envelope).await
+        inbound
+            .push_ingress(ChannelIngress::Inbound(envelope))
+            .await
     }
 
     /// Project one canonical output event and publish the result.

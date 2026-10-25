@@ -12,6 +12,13 @@ pub(crate) fn configured_media_account_scope(
 ) -> Option<String> {
     let provider = tinychannels_bus::provider_id(instance);
     let identity: Vec<String> = match provider {
+        "telegram" => {
+            let c = config.telegram.as_ref()?;
+            if c.bot_token.trim().is_empty() {
+                return None;
+            }
+            vec![c.bot_token.clone()]
+        }
         "mattermost" => {
             let c = config.mattermost.as_ref()?;
             if c.url.trim().is_empty() || c.bot_token.trim().is_empty() {

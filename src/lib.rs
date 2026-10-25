@@ -34,6 +34,7 @@ pub use tinychannels_bus;
 // `ChannelInboundEnvelope` in the build.
 pub use tinychannels_bus::{capabilities, error, names, version};
 
+pub use tinychannels_runtime::WebhookRejected;
 pub use tinychannels_runtime::{
     adapters, channel, config, context, controllers, security, text, traits,
 };
@@ -64,10 +65,15 @@ pub mod runtime;
 pub mod storage;
 
 pub use backend::{ChannelBackend, ChannelManager};
-pub use factory::{ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels};
+pub use factory::{
+    ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
+    build_long_tail_channel,
+};
 pub use host::{ChannelHost, ChannelHostBuilder, HostCapabilities, NoopHost, ProviderContext};
 #[cfg(feature = "imessage")]
 pub use providers::IMessageChannel;
+#[cfg(test)]
+pub(crate) use providers::long_tail::LongTailNative;
 pub use providers::{
     CliChannel, DingTalkChannel, DiscordChannel, IrcChannel, IrcChannelConfig, LinqChannel,
     MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel, WhatsAppChannel,
@@ -87,6 +93,7 @@ pub use tinychannels_runtime::channel::{
     build_session_key_for_inbound_envelope, inbound_envelope_from_legacy_message,
     legacy_message_from_inbound_envelope, legacy_message_value_from_outbound_intent,
     outbound_intent_from_legacy_message, outbound_intent_from_send_message,
+    typed_message_from_inbound_envelope,
 };
 #[allow(
     deprecated,
@@ -106,3 +113,6 @@ mod email_feature_smoke_tests;
 #[cfg(all(test, feature = "lark"))]
 #[path = "lib_lark_feature_smoke_tests.rs"]
 mod lark_feature_smoke_tests;
+
+#[cfg(test)]
+mod provider_test_support;

@@ -15,12 +15,20 @@ pub struct StreamingState {
     /// Backend-assigned message id returned from the initial
     /// `send_channel_message`; subsequent edits target this id.
     pub message_id: Option<String>,
+    /// Every provider message that forms a multipart draft, in send order.
+    pub message_ids: Vec<String>,
+    /// Full provider authority for editing/deleting draft parts when the
+    /// transport supplies normalized receipt tokens.
+    pub message_receipt: Option<tinychannels_bus::channel::MessageReceipt>,
     /// `true` once a draft message has been posted to the channel,
     /// even when the backend response didn't include an id to target
     /// for future edits. Decouples "a draft exists" from "we can edit
     /// it" so `finalize_channel_reply` won't post a duplicate bubble
     /// when the id was lost.
     pub draft_sent: bool,
+    /// A draft request may have reached the provider but returned no usable
+    /// receipt. Final output must not blindly create another message.
+    pub delivery_uncertain: bool,
     /// New content has arrived since the last edit flush.
     pub dirty: bool,
     /// Consecutive edit failures. Reset to zero on every success.
@@ -35,8 +43,14 @@ pub struct StreamingState {
     /// Backend-assigned id of the ephemeral thinking message. Used to
     /// delete it at finalization so the user sees only the clean reply.
     pub thinking_message_id: Option<String>,
+    /// Every provider message and its authority for the thinking bubble.
+    pub thinking_message_ids: Vec<String>,
+    pub thinking_message_receipt: Option<tinychannels_bus::channel::MessageReceipt>,
     /// `true` once a thinking message has been posted to the channel.
     pub thinking_sent: bool,
+    /// The thinking send may have reached the provider without a complete
+    /// receipt. Fence this ephemeral stream without suppressing final output.
+    pub thinking_delivery_uncertain: bool,
     /// New thinking content has arrived since the last thinking flush.
     pub thinking_dirty: bool,
     /// Latched when the first thinking POST succeeded with 200 but the
@@ -49,12 +63,18 @@ pub struct StreamingState {
     /// send order. Deleted in `finalize_channel_reply` after the
     /// canonical response is on screen.
     pub filler_message_ids: Vec<String>,
+    /// Complete receipts for filler sends, including per-part cleanup tokens.
+    pub filler_message_receipts: Vec<tinychannels_bus::channel::MessageReceipt>,
+    /// A filler may have been accepted without a known provider receipt.
+    pub filler_delivery_uncertain: bool,
     /// Next entry in `STATIC_FILLERS` to send when we fall back to the
     /// rotating pool (no fresh thinking content to surface). Wraps
     /// modulo pool size.
     pub filler_index: usize,
     /// Consecutive filler-send failures. Reset to zero on success.
     pub filler_failures: u32,
+    /// Maximum filler send attempts per turn, independent of host output lease.
+    pub filler_send_count: u8,
     /// Latched when the backend rejects filler sends — stops hitting
     /// a broken endpoint every 13 s.
     pub filler_disabled: bool,
@@ -126,21 +146,130 @@ pub struct TypingState {
 /// the last one returns the id as a JSON number, not a string, so
 /// `as_str()` alone misses it (#600).
 pub fn extract_message_id(resp: &serde_json::Value) -> Option<String> {
+    extract_message_ids(resp).into_iter().next()
+}
+
+/// Extract every actual provider ID from normalized receipts and legacy
+/// response shapes, preserving provider order and removing duplicates.
+pub fn extract_message_ids(resp: &serde_json::Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    if let Some(id) = resp
+        .get("primaryPlatformMessageId")
+        .and_then(receipt_id_value)
+    {
+        ids.push(id);
+    }
+    if let Some(values) = resp
+        .get("platformMessageIds")
+        .and_then(serde_json::Value::as_array)
+    {
+        ids.extend(values.iter().filter_map(receipt_id_value));
+    }
+    if let Some(parts) = resp.get("parts").and_then(serde_json::Value::as_array) {
+        ids.extend(
+            parts
+                .iter()
+                .filter_map(|part| part.get("platformMessageId").and_then(receipt_id_value)),
+        );
+    }
+    if let Some(receipt) = resp.get("receipt") {
+        ids.extend(extract_message_ids(receipt));
+    }
     let candidate = resp
         .get("id")
         .or_else(|| resp.get("messageId"))
         .or_else(|| resp.get("data").and_then(|d| d.get("id")))
-        .or_else(|| resp.get("data").and_then(|d| d.get("messageId")))?;
-    if let Some(s) = candidate.as_str() {
-        return Some(s.to_string());
+        .or_else(|| resp.get("data").and_then(|d| d.get("messageId")));
+    if let Some(id) = candidate.and_then(receipt_id_value) {
+        ids.push(id);
     }
-    if let Some(n) = candidate.as_i64() {
-        return Some(n.to_string());
+    let mut unique = Vec::new();
+    for id in ids {
+        if !unique.contains(&id) {
+            unique.push(id);
+        }
     }
-    if let Some(n) = candidate.as_u64() {
-        return Some(n.to_string());
+    unique
+}
+
+/// Retain the normalized receipt embedded in a provider response. Legacy
+/// responses that expose only IDs remain usable, but have no opaque tokens.
+pub fn extract_message_receipt(
+    resp: &serde_json::Value,
+) -> Option<tinychannels_bus::channel::MessageReceipt> {
+    let receipt_value = resp
+        .get("receipt")
+        .or_else(|| resp.get("data").and_then(|data| data.get("receipt")))
+        .or_else(|| {
+            // The typed transport serializes MessageReceipt directly. Require
+            // receipt-specific fields before deserializing: serde defaults
+            // would otherwise turn any legacy success object into a receipt.
+            let direct_receipt = resp.get("primaryPlatformMessageId").is_some()
+                || resp.get("platformMessageIds").is_some()
+                || resp
+                    .get("parts")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|parts| {
+                        parts
+                            .iter()
+                            .any(|part| part.get("platformMessageId").is_some())
+                    });
+            direct_receipt.then_some(resp)
+        })?;
+    serde_json::from_value(receipt_value.clone()).ok()
+}
+
+/// Build cleanup authority from a normalized receipt or a legacy response
+/// that exposes provider IDs without tokens.
+pub fn extract_message_receipt_or_ids(
+    resp: &serde_json::Value,
+) -> Option<tinychannels_bus::channel::MessageReceipt> {
+    let ids = extract_message_ids(resp);
+    let mut receipt = extract_message_receipt(resp).unwrap_or_default();
+    if receipt.platform_message_ids.is_empty() {
+        receipt.platform_message_ids = ids;
+    } else {
+        for id in ids {
+            if !receipt.platform_message_ids.contains(&id) {
+                receipt.platform_message_ids.push(id);
+            }
+        }
     }
-    None
+    if receipt.primary_platform_message_id.is_none() {
+        receipt.primary_platform_message_id = message_receipt_ids(&receipt).first().cloned();
+    }
+    (!message_receipt_ids(&receipt).is_empty()).then_some(receipt)
+}
+
+/// List every provider message represented by a receipt, in provider order.
+pub fn message_receipt_ids(receipt: &tinychannels_bus::channel::MessageReceipt) -> Vec<String> {
+    let mut ids = Vec::new();
+    if let Some(id) = &receipt.primary_platform_message_id {
+        ids.push(id.clone());
+    }
+    ids.extend(receipt.platform_message_ids.iter().cloned());
+    ids.extend(
+        receipt
+            .parts
+            .iter()
+            .map(|part| part.platform_message_id.clone()),
+    );
+    let mut unique = Vec::new();
+    for id in ids {
+        if !unique.contains(&id) {
+            unique.push(id);
+        }
+    }
+    unique
+}
+
+fn receipt_id_value(value: &serde_json::Value) -> Option<String> {
+    value.as_str().map(str::to_owned).or_else(|| {
+        value
+            .as_u64()
+            .map(|number| number.to_string())
+            .or_else(|| value.as_i64().map(|number| number.to_string()))
+    })
 }
 
 /// Pull the most recent `MAX_FILLER_CHARS` Unicode scalars out of the

@@ -1,8 +1,8 @@
 use super::*;
 use crate::config::{
     ChannelsConfig, DingTalkConfig, DiscordConfig, EmailConfig, IMessageConfig, IrcConfig,
-    LarkConfig, MatrixConfig, MattermostConfig, QQConfig, SignalConfig, SlackConfig,
-    TelegramConfig, WhatsAppConfig, YuanbaoConfig,
+    LarkConfig, MattermostConfig, QQConfig, SignalConfig, SlackConfig, TelegramConfig,
+    WhatsAppConfig, YuanbaoConfig,
 };
 
 #[test]
@@ -114,14 +114,6 @@ from_phone = "+15550101"
         imessage: Some(IMessageConfig {
             allowed_contacts: vec![],
         }),
-        matrix: Some(MatrixConfig {
-            homeserver: "https://matrix.example".into(),
-            access_token: "matrix-token".into(),
-            user_id: None,
-            device_id: None,
-            room_id: "!room:matrix.example".into(),
-            allowed_users: vec![],
-        }),
         signal: Some(SignalConfig {
             http_url: "http://127.0.0.1:8080".into(),
             account: "+15550100".into(),
@@ -196,7 +188,6 @@ from_phone = "+15550101"
         ("slack", ChannelAuthMode::BotToken),
         ("mattermost", ChannelAuthMode::BotToken),
         ("imessage", ChannelAuthMode::ManagedDm),
-        ("matrix", ChannelAuthMode::ApiKey),
         ("signal", ChannelAuthMode::ApiKey),
         ("whatsapp", ChannelAuthMode::ApiKey),
         ("linq", ChannelAuthMode::ApiKey),

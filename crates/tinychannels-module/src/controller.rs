@@ -11,7 +11,7 @@ use tinychannels::controllers::{
     DiscordLinkStartResult, DiscordPermissionCheckResult, TelegramLoginCheckResult,
     TelegramLoginStartResult,
 };
-use tinychannels::{ChannelsConfig, SendMessage};
+use tinychannels::{ChannelOutboundIntent, ChannelsConfig};
 use tinychannels_bus::{
     ChannelBackendRequest, ChannelBackendResult, ChannelControllerRequest, ChannelControllerResult,
 };
@@ -305,6 +305,12 @@ struct HostBackend {
     yuanbao: Arc<dyn YuanbaoVerifier>,
     proxy: tinychannels_bus::HttpProxyPolicy,
     discord_token: Option<String>,
+    /// Bot API base override (tests and self-hosted Bot API servers).
+    telegram_api_base: Option<String>,
+    /// Discord REST base override (tests and proxies).
+    discord_api_base: Option<String>,
+    /// Slack Web API base override (tests and proxies).
+    slack_api_base: Option<String>,
 }
 
 impl HostBackend {
@@ -321,7 +327,167 @@ impl HostBackend {
             yuanbao: Arc::new(NativeYuanbaoVerifier),
             proxy: tinychannels_bus::HttpProxyPolicy::default(),
             discord_token,
+            telegram_api_base: None,
+            discord_api_base: None,
+            slack_api_base: None,
         }
+    }
+
+    /// A bot-token Discord client for controller operations, when the config
+    /// carries a bot token. `None` means the managed transport applies.
+    fn discord_native(
+        &self,
+        config: &ChannelsConfig,
+        channel: &str,
+    ) -> anyhow::Result<Option<tinychannels::providers::DiscordChannel>> {
+        use tinychannels::factory::HttpClientFactory as _;
+        if channel != "discord" {
+            return Ok(None);
+        }
+        let Some(discord) = config
+            .discord
+            .as_ref()
+            .filter(|discord| !discord.bot_token.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        let clients = tinychannels::factory::ConfiguredHttpClients::new(self.proxy.clone())?;
+        let mut native = tinychannels::providers::DiscordChannel::with_http_client(
+            discord.bot_token.clone(),
+            discord.guild_id.clone(),
+            discord.channel_id.clone(),
+            discord.allowed_users.clone(),
+            discord.listen_to_bots,
+            discord.mention_only,
+            clients.client_for("channel.discord"),
+        );
+        if let Some(base) = &self.discord_api_base {
+            native = native.with_api_base(base.clone());
+        }
+        Ok(Some(native))
+    }
+
+    /// Bot-token Telegram client plus its default chat, when the config carries
+    /// a bot token. `None` means the managed (host-backend) transport applies.
+    fn telegram_native(
+        &self,
+        config: &ChannelsConfig,
+        channel: &str,
+    ) -> anyhow::Result<
+        Option<(
+            tinychannels::providers::telegram::TelegramBotApi,
+            Option<String>,
+        )>,
+    > {
+        use tinychannels::factory::HttpClientFactory as _;
+        if channel != "telegram" {
+            return Ok(None);
+        }
+        let Some(telegram) = config
+            .telegram
+            .as_ref()
+            .filter(|telegram| !telegram.bot_token.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        let clients = tinychannels::factory::ConfiguredHttpClients::new(self.proxy.clone())?;
+        let mut api = tinychannels::providers::telegram::TelegramBotApi::new(
+            telegram.bot_token.clone(),
+            clients.client_for("channel.telegram"),
+        );
+        if let Some(base) = &self.telegram_api_base {
+            api = api.with_api_base(base.clone());
+        }
+        Ok(Some((api, telegram.chat_id.clone())))
+    }
+
+    /// Bot-token providers that have no native port for `operation` fail
+    /// explicitly instead of being routed to the managed host backend.
+    fn reject_unported(
+        config: &ChannelsConfig,
+        channel: &str,
+        operation: &str,
+    ) -> anyhow::Result<()> {
+        let bot_token_configured = match channel {
+            "slack" => config.slack.is_some(),
+            "mattermost" => config.mattermost.is_some(),
+            _ => false,
+        };
+        if bot_token_configured {
+            tracing::debug!(
+                channel,
+                operation,
+                "[channels] no native port for bot-token channel"
+            );
+            anyhow::bail!(
+                "{channel} has no native {operation} support yet; it is not routed to the managed backend"
+            );
+        }
+        Ok(())
+    }
+
+    fn slack_native(
+        &self,
+        config: &ChannelsConfig,
+        channel: &str,
+    ) -> anyhow::Result<Option<tinychannels::providers::slack::SlackChannel>> {
+        use tinychannels::factory::HttpClientFactory as _;
+        if channel != "slack" {
+            return Ok(None);
+        }
+        let Some(slack) = config
+            .slack
+            .as_ref()
+            .filter(|slack| !slack.bot_token.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        let clients = tinychannels::factory::ConfiguredHttpClients::new(self.proxy.clone())?;
+        let mut native = tinychannels::providers::slack::SlackChannel::with_http_client(
+            slack.bot_token.clone(),
+            slack.channel_id.clone(),
+            slack.allowed_users.clone(),
+            clients.client_for("channel.slack"),
+        );
+        if let Some(app_token) = &slack.app_token {
+            native = native.with_app_token(Some(app_token.clone()));
+        }
+        if let Some(base) = &self.slack_api_base {
+            native = native.with_api_base(base.clone());
+        }
+        Ok(Some(native))
+    }
+
+    /// A configured Mattermost bot whose controller operations use the
+    /// provider's native v4 API rather than the managed backend.
+    fn mattermost_native(
+        &self,
+        config: &ChannelsConfig,
+        channel: &str,
+    ) -> anyhow::Result<Option<tinychannels::providers::MattermostChannel>> {
+        use tinychannels::factory::HttpClientFactory as _;
+        if channel != "mattermost" {
+            return Ok(None);
+        }
+        let Some(mattermost) = config
+            .mattermost
+            .as_ref()
+            .filter(|mattermost| !mattermost.bot_token.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        let clients = tinychannels::factory::ConfiguredHttpClients::new(self.proxy.clone())?;
+        Ok(Some(
+            tinychannels::providers::MattermostChannel::with_http_client(
+                mattermost.url.clone(),
+                mattermost.bot_token.clone(),
+                mattermost.channel_id.clone(),
+                mattermost.allowed_users.clone(),
+                mattermost.thread_replies.unwrap_or(true),
+                mattermost.mention_only.unwrap_or(false),
+                clients.client_for("channel.mattermost"),
+            ),
+        ))
     }
 
     async fn invoke(&self, request: ChannelBackendRequest) -> anyhow::Result<ChannelBackendResult> {
@@ -581,11 +747,10 @@ impl ChannelBackend for HostBackend {
         })
     }
 
-    async fn send_message(
+    async fn send_outbound_intent(
         &self,
         _config: &ChannelsConfig,
-        _channel: &str,
-        _message: SendMessage,
+        _intent: ChannelOutboundIntent,
     ) -> anyhow::Result<ChannelSendMessageResult> {
         Err(anyhow::anyhow!(
             "message sends use the module provider path"
@@ -594,10 +759,94 @@ impl ChannelBackend for HostBackend {
 
     async fn send_reaction(
         &self,
-        _config: &ChannelsConfig,
+        config: &ChannelsConfig,
         channel: &str,
         reaction: Value,
     ) -> anyhow::Result<ChannelReactionResult> {
+        if let Some((api, _)) = self.telegram_native(config, channel)? {
+            let request =
+                tinychannels::providers::telegram::TelegramReactionRequest::from_value(&reaction)
+                    .map_err(anyhow::Error::msg)?;
+            api.send_reaction(&request).await?;
+            return Ok(ChannelReactionResult {
+                success: true,
+                ..Default::default()
+            });
+        }
+        if let Some(discord) = self.discord_native(config, channel)? {
+            let request =
+                tinychannels::providers::discord::DiscordReactionRequest::from_value(&reaction)
+                    .map_err(anyhow::Error::msg)?;
+            discord
+                .controller_reaction(&request)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+            return Ok(ChannelReactionResult {
+                success: true,
+                ..Default::default()
+            });
+        }
+        if let Some(slack) = self.slack_native(config, channel)? {
+            let request =
+                tinychannels::providers::discord::DiscordReactionRequest::from_value(&reaction)
+                    .map_err(anyhow::Error::msg)?;
+            let reaction = tinychannels_bus::channel::ChannelReaction {
+                value: request.emoji.unwrap_or_default(),
+                custom_emoji_id: request.custom_emoji_id,
+            };
+            tinychannels::channel::LegacyChannelReaction::send_reaction(
+                &slack,
+                &tinychannels_bus::channel::ChannelRef {
+                    id: "slack".into(),
+                    account_id: None,
+                },
+                &tinychannels_bus::channel::ConversationRef {
+                    kind: tinychannels_bus::ConversationKind::Channel,
+                    id: request.channel_id,
+                    ..Default::default()
+                },
+                &request.message_id,
+                &reaction,
+                request.remove,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!(error.message))?;
+            return Ok(ChannelReactionResult {
+                success: true,
+                ..Default::default()
+            });
+        }
+        if let Some(mattermost) = self.mattermost_native(config, channel)? {
+            let request =
+                tinychannels::providers::discord::DiscordReactionRequest::from_value(&reaction)
+                    .map_err(anyhow::Error::msg)?;
+            let reaction = tinychannels_bus::channel::ChannelReaction {
+                value: request.emoji.unwrap_or_default(),
+                custom_emoji_id: request.custom_emoji_id,
+            };
+            tinychannels::channel::LegacyChannelReaction::send_reaction(
+                &mattermost,
+                &tinychannels_bus::channel::ChannelRef {
+                    id: "mattermost".into(),
+                    account_id: None,
+                },
+                &tinychannels_bus::channel::ConversationRef {
+                    kind: tinychannels_bus::ConversationKind::Channel,
+                    id: request.channel_id,
+                    ..Default::default()
+                },
+                &request.message_id,
+                &reaction,
+                request.remove,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!(error.message))?;
+            return Ok(ChannelReactionResult {
+                success: true,
+                ..Default::default()
+            });
+        }
+        Self::reject_unported(config, channel, "reaction")?;
         match self
             .invoke(ChannelBackendRequest::SendReaction {
                 channel: channel.to_owned(),
@@ -612,10 +861,33 @@ impl ChannelBackend for HostBackend {
 
     async fn create_thread(
         &self,
-        _config: &ChannelsConfig,
+        config: &ChannelsConfig,
         channel: &str,
         title: &str,
     ) -> anyhow::Result<ChannelThreadResult> {
+        if let Some((api, chat_id)) = self.telegram_native(config, channel)? {
+            let chat_id = chat_id.ok_or_else(|| {
+                anyhow::anyhow!("Telegram threads need a default chat_id in the channel config")
+            })?;
+            let (thread_id, name) = api.create_topic(&chat_id, title).await?;
+            return Ok(ChannelThreadResult {
+                thread_id,
+                title: Some(name),
+                raw: None,
+            });
+        }
+        if let Some(discord) = self.discord_native(config, channel)? {
+            let (thread_id, name) = discord
+                .create_thread(title)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+            return Ok(ChannelThreadResult {
+                thread_id,
+                title: Some(name),
+                raw: None,
+            });
+        }
+        Self::reject_unported(config, channel, "thread create")?;
         match self
             .invoke(ChannelBackendRequest::CreateThread {
                 channel: channel.to_owned(),
@@ -630,11 +902,38 @@ impl ChannelBackend for HostBackend {
 
     async fn update_thread(
         &self,
-        _config: &ChannelsConfig,
+        config: &ChannelsConfig,
         channel: &str,
         thread_id: &str,
         action: &str,
     ) -> anyhow::Result<ChannelThreadResult> {
+        if let Some((api, chat_id)) = self.telegram_native(config, channel)? {
+            let chat_id = chat_id.ok_or_else(|| {
+                anyhow::anyhow!("Telegram threads need a default chat_id in the channel config")
+            })?;
+            let action = tinychannels::providers::telegram::TopicAction::parse(action)
+                .map_err(anyhow::Error::msg)?;
+            api.update_topic(&chat_id, thread_id, action).await?;
+            return Ok(ChannelThreadResult {
+                thread_id: thread_id.to_owned(),
+                title: None,
+                raw: None,
+            });
+        }
+        if let Some(discord) = self.discord_native(config, channel)? {
+            let action = tinychannels::providers::discord::ThreadAction::parse(action)
+                .map_err(anyhow::Error::msg)?;
+            discord
+                .update_thread(thread_id, action)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+            return Ok(ChannelThreadResult {
+                thread_id: thread_id.to_owned(),
+                title: None,
+                raw: None,
+            });
+        }
+        Self::reject_unported(config, channel, "thread update")?;
         match self
             .invoke(ChannelBackendRequest::UpdateThread {
                 channel: channel.to_owned(),
@@ -650,10 +949,21 @@ impl ChannelBackend for HostBackend {
 
     async fn list_threads(
         &self,
-        _config: &ChannelsConfig,
+        config: &ChannelsConfig,
         channel: &str,
         active: Option<bool>,
     ) -> anyhow::Result<ChannelThreadListResult> {
+        if self.telegram_native(config, channel)?.is_some() {
+            anyhow::bail!("Telegram's Bot API cannot list forum topics");
+        }
+        if let Some(discord) = self.discord_native(config, channel)? {
+            let threads = discord
+                .list_threads(active)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+            return Ok(ChannelThreadListResult { threads, raw: None });
+        }
+        Self::reject_unported(config, channel, "thread list")?;
         match self
             .invoke(ChannelBackendRequest::ListThreads {
                 channel: channel.to_owned(),

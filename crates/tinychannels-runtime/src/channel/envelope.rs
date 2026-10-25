@@ -1,3 +1,6 @@
+// Scoped allowance for the one-release v21 wire DTO compatibility surface.
+#![allow(deprecated)]
+
 //! Legacy inbound projections.
 use crate::channel::types::{ChannelRef, ConversationRef, SenderRef};
 use crate::traits::ChannelMessage;
@@ -119,6 +122,20 @@ pub fn legacy_message_from_inbound_envelope(
         for part in &envelope.parts {
             match part {
                 ContentPart::Text { text: value, .. } => text.push(value.as_str()),
+                ContentPart::VoiceNote { voice_note } => {
+                    let Some(transcript) = voice_note.transcript.as_ref().filter(|transcript| {
+                        transcript.state == VoiceTranscriptState::Complete
+                            && !transcript.text.trim().is_empty()
+                    }) else {
+                        anyhow::bail!(
+                            "legacy message cannot represent a voice note without a complete transcript"
+                        );
+                    };
+                    // The prepared result retains the canonical envelope and
+                    // its audio reference. This compatibility view carries
+                    // the transcript into legacy text dispatch.
+                    text.push(transcript.text.as_str());
+                }
                 _ => anyhow::bail!("legacy message cannot represent non-text inbound content"),
             }
         }
@@ -137,3 +154,54 @@ pub fn legacy_message_from_inbound_envelope(
         sender_name: envelope.sender.name.clone(),
     })
 }
+
+/// Build a text/routing compatibility view for a host that consumes the
+/// preserved typed envelope separately. Rich media remain only in `envelope`;
+/// callers that do not consume those parts must use the strict legacy
+/// projection above instead.
+pub fn typed_message_from_inbound_envelope(
+    envelope: &ChannelInboundEnvelope,
+    timestamp: u64,
+) -> ChannelMessage {
+    let content = if envelope.parts.is_empty() {
+        envelope.text.clone()
+    } else {
+        let projected = envelope
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                ContentPart::Text { text, .. } => Some(text.as_str()),
+                ContentPart::VoiceNote { voice_note } => voice_note
+                    .transcript
+                    .as_ref()
+                    .filter(|transcript| {
+                        transcript.state == VoiceTranscriptState::Complete
+                            && !transcript.text.trim().is_empty()
+                    })
+                    .map(|transcript| transcript.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if projected.is_empty() {
+            envelope.text.clone()
+        } else {
+            projected.join("\n")
+        }
+    };
+    ChannelMessage {
+        id: envelope.message_id.clone(),
+        sender: envelope.sender.id.clone(),
+        reply_target: envelope.conversation.id.clone(),
+        content,
+        channel: envelope.channel.id.clone(),
+        timestamp,
+        thread_ts: envelope.conversation.thread_id.clone(),
+        topic_id: envelope.conversation.topic_id.clone(),
+        reply_to_id: envelope.reply_to_id.clone(),
+        sender_name: envelope.sender.name.clone(),
+    }
+}
+
+#[cfg(test)]
+#[path = "envelope_tests.rs"]
+mod tests;

@@ -368,6 +368,9 @@ fn artifacts_and_lifecycle_stages_map_by_name() {
     let iteration = wire(&one(lifecycle("iteration_start")));
     assert_eq!(iteration["event"], "iteration_start");
     assert_eq!(iteration["round"], 2);
+    let compacting = wire(&one(lifecycle("context_compacting")));
+    assert_eq!(compacting["event"], "context_compacting");
+    assert_eq!(compacting["round"], 2);
     assert!(projector().project(lifecycle("compaction"), 1).is_empty());
 }
 
@@ -417,6 +420,21 @@ fn subagent_states_map_to_subagent_events_with_detail() {
             )
             .is_empty()
     );
+}
+
+#[test]
+fn a_finished_subagent_reports_its_iterations_and_final_text_on_the_detail() {
+    let done = wire(&one(ChannelOutputEvent::Subagent(Box::new(subagent(
+        "completed",
+    )))));
+    assert_eq!(done["subagent"]["iterations"], 2);
+    assert_eq!(done["subagent"]["output"], "Found results");
+
+    let running = wire(&one(ChannelOutputEvent::Subagent(Box::new(subagent(
+        "tool_call",
+    )))));
+    assert!(running["subagent"].get("iterations").is_none());
+    assert!(running["subagent"].get("output").is_none());
 }
 
 #[test]

@@ -9,11 +9,12 @@ pub mod receipt;
 pub mod session;
 pub use tinychannels_bus::channel::types;
 
+#[allow(deprecated)]
 pub use crate::traits::{Channel, ChannelMessage, ChannelSendExt, SendMessage, SendMessageExt};
 pub use adapter::{
     ChannelAdapter, ChannelDelete, ChannelDirectory, ChannelEdit, ChannelInboundSink,
     ChannelReaction, ChannelReceiveAckPolicy, ChannelResolver, ChannelSetup, ChannelStreamingDraft,
-    ChannelTyping,
+    ChannelTypedSend, ChannelTyping, LegacyChannelReaction,
 };
 pub use capabilities::{
     CHANNEL_MESSAGE_ACTION_NAMES, ChannelPresentationCapabilities, ChannelStaticCapabilities,
@@ -24,6 +25,7 @@ pub use envelope::{
     AccessContext, ChannelInboundEnvelope, GroupAccessPolicy, InboundMediaPayload,
     InboundMediaPayloadExt, MediaKind, MediaReference, MentionGate, SenderDmDecision,
     inbound_envelope_from_legacy_message, legacy_message_from_inbound_envelope,
+    typed_message_from_inbound_envelope,
 };
 pub use error::{
     ChannelSendError, ChannelSendErrorExt, SendErrorKind, classify_send_error,

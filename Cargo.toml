@@ -50,6 +50,7 @@ categories = ["asynchronous", "api-bindings"]
 
 [features]
 default = []
+test-support = []
 # Retained so downstreams that request it keep resolving; the relay WebSocket
 # transport module is still gated on this cfg. `tokio-tungstenite` and
 # `tokio/net` are now unconditional dependencies (the ported channel providers
@@ -151,6 +152,9 @@ bytes = { version = "1", optional = true }
 
 [dev-dependencies]
 bytes = "1"
+tinybus = { path = "vendor/tinybus/crates/tinybus", features = ["modules"] }
+tinychannels-conformance = { path = "crates/tinychannels-conformance" }
+tinyvoice-bus = { git = "https://github.com/tinyhumansai/tinyvoice", rev = "cf6444424149bbc8dc2303bddbd9b366abb29933" }
 # Dual-declared: the optional dependency above belongs to the `lark` provider,
 # but `providers/discord/api_tests.rs` spins an axum mock server to test the
 # Discord REST client — unrelated to Lark, and it must build with `lark` off.
@@ -158,6 +162,6 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 tempfile = "3"
 toml = "1"
 wiremock = "0.6"
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "test-util"] }
 tinystoragedrivers-testkit = { git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456" }
 tinystoragedrivers-document = { git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456" }

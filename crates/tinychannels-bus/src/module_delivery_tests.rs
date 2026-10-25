@@ -7,6 +7,7 @@ fn new_pending_record_starts_with_empty_retry_state() {
         "op-1",
         ChannelOutboundIntent {
             idempotency_key: "op-1".into(),
+            turn_id: None,
             durability: DeliveryDurability::Required,
             ..Default::default()
         },
@@ -33,6 +34,7 @@ fn delivery_records_round_trip_without_losing_retry_or_intent_fields() {
             channel_ref: None,
             conversation_ref: None,
             thread_id: Some("thread-3".into()),
+            turn_id: None,
             durability: DeliveryDurability::Required,
             ..Default::default()
         },

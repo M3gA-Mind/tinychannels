@@ -1,9 +1,6 @@
 //! Backend abstraction for OpenHuman-owned channel operations.
 
-use crate::channel::{
-    ChannelOutboundIntent, legacy_message_value_from_outbound_intent,
-    outbound_intent_from_legacy_message, outbound_intent_from_send_message,
-};
+use crate::channel::ChannelOutboundIntent;
 use crate::config::{ChannelsConfig, YuanbaoConfig, strip_yuanbao_version_prefix};
 use crate::controllers::{
     ChannelAuthMode, ChannelConnectionResult, ChannelDefinition, ChannelDisconnectResult,
@@ -12,7 +9,6 @@ use crate::controllers::{
     DiscordLinkCheckResult, DiscordLinkStartResult, DiscordPermissionCheckResult,
     TelegramLoginCheckResult, TelegramLoginStartResult,
 };
-use crate::traits::SendMessage;
 use async_trait::async_trait;
 use serde_json::Value;
 use tinychannels_runtime::config::YuanbaoConfigExt as _;
@@ -54,37 +50,11 @@ pub trait ChannelBackend: Send + Sync {
         credentials: Value,
     ) -> anyhow::Result<ChannelTestResult>;
 
-    async fn send_message(
-        &self,
-        config: &ChannelsConfig,
-        channel: &str,
-        message: SendMessage,
-    ) -> anyhow::Result<ChannelSendMessageResult>;
-
-    async fn send_message_value(
-        &self,
-        _config: &ChannelsConfig,
-        _channel: &str,
-        _message: Value,
-    ) -> anyhow::Result<ChannelSendMessageResult> {
-        Err(anyhow::anyhow!(
-            "raw channel message payloads are not supported by this backend"
-        ))
-    }
-
     async fn send_outbound_intent(
         &self,
         config: &ChannelsConfig,
         intent: ChannelOutboundIntent,
-    ) -> anyhow::Result<ChannelSendMessageResult> {
-        let channel = intent.channel_id.clone();
-        self.send_message_value(
-            config,
-            &channel,
-            legacy_message_value_from_outbound_intent(&intent),
-        )
-        .await
-    }
+    ) -> anyhow::Result<ChannelSendMessageResult>;
 
     async fn send_reaction(
         &self,
@@ -301,34 +271,6 @@ impl<B: ChannelBackend> ChannelManager<B> {
             .map_err(anyhow::Error::msg)?;
         self.backend
             .test_channel(&self.config, channel, auth_mode, credentials)
-            .await
-    }
-
-    #[tracing::instrument(skip(self, message), fields(channel = %channel))]
-    pub async fn send_message(
-        &self,
-        channel: &str,
-        message: SendMessage,
-    ) -> anyhow::Result<ChannelSendMessageResult> {
-        self.backend
-            .send_outbound_intent(
-                &self.config,
-                outbound_intent_from_send_message(channel, &message),
-            )
-            .await
-    }
-
-    #[tracing::instrument(skip(self, message), fields(channel = %channel))]
-    pub async fn send_message_value(
-        &self,
-        channel: &str,
-        message: Value,
-    ) -> anyhow::Result<ChannelSendMessageResult> {
-        self.backend
-            .send_outbound_intent(
-                &self.config,
-                outbound_intent_from_legacy_message(channel, message),
-            )
             .await
     }
 

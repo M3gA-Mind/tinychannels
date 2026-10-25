@@ -5,7 +5,6 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use super::email_channel::{EmailChannel, EmailConfig};
-use crate::traits::Channel as _;
 
 /// Outer bound on the IMAP login probe. The channel's own health check has an
 /// inner budget; this cap also lets the caller tell a timeout from a failed
@@ -17,7 +16,12 @@ pub const EMAIL_VERIFY_TIMEOUT: Duration = Duration::from_secs(20);
 /// restart. Returns a user-facing error message on failure.
 pub async fn verify_email_credentials(cfg: &EmailConfig) -> Result<(), String> {
     let probe = EmailChannel::new(cfg.clone());
-    verify_with_probe(probe.health_check(), &cfg.imap_host, EMAIL_VERIFY_TIMEOUT).await
+    verify_with_probe(
+        Box::pin(probe.health_probe()),
+        &cfg.imap_host,
+        EMAIL_VERIFY_TIMEOUT,
+    )
+    .await
 }
 
 /// Maps a login probe's outcome, bounded by `limit`, to the user-facing result.

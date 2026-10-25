@@ -179,7 +179,7 @@ pub enum ChannelBackendRequest {
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum ChannelBackendResult {
     RemoteControl(crate::module_remote::RemoteHostResult),
-    ProgressiveTransport(crate::module_progressive::ProgressiveTransportResult),
+    ProgressiveTransport(Box<crate::module_progressive::ProgressiveTransportResult>),
     Disconnected(ChannelDisconnectResult),
     Status(Vec<ChannelStatusEntry>),
     SendReaction(ChannelReactionResult),

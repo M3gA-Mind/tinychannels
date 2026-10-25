@@ -1,20 +1,17 @@
-use super::super::attachments::{
-    TelegramAttachmentKind, infer_attachment_kind_from_target, parse_attachment_markers,
-    parse_path_only_attachment,
-};
+use super::super::attachments::infer_attachment_mime;
 use super::super::text::{
     TELEGRAM_MAX_MESSAGE_LENGTH, split_message_for_telegram, strip_tool_call_tags,
 };
 use super::TelegramChannel;
+use crate::channel::{ChannelAdapter, ChannelStreamingDraft, ChannelTyping};
 use crate::config::StreamMode;
-use crate::traits::{Channel, SendMessage};
 use std::path::Path;
 use std::time::Duration;
 
 #[test]
 fn telegram_channel_name() {
     let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-    assert_eq!(ch.name(), "telegram");
+    assert_eq!(ch.descriptor().id, "telegram");
 }
 
 #[test]
@@ -40,75 +37,115 @@ fn proactive_target_uses_configured_chat_id() {
 }
 
 #[test]
-fn typing_handle_starts_as_none() {
+fn typing_capability_is_declared() {
     let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-    let guard = ch.typing_handle.lock();
-    assert!(guard.is_none());
+    assert!(
+        ch.declared_capabilities()
+            .actions
+            .supported
+            .contains(&"typing".into())
+    );
+}
+
+struct CapabilityMediaRepository;
+
+#[async_trait::async_trait]
+impl crate::host::MediaRepository for CapabilityMediaRepository {
+    async fn store_media(
+        &self,
+        _request: crate::host::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        anyhow::bail!("capability fixture does not store media")
+    }
+
+    async fn read_media(
+        &self,
+        _scope: crate::host::MediaScope,
+        _opaque_id: String,
+        _max_bytes: u64,
+    ) -> anyhow::Result<crate::host::StoredMedia> {
+        anyhow::bail!("capability fixture does not read media")
+    }
+}
+
+struct CapabilityVoiceStore;
+
+#[async_trait::async_trait]
+impl crate::host::VoiceMediaStore for CapabilityVoiceStore {
+    async fn store_voice(
+        &self,
+        _request: crate::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        anyhow::bail!("capability fixture does not store voice")
+    }
+}
+
+#[test]
+fn configured_media_and_voice_ports_expand_capabilities() {
+    let mut channel = TelegramChannel::new("token".into(), vec!["*".into()], false);
+    channel.media_repository = Some(std::sync::Arc::new(CapabilityMediaRepository));
+    channel.voice_media_store = Some(std::sync::Arc::new(CapabilityVoiceStore));
+    channel.voice_synthesis = true;
+
+    let capabilities = channel.declared_capabilities();
+    for part in ["image", "video", "audio", "file", "sticker", "voice_note"] {
+        assert!(capabilities.content.parts.iter().any(|value| value == part));
+    }
+    assert!(capabilities.content.image.inbound && capabilities.content.image.outbound);
+    assert_eq!(
+        capabilities.content.image.max_size_bytes,
+        Some(10 * 1024 * 1024)
+    );
+    assert!(capabilities.content.video.inbound && capabilities.content.video.outbound);
+    assert!(capabilities.content.audio.inbound && capabilities.content.audio.outbound);
+    assert!(capabilities.content.file.inbound && capabilities.content.file.outbound);
+    assert!(capabilities.content.sticker.inbound && capabilities.content.sticker.outbound);
+    assert!(capabilities.voice_in.supported);
+    assert!(capabilities.voice_out.supported && capabilities.voice_out.synthesis);
+    assert!(
+        capabilities
+            .voice_in
+            .transcript_sources
+            .contains(&tinychannels_bus::VoiceTranscriptSource::HostStt)
+    );
+    assert!(
+        capabilities
+            .voice_out
+            .accepted_codecs
+            .contains(&"ogg_opus".into())
+    );
 }
 
 #[tokio::test]
-async fn stop_typing_clears_handle() {
+async fn typed_stop_typing_is_idempotent() {
     let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-
-    // Manually insert a dummy handle
-    {
-        let mut guard = ch.typing_handle.lock();
-        *guard = Some(super::TelegramTypingTask {
-            recipient: "123".to_string(),
-            handle: tokio::spawn(async {
-                tokio::time::sleep(Duration::from_secs(60)).await;
-            }),
-        });
-    }
-
-    // stop_typing should abort and clear
-    ch.stop_typing("123").await.unwrap();
-
-    let guard = ch.typing_handle.lock();
-    assert!(guard.is_none());
-}
-
-#[tokio::test]
-async fn start_typing_replaces_previous_handle() {
-    let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-
-    // Insert a dummy handle first
-    {
-        let mut guard = ch.typing_handle.lock();
-        *guard = Some(super::TelegramTypingTask {
-            recipient: "123".to_string(),
-            handle: tokio::spawn(async {
-                tokio::time::sleep(Duration::from_secs(60)).await;
-            }),
-        });
-    }
-
-    // start_typing should abort the old handle and set a new one
-    let _ = ch.start_typing("123").await;
-
-    let guard = ch.typing_handle.lock();
-    assert!(guard.is_some());
+    ChannelTyping::stop_typing(&ch, "123").await.unwrap();
 }
 
 #[test]
 fn supports_draft_updates_respects_stream_mode() {
     let off = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-    assert!(!off.supports_draft_updates());
+    assert!(
+        !off.declared_capabilities()
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "draft-update")
+    );
 
     let partial = TelegramChannel::new("fake-token".into(), vec!["*".into()], false)
         .with_streaming(StreamMode::Partial, 750, true);
-    assert!(partial.supports_draft_updates());
     assert!(
         partial
-            .capabilities()
+            .declared_capabilities()
             .actions
             .supported
             .iter()
             .any(|name| name == "draft-update")
     );
     assert!(
-        !partial
-            .capabilities()
+        partial
+            .declared_capabilities()
             .actions
             .supported
             .iter()
@@ -120,11 +157,12 @@ fn supports_draft_updates_respects_stream_mode() {
 
 #[test]
 fn capabilities_advertise_supported_reply_and_topic_addressing() {
-    let capabilities = TelegramChannel::new("token".into(), vec!["*".into()], false).capabilities();
+    let capabilities =
+        TelegramChannel::new("token".into(), vec!["*".into()], false).declared_capabilities();
 
     assert!(capabilities.addressing.reply_to_id);
     assert!(capabilities.addressing.thread_id);
-    assert!(capabilities.addressing.topic_id);
+    assert!(!capabilities.addressing.topic_id);
     assert!(
         capabilities
             .actions
@@ -144,8 +182,7 @@ fn capabilities_advertise_supported_reply_and_topic_addressing() {
 #[tokio::test]
 async fn send_draft_returns_none_when_stream_mode_off() {
     let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-    let id = ch
-        .send_draft(&SendMessage::new("draft", "123"))
+    let id = ChannelStreamingDraft::start_draft(&ch, draft_intent("draft", "123", None))
         .await
         .unwrap();
     assert!(id.is_none());
@@ -162,7 +199,9 @@ async fn update_draft_rate_limit_short_circuits_network() {
         .lock()
         .insert("123".to_string(), std::time::Instant::now());
 
-    let result = ch.update_draft("123", "42", "delta text").await;
+    let result =
+        ChannelStreamingDraft::update_draft(&ch, "42", draft_intent("delta text", "123", None))
+            .await;
     assert!(result.is_ok());
 }
 
@@ -177,9 +216,12 @@ async fn update_draft_utf8_truncation_is_safe_for_multibyte_text() {
 
     // Invalid message_id returns early after building display_text.
     // This asserts truncation never panics on UTF-8 boundaries.
-    let result = ch
-        .update_draft("123", "not-a-number", &long_emoji_text)
-        .await;
+    let result = ChannelStreamingDraft::update_draft(
+        &ch,
+        "not-a-number",
+        draft_intent(&long_emoji_text, "123", None),
+    )
+    .await;
     assert!(result.is_ok());
 }
 
@@ -194,10 +236,28 @@ async fn finalize_draft_invalid_message_id_falls_back_to_chunk_send() {
 
     // For oversized text + invalid draft message_id, finalize_draft should
     // fall back to chunked send instead of returning early.
-    let result = ch
-        .finalize_draft("123", "not-a-number", &long_text, None)
-        .await;
+    let result = ChannelStreamingDraft::finalize_draft(
+        &ch,
+        "not-a-number",
+        draft_intent(&long_text, "123", None),
+    )
+    .await;
     assert!(result.is_err());
+}
+
+fn draft_intent(
+    text: &str,
+    conversation_id: &str,
+    reply_to_id: Option<&str>,
+) -> tinychannels_bus::ChannelOutboundIntent {
+    tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "telegram-channel-test-draft".into(),
+        channel_id: "telegram".into(),
+        conversation_id: conversation_id.into(),
+        reply_to_id: reply_to_id.map(str::to_owned),
+        payload: tinychannels_bus::OutboundPayload::Text { text: text.into() },
+        ..Default::default()
+    }
 }
 
 #[test]
@@ -417,51 +477,36 @@ fn telegram_allowlist_is_empty_tracks_runtime_state() {
 }
 
 #[test]
-fn parse_attachment_markers_extracts_multiple_types() {
-    let message = "Here are files [IMAGE:/tmp/a.png] and [DOCUMENT:https://example.com/a.pdf]";
-    let (cleaned, attachments) = parse_attachment_markers(message);
-
-    assert_eq!(cleaned, "Here are files  and");
-    assert_eq!(attachments.len(), 2);
-    assert_eq!(attachments[0].kind, TelegramAttachmentKind::Image);
-    assert_eq!(attachments[0].target, "/tmp/a.png");
-    assert_eq!(attachments[1].kind, TelegramAttachmentKind::Document);
-    assert_eq!(attachments[1].target, "https://example.com/a.pdf");
-}
-
-#[test]
-fn parse_attachment_markers_keeps_invalid_markers_in_text() {
-    let message = "Report [UNKNOWN:/tmp/a.bin]";
-    let (cleaned, attachments) = parse_attachment_markers(message);
-
-    assert_eq!(cleaned, "Report [UNKNOWN:/tmp/a.bin]");
-    assert!(attachments.is_empty());
-}
-
-#[test]
-fn parse_path_only_attachment_detects_existing_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let image_path = dir.path().join("snap.png");
-    std::fs::write(&image_path, b"fake-png").unwrap();
-
-    let parsed = parse_path_only_attachment(image_path.to_string_lossy().as_ref())
-        .expect("expected attachment");
-
-    assert_eq!(parsed.kind, TelegramAttachmentKind::Image);
-    assert_eq!(parsed.target, image_path.to_string_lossy());
-}
-
-#[test]
-fn parse_path_only_attachment_rejects_sentence_text() {
-    assert!(parse_path_only_attachment("Screenshot saved to /tmp/snap.png").is_none());
-}
-
-#[test]
-fn infer_attachment_kind_from_target_detects_document_extension() {
-    assert_eq!(
-        infer_attachment_kind_from_target("https://example.com/files/specs.pdf?download=1"),
-        Some(TelegramAttachmentKind::Document)
-    );
+fn inbound_media_mime_inference_handles_known_extensions_and_urls() {
+    for (path, expected) in [
+        ("photo.PNG?download=1", Some("image/png")),
+        ("photo.jpeg#preview", Some("image/jpeg")),
+        ("photo.gif", Some("image/gif")),
+        ("photo.webp", Some("image/webp")),
+        ("movie.mp4", Some("video/mp4")),
+        ("movie.mov", Some("video/quicktime")),
+        ("movie.webm", Some("video/webm")),
+        ("sound.mp3", Some("audio/mpeg")),
+        ("sound.m4a", Some("audio/mp4")),
+        ("sound.wav", Some("audio/wav")),
+        ("voice.ogg", Some("audio/ogg")),
+        ("spec.pdf", Some("application/pdf")),
+        ("notes.txt", Some("text/plain")),
+        ("data.csv", Some("text/csv")),
+        ("data.json", Some("application/json")),
+        ("archive.zip", Some("application/zip")),
+        (
+            "document.docx",
+            Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        ),
+        (
+            "sheet.xlsx",
+            Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        ),
+        ("unknown.bin", None),
+    ] {
+        assert_eq!(infer_attachment_mime(path), expected, "{path}");
+    }
 }
 
 #[test]
@@ -696,7 +741,7 @@ fn inbound_voice_context_mention_only_group_requires_caption_mention() {
 }
 
 #[test]
-fn inbound_voice_content_preserves_caption_outside_mention_only_groups() {
+fn inbound_voice_context_accepts_caption_outside_mention_only_groups() {
     let ch = TelegramChannel::new("token".into(), vec!["*".into()], false);
     let update = serde_json::json!({
         "message": {
@@ -719,18 +764,12 @@ fn inbound_voice_content_preserves_caption_outside_mention_only_groups() {
     let ctx = ch
         .parse_incoming_message_context(&update["message"], Some("summarize this"))
         .expect("authorized voice message context should parse");
-    let content = TelegramChannel::voice_message_content(
-        "transcribed voice",
-        Some("summarize this"),
-        &ctx,
-        false,
-    );
-
-    assert_eq!(content, "summarize this\n\ntranscribed voice");
+    assert_eq!(ctx.mention_text, None);
+    assert_eq!(ctx.chat_id, "12345");
 }
 
 #[test]
-fn inbound_voice_content_uses_normalized_caption_in_mention_only_groups() {
+fn inbound_voice_context_normalizes_caption_in_mention_only_groups() {
     let ch = TelegramChannel::new("token".into(), vec!["*".into()], true);
     *ch.bot_username.lock() = Some("mybot".to_string());
     let update = serde_json::json!({
@@ -754,14 +793,8 @@ fn inbound_voice_content_uses_normalized_caption_in_mention_only_groups() {
     let ctx = ch
         .parse_incoming_message_context(&update["message"], Some("@mybot summarize this"))
         .expect("caption mention should allow voice in mention-only group");
-    let content = TelegramChannel::voice_message_content(
-        "transcribed voice",
-        Some("@mybot summarize this"),
-        &ctx,
-        true,
-    );
-
-    assert_eq!(content, "summarize this\n\ntranscribed voice");
+    assert_eq!(ctx.mention_text.as_deref(), Some("summarize this"));
+    assert_eq!(ctx.chat_id, "-100200300");
 }
 
 #[test]
@@ -874,37 +907,6 @@ fn parse_update_reaction_extracts_actor_target_and_emoji() {
     assert_eq!(reaction.reply_target, "-100200300");
     assert_eq!(reaction.target_message_id, "123");
     assert_eq!(reaction.emoji, "🔥");
-}
-
-#[test]
-fn parse_reaction_marker_supports_optional_target_id() {
-    let (content, marker) = TelegramChannel::parse_reaction_marker("[REACTION:✅|321]");
-    assert_eq!(content, "");
-    assert_eq!(marker.as_deref(), Some("✅|321"));
-
-    let (content, marker) = TelegramChannel::parse_reaction_marker("hello");
-    assert_eq!(content, "hello");
-    assert!(marker.is_none());
-}
-
-#[test]
-fn parse_reaction_marker_allows_inline_reply_text() {
-    // Bot can react AND reply in one turn: [REACTION:👍] reply text
-    let (content, marker) =
-        TelegramChannel::parse_reaction_marker("[REACTION:👍] That's a great point!");
-    assert_eq!(content, "That's a great point!");
-    assert_eq!(marker.as_deref(), Some("👍"));
-
-    // Explicit target id + inline text
-    let (content, marker) =
-        TelegramChannel::parse_reaction_marker("[REACTION:🔥|999] Here's my full reply.");
-    assert_eq!(content, "Here's my full reply.");
-    assert_eq!(marker.as_deref(), Some("🔥|999"));
-
-    // Reaction only (no trailing text) still works
-    let (content, marker) = TelegramChannel::parse_reaction_marker("[REACTION:🤔]");
-    assert_eq!(content, "");
-    assert_eq!(marker.as_deref(), Some("🤔"));
 }
 
 #[test]
@@ -1737,45 +1739,6 @@ fn parse_update_reaction_falls_back_to_user_id_when_username_absent() {
     assert_eq!(reaction.sender, "99999");
     assert_eq!(reaction.emoji, "❤️");
     assert_eq!(reaction.target_message_id, "77");
-}
-
-// ── Reaction marker parsing edge cases ─────────────────────────
-
-#[test]
-fn parse_reaction_marker_plain_emoji_without_pipe_has_no_explicit_target() {
-    // [REACTION:👍] — no pipe separator, no explicit target message id.
-    let (content, marker) = TelegramChannel::parse_reaction_marker("[REACTION:👍]");
-    assert_eq!(
-        content, "",
-        "content after stripping marker should be empty"
-    );
-    assert_eq!(
-        marker.as_deref(),
-        Some("👍"),
-        "marker should be the emoji without pipe"
-    );
-}
-
-#[test]
-fn parse_reaction_marker_empty_inner_produces_no_marker() {
-    // [REACTION:] — empty inner, no valid emoji.
-    let (content, marker) = TelegramChannel::parse_reaction_marker("[REACTION:]");
-    assert_eq!(
-        content, "",
-        "content should be empty string for empty marker"
-    );
-    assert!(
-        marker.is_none(),
-        "empty inner must not produce a reaction marker"
-    );
-}
-
-#[test]
-fn parse_reaction_marker_non_marker_text_is_unchanged() {
-    let input = "here is your answer";
-    let (content, marker) = TelegramChannel::parse_reaction_marker(input);
-    assert_eq!(content, input);
-    assert!(marker.is_none());
 }
 
 // ── Typing body construction tests ─────────────────────────────

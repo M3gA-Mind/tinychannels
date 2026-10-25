@@ -15,6 +15,7 @@ struct FakeHost {
     history: Mutex<HashMap<String, usize>>,
     threads: Mutex<Vec<RemoteThreadSummary>>,
     created: Mutex<Vec<NewRemoteThread>>,
+    cleared: Mutex<Vec<RemoteSessionScope>>,
     invalidated: Mutex<Vec<String>>,
     fail_list: bool,
     fail_create: bool,
@@ -36,8 +37,10 @@ impl RemoteControlHost for FakeHost {
             .copied()
             .unwrap_or(0)
     }
-    fn clear_history(&self, sender_key: &str) {
-        self.history.lock().unwrap().remove(sender_key);
+    async fn clear_history_async(&self, scope: &RemoteSessionScope) -> anyhow::Result<()> {
+        self.history.lock().unwrap().clear();
+        self.cleared.lock().unwrap().push(scope.clone());
+        Ok(())
     }
     async fn list_threads(&self) -> anyhow::Result<Vec<RemoteThreadSummary>> {
         if self.fail_list {
@@ -70,6 +73,18 @@ fn ctx(channel: &str, sessions: &RemoteSessionStore) -> RemoteCommandContext {
         channel: channel.into(),
         reply_target: "chat-1".into(),
         sender_key: format!("{channel}_alice_chat-1"),
+        session_scope: Some(RemoteSessionScope {
+            channel: tinychannels_bus::ChannelRef {
+                id: channel.into(),
+                account_id: Some(format!("{channel}:account-a")),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "chat-1".into(),
+                ..Default::default()
+            },
+            session_key: "prepared-canonical-session".into(),
+        }),
         sessions: sessions.clone(),
     }
 }
@@ -122,7 +137,7 @@ async fn new_then_status_on_any_chat_provider() {
 
         let before = execute_remote_command(&host, &c, RemoteCommand::Status).await;
         assert!(before.contains("none — send `/new`"), "{channel}: {before}");
-        assert!(before.contains("In-memory turns: 4"));
+        assert!(before.contains("Session turns: 4"));
 
         let reply = execute_remote_command(&host, &c, RemoteCommand::New).await;
         let created = host.created.lock().unwrap().clone();
@@ -130,6 +145,10 @@ async fn new_then_status_on_any_chat_provider() {
         assert_eq!(
             created[0].labels,
             vec![channel.to_string(), "remote".into()]
+        );
+        assert_eq!(
+            host.cleared.lock().unwrap().as_slice(),
+            &[c.session_scope.clone().unwrap()]
         );
         assert!(reply.contains(&created[0].id));
         assert_eq!(host.history_len(&c.sender_key), 0, "history cleared");
@@ -142,6 +161,20 @@ async fn new_then_status_on_any_chat_provider() {
         assert!(after.contains(&created[0].id), "{channel}: {after}");
         assert!(after.contains("Provider: `openai`"));
     }
+}
+
+#[tokio::test]
+async fn new_without_prepared_scope_does_not_create_or_clear_a_session() {
+    let sessions = store();
+    let mut c = ctx("telegram", &sessions);
+    c.session_scope = None;
+    let host = FakeHost::default();
+
+    let reply = execute_remote_command(&host, &c, RemoteCommand::New).await;
+
+    assert!(reply.contains("trusted channel scope is unavailable"));
+    assert!(host.created.lock().unwrap().is_empty());
+    assert!(host.cleared.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

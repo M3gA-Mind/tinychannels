@@ -90,6 +90,7 @@ fn email(to: &str) -> OutboundEmail {
         subject: "Hello there".into(),
         body: "A plain body".into(),
         attachments: Vec::new(),
+        headers: Default::default(),
     }
 }
 

@@ -54,7 +54,8 @@ migration and same-version legacy provider adapters, not cross-version callback
 compatibility.
 
 `ChannelsHost` exposes scoped voice callbacks. `TranscribeVoice`,
-`SynthesizeSpeech`, `StoreVoiceMedia`, and `GetVoiceReplyPolicy` carry the
+`SynthesizeSpeech`, `StoreVoiceMedia`, `ReadVoiceMedia`, and
+`GetVoiceReplyPolicy` carry the
 configured channel, provider account, conversation, and originating turn in a
 `HostVoiceScope`. Hosts own transcription, synthesis, durable voice media, and
 the authoritative reply mode. Outbound speech remains an explicit typed

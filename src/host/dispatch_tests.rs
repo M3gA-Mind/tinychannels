@@ -27,9 +27,12 @@ async fn handle_streams_events_in_order_and_closes_after_completion() {
     let (sender, receiver) = tokio::sync::mpsc::channel(3);
     let first = ChannelOutputEvent::TextDelta {
         text: "partial".into(),
+        iteration: None,
     };
     let final_event = ChannelOutputEvent::FinalMessage {
         text: "final".into(),
+        parts: vec![],
+        receipt: None,
     };
     sender.send(first.clone()).await.unwrap();
     sender.send(final_event.clone()).await.unwrap();

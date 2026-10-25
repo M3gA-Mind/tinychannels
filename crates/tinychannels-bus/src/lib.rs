@@ -33,6 +33,7 @@ pub mod module_routes;
 #[allow(deprecated, reason = "v21 module DTOs remain for one release")]
 pub mod module_runtime;
 pub mod module_supervision;
+pub mod module_web_output;
 pub mod names;
 pub mod relay;
 #[cfg(feature = "storage")]
@@ -62,10 +63,11 @@ pub use controllers::{ChannelAuthMode, ChannelDefinition};
 pub use error::{Result, TinyChannelsError};
 pub use health::{ChannelHealthReport, ChannelHealthState};
 pub use host::{
-    HostEventPublication, HostSpeechSynthesisRequest, HostSpeechSynthesisResult,
-    HostStoreVoiceMediaRequest, HostStoreVoiceMediaResult, HostTranscriptionRequest,
-    HostTranscriptionResult, HostVoiceMediaDirection, HostVoiceReplyMode, HostVoiceReplyPolicy,
-    HostVoiceReplyPolicyRequest, HostVoiceScope, HostVoiceTranscriptionRequest,
+    HostEventPublication, HostReadVoiceMediaRequest, HostReadVoiceMediaResult,
+    HostSpeechSynthesisRequest, HostSpeechSynthesisResult, HostStoreVoiceMediaRequest,
+    HostStoreVoiceMediaResult, HostTranscriptionRequest, HostTranscriptionResult,
+    HostVoiceMediaDirection, HostVoiceReplyMode, HostVoiceReplyPolicy, HostVoiceReplyPolicyRequest,
+    HostVoiceScope, HostVoiceTranscriptionRequest,
 };
 pub use http::HttpProxyPolicy;
 pub use module_controller::{
@@ -76,12 +78,16 @@ pub use module_email::{
     EmailAttachment, EmailAttachmentUpload, EmailSendRequest, EmailUploadBegin, EmailUploadChunk,
     EmailUploadHandle,
 };
+pub use module_interaction::WebhookDeliveryOutcome;
 pub use module_media::{
     MEDIA_READ_CAPACITY, MEDIA_READ_CHUNK_BYTES, MEDIA_UPLOAD_BEGIN_MAX_BYTES,
     MEDIA_UPLOAD_CAPACITY, MEDIA_UPLOAD_CHUNK_BYTES, MEDIA_UPLOAD_MAX_BYTES,
     MEDIA_UPLOAD_MAX_CHUNKS, MediaReadBegin, MediaReadChunk, MediaReadChunkResult, MediaReadFinish,
     MediaReadHandle, MediaReadInfo, MediaUploadBegin, MediaUploadChunk, MediaUploadFinish,
     MediaUploadHandle, MediaUploadResult,
+};
+pub use module_web_output::{
+    BeginWebTurn, EndWebTurn, ProjectWebOutput, WebOutputEvents, WebTurnHandle,
 };
 pub use names::{
     BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, MODULE_ID, OBJECT_PATH, methods,
@@ -90,7 +96,7 @@ pub use names::{
     deprecated,
     reason = "re-export the one-release v21 compatibility DTOs"
 )]
-pub use traits::{Channel, ChannelIngress, ChannelMessage, ChannelSendExt, SendMessage};
+pub use traits::{ChannelIngress, ChannelMessage, SendMessage};
 pub use version::{CONTRACT_VERSION, is_compatible};
 pub use web::{
     ChatRequestMetadata, ChatSuggestion, GuardrailPayload, GuardrailReason,

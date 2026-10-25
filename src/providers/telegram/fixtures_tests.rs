@@ -227,21 +227,14 @@ impl EventSink for RecordingEvents {
 
 /// Transcriber returning a fixed transcript (or error) and recording requests.
 pub(super) struct FixedTranscriber {
-    pub(super) result: Result<String, String>,
+    pub(super) result: String,
     pub(super) requests: Mutex<Vec<TranscriptionRequest>>,
 }
 
 impl FixedTranscriber {
     pub(super) fn ok(text: &str) -> Arc<Self> {
         Arc::new(Self {
-            result: Ok(text.to_string()),
-            requests: Mutex::new(Vec::new()),
-        })
-    }
-
-    pub(super) fn failing(error: &str) -> Arc<Self> {
-        Arc::new(Self {
-            result: Err(error.to_string()),
+            result: text.to_string(),
             requests: Mutex::new(Vec::new()),
         })
     }
@@ -258,13 +251,10 @@ impl Transcriber for FixedTranscriber {
         request: TranscriptionRequest,
     ) -> anyhow::Result<crate::host::TranscriptionResult> {
         self.requests.lock().unwrap().push(request);
-        match &self.result {
-            Ok(text) => Ok(crate::host::TranscriptionResult {
-                text: text.clone(),
-                ..Default::default()
-            }),
-            Err(error) => Err(anyhow::anyhow!(error.clone())),
-        }
+        Ok(crate::host::TranscriptionResult {
+            text: self.result.clone(),
+            ..Default::default()
+        })
     }
 }
 

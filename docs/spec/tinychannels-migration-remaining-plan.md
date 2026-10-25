@@ -35,7 +35,7 @@ The bulk of "move the messaging channels into this crate" has already landed.
   ported providers use to call back into the app for side effects (HTTP proxy
   client, approval, voice/STT, pairing, conversation memory).
 - **OpenHuman consumes the crate**: `tinychannels = { path = "vendor/tinychannels",
-  features = ["relay-websocket"] }`; `vendor/tinychannels` tracks the same HEAD
+  }`; `vendor/tinychannels` tracks the same HEAD
   as the standalone repo (no drift).
 - **Telegram is split correctly**: transport/session_store/pairing moved to
   `tinychannels::providers::telegram`; only host-coupled glue

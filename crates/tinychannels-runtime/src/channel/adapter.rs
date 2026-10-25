@@ -45,6 +45,13 @@ pub trait ChannelInboundSink: Send + Sync {
 pub trait ChannelAdapter: Send + Sync {
     fn descriptor(&self) -> ChannelDescriptor;
 
+    /// Compatibility identity accessor for providers that still scope media
+    /// against their authenticated account. New adapters should populate the
+    /// account in their descriptor and media scope instead.
+    fn media_account_identity(&self) -> Option<String> {
+        None
+    }
+
     /// Capabilities declared by this configured provider instance. The
     /// default is conservative, so older adapters do not accidentally claim
     /// operations they have not implemented.
@@ -60,6 +67,31 @@ pub trait ChannelAdapter: Send + Sync {
         ChannelReceiveAckPolicy::AfterReceiveRecord
     }
 
+    /// Compatibility projection for proactive channel delivery.
+    fn proactive_target(&self) -> Option<String> {
+        None
+    }
+
+    fn supports_webhook_delivery(&self) -> bool {
+        false
+    }
+
+    async fn deliver_webhook(
+        &self,
+        _signature: Option<&str>,
+        _body: &[u8],
+    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
+        anyhow::bail!("provider has no typed webhook ingress")
+    }
+
+    fn supports_webhook_verification(&self) -> bool {
+        false
+    }
+
+    fn verify_webhook(&self, _mode: &str, _verify_token: &str, _challenge: &str) -> Option<String> {
+        None
+    }
+
     async fn start(
         &self,
         sink: &(dyn ChannelInboundSink + Send + Sync),
@@ -69,6 +101,29 @@ pub trait ChannelAdapter: Send + Sync {
 
     async fn send(&self, intent: ChannelOutboundIntent)
     -> Result<MessageReceipt, ChannelSendError>;
+
+    /// Validate canonical typed content before it enters a durable queue.
+    /// Adapters that support rich content should override this alongside
+    /// `send_typed`; the default accepts only the explicit legacy projection.
+    fn validate_typed_send(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<(), ChannelSendError> {
+        message
+            .to_legacy_message()
+            .map(|_| ())
+            .map_err(|_| unsupported_content_error())
+    }
+
+    async fn mark_read(
+        &self,
+        _conversation: &tinychannels_bus::channel::ConversationRef,
+        _provider_message_id: &str,
+    ) -> Result<(), ChannelSendError> {
+        Err(ChannelSendError::unsupported(
+            "provider does not support read receipts",
+        ))
+    }
 
     /// Send while preserving partial-delivery information. The default wraps
     /// the legacy receipt-only result; adapters that can report an
@@ -173,6 +228,21 @@ pub trait ChannelReaction: Send + Sync {
     ) -> Result<(), ChannelSendError>;
 }
 
+/// Temporary adapter for providers with scoped, removable reactions. The
+/// current portable trait has a smaller surface; keeping this extension
+/// preserves provider behavior while callers migrate.
+#[async_trait]
+pub trait LegacyChannelReaction: Send + Sync {
+    async fn send_reaction(
+        &self,
+        channel: &tinychannels_bus::channel::ChannelRef,
+        conversation: &tinychannels_bus::channel::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::channel::ChannelReaction,
+        remove: bool,
+    ) -> Result<(), ChannelSendError>;
+}
+
 /// Optional edit extension.
 #[async_trait]
 pub trait ChannelEdit: Send + Sync {
@@ -192,11 +262,54 @@ pub trait ChannelDelete: Send + Sync {
 /// Optional streaming draft extension.
 #[async_trait]
 pub trait ChannelStreamingDraft: Send + Sync {
+    async fn start_draft(
+        &self,
+        _intent: ChannelOutboundIntent,
+    ) -> Result<Option<String>, ChannelSendError> {
+        Err(ChannelSendError::unsupported(
+            "provider does not implement draft start",
+        ))
+    }
+
+    async fn update_draft(
+        &self,
+        _draft_id: &str,
+        _intent: ChannelOutboundIntent,
+    ) -> Result<(), ChannelSendError> {
+        Err(ChannelSendError::unsupported(
+            "provider does not implement draft update",
+        ))
+    }
+
+    async fn finalize_draft(
+        &self,
+        _draft_id: &str,
+        _intent: ChannelOutboundIntent,
+    ) -> Result<(), ChannelSendError> {
+        Err(ChannelSendError::unsupported(
+            "provider does not implement draft finalization",
+        ))
+    }
+
     async fn upsert_draft(
         &self,
         previous: Option<&MessageReceipt>,
         intent: ChannelOutboundIntent,
-    ) -> Result<MessageReceipt, ChannelSendError>;
+    ) -> Result<MessageReceipt, ChannelSendError> {
+        let _ = (previous, intent);
+        Err(ChannelSendError::unsupported(
+            "provider does not implement draft upsert",
+        ))
+    }
+}
+
+/// Provider-specific rich-content sender retained during the adapter port.
+#[async_trait]
+pub trait ChannelTypedSend: Send + Sync {
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, ChannelSendError>;
 }
 
 #[cfg(test)]

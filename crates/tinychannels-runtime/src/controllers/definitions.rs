@@ -61,7 +61,6 @@ pub fn channel_config_connected(
         ("slack", channels.slack.is_some()),
         ("mattermost", channels.mattermost.is_some()),
         ("imessage", channels.imessage.is_some()),
-        ("matrix", channels.matrix.is_some()),
         ("signal", channels.signal.is_some()),
         ("whatsapp", channels.whatsapp.is_some()),
         ("linq", channels.linq.is_some()),
@@ -93,7 +92,6 @@ pub fn channel_presence_connected(
             | (
                 "slack"
                     | "mattermost"
-                    | "matrix"
                     | "signal"
                     | "whatsapp"
                     | "linq"

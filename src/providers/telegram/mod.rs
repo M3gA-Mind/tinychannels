@@ -6,15 +6,19 @@
 //! paths compiling.
 
 mod attachments;
+mod bot_api;
+mod capabilities;
 mod channel;
 mod channel_core;
 mod channel_ops;
 mod channel_recv;
 mod channel_send;
 mod channel_types;
-mod text;
+pub(crate) mod text;
 
+pub use bot_api::{TelegramBotApi, TelegramReactionRequest, TopicAction};
 pub use channel_types::TelegramChannel;
+pub(crate) use text::strip_tool_call_tags;
 
 /// Approval-context client id for Telegram turns: the channel name, as for
 /// every channel.
@@ -26,10 +30,6 @@ pub use crate::remote::{
     build_remote_help_response, build_status_response, format_session_line,
     parse_remote_command as parse_telegram_remote_command,
 };
-
-#[cfg(any(test, debug_assertions))]
-#[path = "mod_test_support_tests.rs"]
-pub mod test_support;
 
 #[cfg(test)]
 #[path = "fixtures_tests.rs"]

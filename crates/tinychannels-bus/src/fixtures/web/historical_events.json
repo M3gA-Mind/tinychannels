@@ -41,6 +41,13 @@
     "round": 2
   },
   {
+    "event": "context_compacting",
+    "client_id": "c",
+    "thread_id": "t",
+    "request_id": "r",
+    "round": 2
+  },
+  {
     "event": "tool_call",
     "client_id": "c",
     "thread_id": "t",

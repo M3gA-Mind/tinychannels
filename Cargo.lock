@@ -550,9 +550,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.4"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12218662ccac37d9714f2191252553d67585b97df8c839cbe49e0bde278dc865"
+checksum = "38d28fb6aa7dd680b3ffd1a3e64e115c177bdba63c0ae7f9cd48129ff05c4fa0"
 dependencies = [
  "cmov",
 ]
@@ -736,7 +736,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1834,7 +1834,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2093,7 +2093,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2496,10 +2496,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2618,12 +2618,15 @@ dependencies = [
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.20",
+ "tinybus",
  "tinychannels-bus",
+ "tinychannels-conformance",
  "tinychannels-runtime",
  "tinystoragedrivers-api",
  "tinystoragedrivers-document",
  "tinystoragedrivers-testkit",
  "tinystoragedrivers-types",
+ "tinyvoice-bus",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite 0.30.0",
@@ -2644,16 +2647,24 @@ dependencies = [
 name = "tinychannels-bus"
 version = "0.1.42"
 dependencies = [
- "anyhow",
- "async-trait",
  "base64 0.23.1",
  "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
  "tinystoragedrivers-types",
- "tokio",
  "toml",
+]
+
+[[package]]
+name = "tinychannels-conformance"
+version = "0.1.42"
+dependencies = [
+ "async-trait",
+ "serde_json",
+ "tinychannels-bus",
+ "tinychannels-runtime",
+ "tokio",
 ]
 
 [[package]]
@@ -2665,6 +2676,7 @@ dependencies = [
  "base64 0.23.1",
  "futures-util",
  "hex",
+ "hmac",
  "log",
  "serde",
  "serde_json",
@@ -2674,14 +2686,18 @@ dependencies = [
  "tinybus-module",
  "tinychannels",
  "tinychannels-bus",
+ "tinychannels-conformance",
+ "tinychannels-runtime",
  "tinystoragedrivers-api",
  "tinystoragedrivers-busproxy",
  "tinystoragedrivers-testkit",
  "tinystoragedrivers-types",
+ "tinyvoice-bus",
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -2878,6 +2894,16 @@ name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+
+[[package]]
+name = "tinyvoice-bus"
+version = "0.2.0"
+source = "git+https://github.com/tinyhumansai/tinyvoice?rev=cf6444424149bbc8dc2303bddbd9b366abb29933#cf6444424149bbc8dc2303bddbd9b366abb29933"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "tokio"

@@ -23,6 +23,7 @@ pub(crate) fn resolve_api_base(raw: Option<String>) -> String {
 
 impl TelegramChannel {
     pub fn new(bot_token: String, allowed_users: Vec<String>, mention_only: bool) -> Self {
+        let (listener_cancel, _) = tokio::sync::watch::channel(false);
         let api_base = resolve_api_base(
             std::env::var("OPENHUMAN_TELEGRAM_BOT_API_BASE")
                 .ok()
@@ -54,19 +55,23 @@ impl TelegramChannel {
             pairing,
             client: reqwest::Client::new(),
             transcriber: None,
+            voice_media_store: None,
+            media_repository: None,
+            voice_synthesis: false,
             allowlist: None,
             events: None,
             stream_mode: StreamMode::Off,
             draft_update_interval_ms: 1000,
             silent_streaming: true,
             last_draft_edit: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            typing_handle: parking_lot::Mutex::new(None),
             mention_only,
             bot_username: parking_lot::Mutex::new(None),
             recent_updates: parking_lot::Mutex::new(TelegramUpdateWindow::default()),
             recent_approval_prompts: parking_lot::Mutex::new(std::collections::HashMap::new()),
             poll_error_backoff: TELEGRAM_POLL_ERROR_BACKOFF,
             poll_conflict_backoff: TELEGRAM_POLL_CONFLICT_BACKOFF,
+            listener_cancel,
+            listener_running: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -107,6 +112,24 @@ impl TelegramChannel {
     /// voice notes are received but not transcribed.
     pub fn with_transcriber(mut self, transcriber: Arc<dyn crate::host::Transcriber>) -> Self {
         self.transcriber = Some(transcriber);
+        self
+    }
+
+    /// Inject host-owned persistence for normalized voice media.
+    pub fn with_voice_media_store(mut self, store: Arc<dyn crate::host::VoiceMediaStore>) -> Self {
+        self.voice_media_store = Some(store);
+        self
+    }
+
+    pub fn with_media_repository(mut self, store: Arc<dyn crate::host::MediaRepository>) -> Self {
+        self.media_repository = Some(store);
+        self
+    }
+
+    /// Enable shared final-turn synthesis when the module host provides TTS,
+    /// TinyVoice codec operations, and durable scoped media storage.
+    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
+        self.voice_synthesis = enabled;
         self
     }
 
@@ -164,6 +187,13 @@ impl TelegramChannel {
         self.api_base = base.into();
     }
 
+    /// Point a test-support build at a local mock Bot API server.
+    #[cfg(feature = "test-support")]
+    pub fn with_api_base_for_test(mut self, base: impl Into<String>) -> Self {
+        self.api_base = base.into();
+        self
+    }
+
     pub(crate) fn pairing_code_active(&self) -> bool {
         self.pairing
             .as_ref()
@@ -194,6 +224,11 @@ impl TelegramChannel {
         };
         let base_command = command.split('@').next().unwrap_or(command);
         base_command == TELEGRAM_START_COMMAND
+    }
+
+    pub(crate) fn has_seen_update_id(&self, update_id: i64) -> bool {
+        let window = self.recent_updates.lock();
+        window.recent_lookup.contains(&update_id) || update_id < window.max_seen_update_id
     }
 
     pub(crate) fn track_update_id(&self, update_id: i64) -> bool {

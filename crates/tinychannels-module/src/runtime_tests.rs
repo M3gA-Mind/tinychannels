@@ -283,19 +283,41 @@ async fn reservations_are_inert_and_children_cannot_allocate_nested_runtimes() {
 struct MockProvider(tokio::sync::mpsc::Sender<String>);
 
 #[async_trait::async_trait]
-impl tinychannels::Channel for MockProvider {
-    fn name(&self) -> &str {
+impl crate::provider::TestProviderBehavior for MockProvider {
+    fn test_provider_id(&self) -> &'static str {
         "same-provider"
     }
-    async fn send(&self, message: &tinychannels_bus::SendMessage) -> anyhow::Result<()> {
-        self.0.send(message.content.clone()).await?;
-        Ok(())
-    }
-    async fn listen(
+    async fn test_send(
         &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels_bus::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        std::future::pending().await
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        let text = message
+            .parts
+            .iter()
+            .find_map(|part| match part {
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text { text, .. },
+                } => Some(text.clone()),
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Native { data, .. },
+                } => data
+                    .get("content")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                _ => None,
+            })
+            .unwrap_or_default();
+        self.0
+            .send(text)
+            .await
+            .map_err(|error| tinychannels::channel::ChannelSendError {
+                message: error.to_string(),
+                ..Default::default()
+            })?;
+        Ok(Default::default())
     }
 }
 
@@ -310,7 +332,7 @@ async fn same_named_providers_have_separate_queues_and_native_cleanup() {
         let slot = runtimes.get(&reservation.handle).await.unwrap();
         let child = slot.child.lock().await.as_ref().unwrap().clone();
         let (sent, received) = tokio::sync::mpsc::channel(2);
-        let running = crate::provider::Running::start(
+        let running = crate::provider::Running::start_test(
             Arc::new(MockProvider(sent)),
             Arc::new(crate::provider::Hooks::default()),
             child.host.clone(),

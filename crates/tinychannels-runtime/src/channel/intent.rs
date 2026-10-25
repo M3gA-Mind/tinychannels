@@ -1,4 +1,7 @@
 //! Implementation helpers for channel intent.
+// This module is the explicit v21 DTO to typed-intent conversion boundary.
+#![allow(deprecated)]
+
 use crate::traits::SendMessage;
 use serde_json::Value;
 use sha2::{Digest, Sha256};

@@ -34,11 +34,13 @@ use tinychannels_runtime::config::WhatsAppConfigExt as _;
 
 #[cfg(feature = "imessage")]
 use crate::IMessageChannel;
+use crate::channel::ChannelAdapter;
 use crate::host::ChannelHost;
 use crate::providers::irc;
+use crate::providers::long_tail::LongTailNative;
 use crate::{
-    Channel, DingTalkChannel, DiscordChannel, IrcChannel, LinqChannel, MattermostChannel,
-    QQChannel, SignalChannel, SlackChannel, TelegramChannel, WhatsAppChannel, YuanbaoChannel,
+    DingTalkChannel, DiscordChannel, IrcChannel, LinqChannel, MattermostChannel, QQChannel,
+    SignalChannel, SlackChannel, TelegramChannel, WhatsAppChannel, YuanbaoChannel,
 };
 use tinychannels_bus::ChannelsConfig;
 use tinychannels_bus::HttpProxyPolicy;
@@ -213,6 +215,706 @@ impl HttpClientFactory for ConfiguredHttpClients {
     }
 }
 
+/// Build the configured Telegram channel as its concrete provider type.
+///
+/// The module uses this to retain the same Telegram object as both the polling
+/// owner and the native v2 operation executor.
+#[must_use]
+pub fn build_telegram_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+) -> Option<Arc<TelegramChannel>> {
+    let tg = config.telegram.as_ref()?;
+    tracing::info!(
+        channel = "telegram",
+        allowed_users_count = tg.allowed_users.len(),
+        mention_only = tg.mention_only,
+        "[channels] telegram enabled (bot token not logged)"
+    );
+    let mut telegram = TelegramChannel::new(
+        tg.bot_token.clone(),
+        tg.allowed_users.clone(),
+        tg.mention_only,
+    )
+    .with_streaming(
+        tg.stream_mode,
+        tg.draft_update_interval_ms,
+        tg.silent_streaming,
+    )
+    .with_chat_id(tg.chat_id.clone())
+    .with_http_client(http.client_for("channel.telegram"));
+    // Each is optional — telegram degrades gracefully without them.
+    if let Some(transcriber) = host.transcriber() {
+        telegram = telegram.with_transcriber(transcriber);
+    }
+    if let Some(store) = host.voice_media_store() {
+        telegram = telegram.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        telegram = telegram.with_media_repository(repository);
+    }
+    telegram = telegram.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(allowlist) = host.allowlist() {
+        telegram = telegram.with_allowlist(allowlist);
+    }
+    if let Some(events) = host.events() {
+        telegram = telegram.with_events(events);
+    }
+    Some(Arc::new(telegram))
+}
+
+/// Build the configured Discord channel as its concrete provider type,
+/// wired to whatever media, voice and event services the host supplies.
+#[must_use]
+pub fn build_discord_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+) -> Option<Arc<DiscordChannel>> {
+    let dc = config.discord.as_ref()?;
+    tracing::info!(
+        channel = "discord",
+        allowed_users_count = dc.allowed_users.len(),
+        mention_only = dc.mention_only,
+        "[channels] discord enabled (bot token not logged)"
+    );
+    let mut discord = DiscordChannel::with_http_client(
+        dc.bot_token.clone(),
+        dc.guild_id.clone(),
+        dc.channel_id.clone(),
+        dc.allowed_users.clone(),
+        dc.listen_to_bots,
+        dc.mention_only,
+        http.client_for("channel.discord"),
+    );
+    // Each is optional; Discord degrades to text without them.
+    if let Some(transcriber) = host.transcriber() {
+        discord = discord.with_transcriber(transcriber);
+    }
+    if let Some(store) = host.voice_media_store() {
+        discord = discord.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        discord = discord.with_media_repository(repository);
+    }
+    if let Some(codec) = host.voice_codec() {
+        discord = discord.with_voice_codec(codec);
+    }
+    discord = discord.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        discord = discord.with_events(events);
+    }
+    Some(Arc::new(discord))
+}
+
+/// Build the configured WhatsApp Business Cloud channel as its concrete type.
+///
+/// The module uses this to retain the same object as the webhook ingress owner
+/// and the native v2 operation executor. The Meta app secret that authenticates
+/// webhook POSTs is passed through here; without it the channel sends but
+/// refuses every webhook delivery.
+#[must_use]
+pub fn build_whatsapp_cloud_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+) -> Option<Arc<WhatsAppChannel>> {
+    let wa = config.whatsapp.as_ref()?;
+    if !wa.is_cloud_config() {
+        return None;
+    }
+    tracing::info!(
+        channel = "whatsapp",
+        backend = "cloud",
+        signed_webhooks = wa
+            .app_secret
+            .as_deref()
+            .is_some_and(|secret| !secret.trim().is_empty()),
+        "[channels] whatsapp cloud enabled (credentials not logged)"
+    );
+    let mut channel = WhatsAppChannel::with_http_client(
+        wa.access_token.clone().unwrap_or_default(),
+        wa.phone_number_id.clone().unwrap_or_default(),
+        wa.verify_token.clone().unwrap_or_default(),
+        wa.allowed_numbers.clone(),
+        http.client_for("channel.whatsapp"),
+    )
+    .with_app_secret(wa.app_secret.clone());
+    if let Some(repository) = host.media_repository() {
+        channel = channel.with_media_repository(repository);
+    }
+    if let Some(store) = host.voice_media_store() {
+        channel = channel.with_voice_media_store(store);
+    }
+    channel = channel.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        channel = channel.with_events(events);
+    }
+    Some(Arc::new(channel))
+}
+
+/// Build the configured WhatsApp Web channel as its concrete type.
+#[cfg(feature = "whatsapp-web")]
+#[must_use]
+pub fn build_whatsapp_web_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+) -> Option<Arc<crate::WhatsAppWebChannel>> {
+    let wa = config.whatsapp.as_ref()?;
+    if !wa.is_web_config() || wa.phone_number_id.is_some() {
+        return None;
+    }
+    tracing::info!(
+        channel = "whatsapp",
+        backend = "web",
+        "[channels] whatsapp web enabled (session not logged)"
+    );
+    let mut channel = crate::providers::whatsapp_web::WhatsAppWebChannel::from_config(
+        crate::providers::whatsapp_web::WhatsAppWebConfig {
+            session_path: wa.session_path.clone().unwrap_or_default(),
+            pair_phone: wa.pair_phone.clone(),
+            pair_code: wa.pair_code.clone(),
+            allowed_numbers: wa.allowed_numbers.clone(),
+        },
+    );
+    if let Some(lifecycle) = host.lifecycle() {
+        channel = channel.with_lifecycle(lifecycle);
+    }
+    if let Some(storage) = host.storage() {
+        channel = channel.with_storage(storage);
+    }
+    if let Some(repository) = host.media_repository() {
+        channel = channel.with_media_repository(repository);
+    }
+    if let Some(store) = host.voice_media_store() {
+        channel = channel.with_voice_media_store(store);
+    }
+    channel = channel.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        channel = channel.with_events(events);
+    }
+    Some(Arc::new(channel))
+}
+
+/// Build the Slack provider with the host ports it can use: scoped media
+/// storage, voice storage, synthesis and the ordered event sink.
+pub fn build_slack_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+) -> Option<Arc<SlackChannel>> {
+    let sl = config.slack.as_ref()?;
+    tracing::info!(
+        channel = "slack",
+        allowed_users_count = sl.allowed_users.len(),
+        socket_mode = sl.app_token.is_some(),
+        "[channels] slack enabled (tokens not logged)"
+    );
+    let mut slack = SlackChannel::with_http_client(
+        sl.bot_token.clone(),
+        sl.channel_id.clone(),
+        sl.allowed_users.clone(),
+        http.client_for("channel.slack"),
+    )
+    .with_app_token(sl.app_token.clone());
+    if let Some(store) = host.voice_media_store() {
+        slack = slack.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        slack = slack.with_media_repository(repository);
+    }
+    slack = slack.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        slack = slack.with_events(events);
+    }
+    Some(Arc::new(slack))
+}
+
+/// Build one long-tail text provider (Lark, Mattermost, IRC, QQ, DingTalk,
+/// Yuanbao) with its v2 adapter surface, or `None` when `provider` is not
+/// configured, not built in, or its configuration is invalid.
+#[must_use]
+pub fn build_long_tail_channel(
+    config: &ChannelsConfig,
+    http: &dyn HttpClientFactory,
+    provider: &str,
+) -> Option<Arc<dyn LongTailNative>> {
+    build_long_tail_channel_inner(config, None, http, provider)
+}
+
+/// Build a configured long-tail channel with the scoped host ports available
+/// to its native typed adapter.
+pub fn build_long_tail_channel_with_host(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+    provider: &str,
+) -> Option<Arc<dyn LongTailNative>> {
+    build_long_tail_channel_inner(config, Some(host), http, provider)
+}
+
+fn build_long_tail_channel_inner(
+    config: &ChannelsConfig,
+    host: Option<&Arc<dyn ChannelHost>>,
+    http: &dyn HttpClientFactory,
+    provider: &str,
+) -> Option<Arc<dyn LongTailNative>> {
+    match provider {
+        "mattermost" => {
+            let mm = config.mattermost.as_ref()?;
+            let mut channel = MattermostChannel::with_http_client(
+                mm.url.clone(),
+                mm.bot_token.clone(),
+                mm.channel_id.clone(),
+                mm.allowed_users.clone(),
+                mm.thread_replies.unwrap_or(true),
+                mm.mention_only.unwrap_or(false),
+                http.client_for("channel.mattermost"),
+            );
+            if let Some(repository) = host.and_then(|host| host.media_repository()) {
+                channel = channel.with_media_repository(repository);
+            }
+            if let Some(store) = host.and_then(|host| host.voice_media_store()) {
+                channel = channel.with_voice_media_store(store);
+            }
+            if let Some(transcriber) = host.and_then(|host| host.transcriber()) {
+                channel = channel.with_transcriber(transcriber);
+            }
+            if let Some(events) = host.and_then(|host| host.events()) {
+                channel = channel.with_events(events);
+            }
+            Some(Arc::new(channel))
+        }
+        "irc" => {
+            let irc_cfg = config.irc.as_ref()?;
+            Some(Arc::new(IrcChannel::new(irc::IrcChannelConfig {
+                server: irc_cfg.server.clone(),
+                port: irc_cfg.port,
+                nickname: irc_cfg.nickname.clone(),
+                username: irc_cfg.username.clone(),
+                channels: irc_cfg.channels.clone(),
+                allowed_users: irc_cfg.allowed_users.clone(),
+                server_password: irc_cfg.server_password.clone(),
+                nickserv_password: irc_cfg.nickserv_password.clone(),
+                sasl_password: irc_cfg.sasl_password.clone(),
+                verify_tls: irc_cfg.verify_tls.unwrap_or(true),
+            })))
+        }
+        #[cfg(feature = "lark")]
+        "lark" => {
+            let lk = config.lark.as_ref()?;
+            let mut channel = crate::providers::LarkChannel::from_config_with_http_client(
+                lk,
+                http.client_for("channel.lark"),
+            );
+            if let Some(repository) = host.and_then(|host| host.media_repository()) {
+                channel = channel.with_media_repository(repository);
+            }
+            if let Some(store) = host.and_then(|host| host.voice_media_store()) {
+                channel = channel.with_voice_media_store(store);
+            }
+            if let Some(transcriber) = host.and_then(|host| host.transcriber()) {
+                channel = channel.with_transcriber(transcriber);
+            }
+            if let Some(codec) = host.and_then(|host| host.voice_codec()) {
+                channel = channel.with_voice_codec(codec);
+            }
+            if let Some(events) = host.and_then(|host| host.events()) {
+                channel = channel.with_events(events);
+            }
+            Some(Arc::new(channel))
+        }
+        "dingtalk" => {
+            let dt = config.dingtalk.as_ref()?;
+            let mut channel = DingTalkChannel::with_http_client(
+                dt.client_id.clone(),
+                dt.client_secret.clone(),
+                dt.allowed_users.clone(),
+                http.client_for("channel.dingtalk"),
+            );
+            channel =
+                channel.with_attachment_http_client(http.client_for("channel.dingtalk.media"));
+            if let Some(repository) = host.and_then(|host| host.media_repository()) {
+                channel = channel.with_media_repository(repository);
+            }
+            if let Some(store) = host.and_then(|host| host.voice_media_store()) {
+                channel = channel.with_voice_media_store(store);
+            }
+            channel = channel.with_voice_synthesis(
+                host.and_then(|host| host.synthesizer()).is_some()
+                    && host.and_then(|host| host.voice_codec()).is_some()
+                    && host.and_then(|host| host.voice_media_store()).is_some(),
+            );
+            if let Some(transcriber) = host.and_then(|host| host.transcriber()) {
+                channel = channel.with_transcriber(transcriber);
+            }
+            if let Some(events) = host.and_then(|host| host.events()) {
+                channel = channel.with_events(events);
+            }
+            Some(Arc::new(channel))
+        }
+        "qq" => {
+            let qq = config.qq.as_ref()?;
+            let mut channel = QQChannel::with_http_client(
+                qq.app_id.clone(),
+                qq.app_secret.clone(),
+                qq.allowed_users.clone(),
+                http.client_for("channel.qq"),
+            );
+            if let Some(repository) = host.and_then(|host| host.media_repository()) {
+                channel = channel.with_media_repository(repository);
+            }
+            if let Some(store) = host.and_then(|host| host.voice_media_store()) {
+                channel = channel.with_voice_media_store(store);
+            }
+            if let Some(transcriber) = host.and_then(|host| host.transcriber()) {
+                channel = channel.with_transcriber(transcriber);
+            }
+            if let Some(events) = host.and_then(|host| host.events()) {
+                channel = channel.with_events(events);
+            }
+            Some(Arc::new(channel))
+        }
+        "yuanbao" => {
+            let yb = config.yuanbao.as_ref()?;
+            build_yuanbao_channel(yb, host, None, None)
+        }
+        _ => None,
+    }
+}
+
+fn build_yuanbao_channel(
+    config: &tinychannels_bus::config::YuanbaoConfig,
+    host: Option<&Arc<dyn ChannelHost>>,
+    _voice_http: Option<reqwest::Client>,
+    _cos_endpoint: Option<String>,
+) -> Option<Arc<dyn LongTailNative>> {
+    let mut channel = match YuanbaoChannel::new(config.clone()) {
+        Ok(channel) => channel,
+        Err(error) => {
+            tracing::warn!("[channels] yuanbao config invalid: {error}");
+            return None;
+        }
+    };
+    if let Some(repository) = host.and_then(|host| host.media_repository()) {
+        channel = channel.with_media_repository(repository);
+    }
+    if let Some(store) = host.and_then(|host| host.voice_media_store()) {
+        channel = channel.with_voice_media_store(store);
+    }
+    if let Some(transcriber) = host.and_then(|host| host.transcriber()) {
+        channel = channel.with_transcriber(transcriber);
+    }
+    if let Some(events) = host.and_then(|host| host.events()) {
+        channel = channel.with_events(events);
+    }
+    #[cfg(test)]
+    if let Some(client) = _voice_http {
+        channel = channel.with_voice_http_client(client);
+    }
+    #[cfg(test)]
+    if let Some(endpoint) = _cos_endpoint {
+        channel = channel.with_test_cos_endpoint(endpoint);
+    }
+    Some(Arc::new(channel))
+}
+
+#[cfg(test)]
+pub(crate) fn build_yuanbao_channel_with_voice_http_for_test(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    voice_http: reqwest::Client,
+) -> Option<Arc<dyn LongTailNative>> {
+    let channel =
+        build_yuanbao_channel(config.yuanbao.as_ref()?, Some(host), Some(voice_http), None)?;
+    Some(channel)
+}
+
+#[cfg(test)]
+pub(crate) fn build_yuanbao_channel_with_media_http_for_test(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    voice_http: reqwest::Client,
+    cos_endpoint: String,
+) -> Option<Arc<dyn LongTailNative>> {
+    build_yuanbao_channel(
+        config.yuanbao.as_ref()?,
+        Some(host),
+        Some(voice_http),
+        Some(cos_endpoint),
+    )
+}
+
+/// Build the Signal provider with the host ports it can use: scoped media and
+/// voice storage, speech-to-text, synthesis and the ordered event sink.
+pub fn build_signal_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+) -> Option<Arc<SignalChannel>> {
+    let sig = config.signal.as_ref()?;
+    let mut signal = SignalChannel::with_http_client(
+        sig.http_url.clone(),
+        sig.account.clone(),
+        sig.group_id.clone(),
+        sig.allowed_from.clone(),
+        sig.ignore_attachments,
+        sig.ignore_stories,
+        http.signal_client(),
+    );
+    if let Some(store) = host.voice_media_store() {
+        signal = signal.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        signal = signal.with_media_repository(repository);
+    }
+    if let Some(transcriber) = host.transcriber() {
+        signal = signal.with_transcriber(transcriber);
+    }
+    signal = signal.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        signal = signal.with_events(events);
+    }
+    Some(Arc::new(signal))
+}
+
+/// Build the iMessage provider with the host ports it can use: scoped media and
+/// voice storage, speech-to-text, synthesis and the ordered event sink.
+#[cfg(feature = "imessage")]
+pub fn build_imessage_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+) -> Option<Arc<IMessageChannel>> {
+    let im = config.imessage.as_ref()?;
+    let mut imessage = IMessageChannel::new(im.allowed_contacts.clone());
+    if let Some(store) = host.voice_media_store() {
+        imessage = imessage.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        imessage = imessage.with_media_repository(repository);
+    }
+    if let Some(transcriber) = host.transcriber() {
+        imessage = imessage.with_transcriber(transcriber);
+    }
+    imessage = imessage.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        imessage = imessage.with_events(events);
+    }
+    Some(Arc::new(imessage))
+}
+
+/// Build the Linq provider with the host ports it can use: scoped media and
+/// voice storage, speech-to-text, synthesis and the ordered event sink.
+pub fn build_linq_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+) -> Option<Arc<LinqChannel>> {
+    let lq = config.linq.as_ref()?;
+    let mut linq = LinqChannel::with_http_client(
+        lq.api_token.clone(),
+        lq.from_phone.clone(),
+        lq.allowed_senders.clone(),
+        http.client_for("channel.linq"),
+    )
+    .with_webhook_secret(lq.webhook_secret.clone());
+    if let Some(store) = host.voice_media_store() {
+        linq = linq.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        linq = linq.with_media_repository(repository);
+    }
+    if let Some(transcriber) = host.transcriber() {
+        linq = linq.with_transcriber(transcriber);
+    }
+    linq = linq.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        linq = linq.with_events(events);
+    }
+    Some(Arc::new(linq))
+}
+
+/// Build the email provider with the host ports it can use: scoped media and
+/// voice storage, speech-to-text, synthesis and the ordered event sink.
+#[cfg(feature = "email")]
+pub fn build_email_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+) -> Option<Arc<crate::providers::EmailChannel>> {
+    let mut email = crate::providers::EmailChannel::new(config.email.as_ref()?.clone());
+    if let Some(store) = host.voice_media_store() {
+        email = email.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        email = email.with_media_repository(repository);
+    }
+    if let Some(transcriber) = host.transcriber() {
+        email = email.with_transcriber(transcriber);
+    }
+    email = email.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        email = email.with_events(events);
+    }
+    Some(Arc::new(email))
+}
+
+/// One configured provider built from the shared factory.
+#[derive(Clone)]
+pub enum BuiltChannel {
+    Adapter {
+        adapter: Arc<dyn ChannelAdapter>,
+        edit: Option<Arc<dyn crate::channel::ChannelEdit>>,
+        drafts: Option<Arc<dyn crate::channel::ChannelStreamingDraft>>,
+        reactions: Option<Arc<dyn crate::channel::LegacyChannelReaction>>,
+        typing: Option<Arc<dyn crate::channel::ChannelTyping>>,
+    },
+}
+
+impl BuiltChannel {
+    /// Build a provider that exposes only the base adapter contract.
+    pub fn from_adapter(adapter: Arc<dyn ChannelAdapter>) -> Self {
+        Self::Adapter {
+            adapter,
+            edit: None,
+            drafts: None,
+            reactions: None,
+            typing: None,
+        }
+    }
+
+    /// Build a provider while retaining its optional progressive ports before
+    /// the concrete provider type is erased.
+    pub fn with_output_ports(
+        adapter: Arc<dyn ChannelAdapter>,
+        edit: Option<Arc<dyn crate::channel::ChannelEdit>>,
+        drafts: Option<Arc<dyn crate::channel::ChannelStreamingDraft>>,
+    ) -> Self {
+        Self::Adapter {
+            adapter,
+            edit,
+            drafts,
+            reactions: None,
+            typing: None,
+        }
+    }
+
+    /// Retain the provider's typing-indicator extension before its concrete
+    /// type is erased, so the module can start and stop typing for it.
+    pub fn with_typing_port(mut self, typing: Arc<dyn crate::channel::ChannelTyping>) -> Self {
+        match &mut self {
+            Self::Adapter { typing: port, .. } => *port = Some(typing),
+        }
+        self
+    }
+
+    /// Retain the provider's scoped reaction extension before its concrete
+    /// type is erased.
+    pub fn with_reaction_port(
+        mut self,
+        reactions: Arc<dyn crate::channel::LegacyChannelReaction>,
+    ) -> Self {
+        match &mut self {
+            Self::Adapter {
+                reactions: port, ..
+            } => *port = Some(reactions),
+        }
+        self
+    }
+
+    /// Stable provider identifier for this configured instance.
+    pub fn name(&self) -> String {
+        match self {
+            Self::Adapter { adapter, .. } => adapter.descriptor().id,
+        }
+    }
+
+    /// Capability facts from the configured provider instance.
+    pub fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        match self {
+            Self::Adapter { adapter, .. } => adapter.declared_capabilities(),
+        }
+    }
+
+    /// Configured default recipient, if the provider declares one.
+    pub fn proactive_target(&self) -> Option<String> {
+        match self {
+            Self::Adapter { adapter, .. } => adapter.proactive_target(),
+        }
+    }
+
+    /// The native transport and lifecycle surface for this configured account.
+    pub fn adapter(&self) -> &Arc<dyn ChannelAdapter> {
+        match self {
+            Self::Adapter { adapter, .. } => adapter,
+        }
+    }
+
+    /// Provider edit port, when the configured adapter implements it.
+    pub fn edit(&self) -> Option<&Arc<dyn crate::channel::ChannelEdit>> {
+        match self {
+            Self::Adapter { edit, .. } => edit.as_ref(),
+        }
+    }
+
+    /// Provider streaming draft port, when the configured adapter implements it.
+    pub fn drafts(&self) -> Option<&Arc<dyn crate::channel::ChannelStreamingDraft>> {
+        match self {
+            Self::Adapter { drafts, .. } => drafts.as_ref(),
+        }
+    }
+
+    /// Provider typing port, when the configured adapter implements it.
+    pub fn typing(&self) -> Option<&Arc<dyn crate::channel::ChannelTyping>> {
+        match self {
+            Self::Adapter { typing, .. } => typing.as_ref(),
+        }
+    }
+
+    /// Provider reaction port, when the configured adapter implements it.
+    pub fn reactions(&self) -> Option<&Arc<dyn crate::channel::LegacyChannelReaction>> {
+        match self {
+            Self::Adapter { reactions, .. } => reactions.as_ref(),
+        }
+    }
+}
+
 /// Build every provider that `config` enables.
 ///
 /// Order is stable and matches the declaration order below, so a caller that
@@ -224,101 +926,76 @@ pub fn build_channels(
     config: &ChannelsConfig,
     host: &Arc<dyn ChannelHost>,
     http: &dyn HttpClientFactory,
-) -> Vec<Arc<dyn Channel>> {
-    let mut channels: Vec<Arc<dyn Channel>> = Vec::new();
+) -> Vec<BuiltChannel> {
+    let mut channels: Vec<BuiltChannel> = Vec::new();
 
-    if let Some(tg) = config.telegram.as_ref() {
-        tracing::info!(
-            channel = "telegram",
-            allowed_users_count = tg.allowed_users.len(),
-            mention_only = tg.mention_only,
-            "[channels] telegram enabled (bot token not logged)"
+    if config.telegram.is_some()
+        && let Some(telegram) = build_telegram_channel(config, host, http)
+    {
+        channels.push(
+            BuiltChannel::with_output_ports(
+                telegram.clone(),
+                Some(telegram.clone()),
+                Some(telegram.clone()),
+            )
+            .with_typing_port(telegram),
         );
-        let mut telegram = TelegramChannel::new(
-            tg.bot_token.clone(),
-            tg.allowed_users.clone(),
-            tg.mention_only,
-        )
-        .with_streaming(
-            tg.stream_mode,
-            tg.draft_update_interval_ms,
-            tg.silent_streaming,
-        )
-        .with_chat_id(tg.chat_id.clone())
-        .with_http_client(http.client_for("channel.telegram"));
-        // Each is optional — telegram degrades gracefully without them.
-        if let Some(transcriber) = host.transcriber() {
-            telegram = telegram.with_transcriber(transcriber);
-        }
-        if let Some(allowlist) = host.allowlist() {
-            telegram = telegram.with_allowlist(allowlist);
-        }
-        if let Some(events) = host.events() {
-            telegram = telegram.with_events(events);
-        }
-        channels.push(Arc::new(telegram));
     }
 
-    if let Some(dc) = config.discord.as_ref() {
-        channels.push(Arc::new(DiscordChannel::with_http_client(
-            dc.bot_token.clone(),
-            dc.guild_id.clone(),
-            dc.channel_id.clone(),
-            dc.allowed_users.clone(),
-            dc.listen_to_bots,
-            dc.mention_only,
-            http.client_for("channel.discord"),
-        )));
+    if let Some(discord) = build_discord_channel(config, host, http) {
+        channels.push(
+            BuiltChannel::with_output_ports(
+                discord.clone(),
+                Some(discord.clone()),
+                Some(discord.clone()),
+            )
+            .with_typing_port(discord),
+        );
     }
 
-    if let Some(sl) = config.slack.as_ref() {
-        channels.push(Arc::new(SlackChannel::with_http_client(
-            sl.bot_token.clone(),
-            sl.channel_id.clone(),
-            sl.allowed_users.clone(),
-            http.client_for("channel.slack"),
-        )));
+    if let Some(slack) = build_slack_channel(config, host, http) {
+        channels.push(
+            BuiltChannel::with_output_ports(
+                slack.clone(),
+                Some(slack.clone()),
+                Some(slack.clone()),
+            )
+            .with_typing_port(slack),
+        );
     }
 
-    if let Some(mm) = config.mattermost.as_ref() {
-        channels.push(Arc::new(MattermostChannel::with_http_client(
-            mm.url.clone(),
-            mm.bot_token.clone(),
-            mm.channel_id.clone(),
-            mm.allowed_users.clone(),
-            mm.thread_replies.unwrap_or(true),
-            mm.mention_only.unwrap_or(false),
-            http.client_for("channel.mattermost"),
-        )));
+    if let Some(mattermost) = build_long_tail_channel_with_host(config, host, http, "mattermost") {
+        channels.push(
+            BuiltChannel::with_output_ports(
+                mattermost.clone(),
+                Some(mattermost.clone()),
+                Some(mattermost.clone()),
+            )
+            .with_typing_port(mattermost),
+        );
     }
 
     #[cfg(feature = "imessage")]
-    if let Some(im) = config.imessage.as_ref() {
-        channels.push(Arc::new(IMessageChannel::new(im.allowed_contacts.clone())));
-    }
-    #[cfg(not(feature = "imessage"))]
-    if config.imessage.is_some() {
-        tracing::warn!(
-            "[channels] imessage is configured but iMessage support is disabled in this build; skipping"
+    if let Some(imessage) = build_imessage_channel(config, host) {
+        channels.push(
+            BuiltChannel::with_output_ports(
+                imessage.clone(),
+                Some(imessage.clone()),
+                Some(imessage.clone()),
+            )
+            .with_typing_port(imessage),
         );
     }
 
-    if config.matrix.is_some() {
-        tracing::warn!(
-            "[channels] matrix is configured but Matrix support was removed from this build; skipping"
+    if let Some(signal) = build_signal_channel(config, host, http) {
+        channels.push(
+            BuiltChannel::with_output_ports(
+                signal.clone(),
+                Some(signal.clone()),
+                Some(signal.clone()),
+            )
+            .with_typing_port(signal),
         );
-    }
-
-    if let Some(sig) = config.signal.as_ref() {
-        channels.push(Arc::new(SignalChannel::with_http_client(
-            sig.http_url.clone(),
-            sig.account.clone(),
-            sig.group_id.clone(),
-            sig.allowed_from.clone(),
-            sig.ignore_attachments,
-            sig.ignore_stories,
-            http.signal_client(),
-        )));
     }
 
     if let Some(wa) = config.whatsapp.as_ref() {
@@ -326,83 +1003,92 @@ pub fn build_channels(
         // the shape of the config decides which one is meant.
         match wa.backend_type() {
             "cloud" if wa.is_cloud_config() => {
-                channels.push(Arc::new(WhatsAppChannel::with_http_client(
-                    wa.access_token.clone().unwrap_or_default(),
-                    wa.phone_number_id.clone().unwrap_or_default(),
-                    wa.verify_token.clone().unwrap_or_default(),
-                    wa.allowed_numbers.clone(),
-                    http.client_for("channel.whatsapp"),
-                )));
+                if let Some(channel) = build_whatsapp_cloud_channel(config, host, http) {
+                    channels.push(
+                        BuiltChannel::with_output_ports(
+                            channel.clone(),
+                            Some(channel.clone()),
+                            Some(channel.clone()),
+                        )
+                        .with_reaction_port(channel.clone())
+                        .with_typing_port(channel),
+                    );
+                }
             }
             "cloud" => tracing::warn!(
                 "[channels] whatsapp cloud configured but missing phone_number_id, access_token or verify_token"
             ),
-            "web" => channels.extend(build_whatsapp_web(wa, host)),
+            "web" => {
+                if let Some(channel) = build_whatsapp_web(wa, host) {
+                    channels.push(channel);
+                }
+            }
             _ => tracing::warn!(
                 "[channels] whatsapp config invalid: neither phone_number_id (Cloud API) nor session_path (Web) is set"
             ),
         }
     }
 
-    if let Some(lq) = config.linq.as_ref() {
-        channels.push(Arc::new(LinqChannel::with_http_client(
-            lq.api_token.clone(),
-            lq.from_phone.clone(),
-            lq.allowed_senders.clone(),
-            http.client_for("channel.linq"),
-        )));
+    if let Some(linq) = build_linq_channel(config, host, http) {
+        channels.push(
+            BuiltChannel::with_output_ports(linq.clone(), Some(linq.clone()), Some(linq.clone()))
+                .with_typing_port(linq),
+        );
     }
 
     #[cfg(feature = "email")]
-    if let Some(email_cfg) = config.email.as_ref() {
-        channels.push(Arc::new(crate::providers::EmailChannel::new(
-            email_cfg.clone(),
-        )));
+    if let Some(email) = build_email_channel(config, host) {
+        channels.push(
+            BuiltChannel::with_output_ports(
+                email.clone(),
+                Some(email.clone()),
+                Some(email.clone()),
+            )
+            .with_typing_port(email),
+        );
     }
 
-    if let Some(irc_cfg) = config.irc.as_ref() {
-        channels.push(Arc::new(IrcChannel::new(irc::IrcChannelConfig {
-            server: irc_cfg.server.clone(),
-            port: irc_cfg.port,
-            nickname: irc_cfg.nickname.clone(),
-            username: irc_cfg.username.clone(),
-            channels: irc_cfg.channels.clone(),
-            allowed_users: irc_cfg.allowed_users.clone(),
-            server_password: irc_cfg.server_password.clone(),
-            nickserv_password: irc_cfg.nickserv_password.clone(),
-            sasl_password: irc_cfg.sasl_password.clone(),
-            verify_tls: irc_cfg.verify_tls.unwrap_or(true),
-        })));
+    if let Some(irc) = build_long_tail_channel_with_host(config, host, http, "irc") {
+        channels.push(
+            BuiltChannel::with_output_ports(irc.clone(), Some(irc.clone()), Some(irc.clone()))
+                .with_typing_port(irc),
+        );
     }
 
-    #[cfg(feature = "lark")]
-    if let Some(lk) = config.lark.as_ref() {
-        channels.push(Arc::new(crate::providers::LarkChannel::from_config(lk)));
+    if let Some(lark) = build_long_tail_channel_with_host(config, host, http, "lark") {
+        channels.push(
+            BuiltChannel::with_output_ports(lark.clone(), Some(lark.clone()), Some(lark.clone()))
+                .with_typing_port(lark),
+        );
     }
 
-    if let Some(dt) = config.dingtalk.as_ref() {
-        channels.push(Arc::new(DingTalkChannel::with_http_client(
-            dt.client_id.clone(),
-            dt.client_secret.clone(),
-            dt.allowed_users.clone(),
-            http.client_for("channel.dingtalk"),
-        )));
+    if let Some(dingtalk) = build_long_tail_channel_with_host(config, host, http, "dingtalk") {
+        channels.push(
+            BuiltChannel::with_output_ports(
+                dingtalk.clone(),
+                Some(dingtalk.clone()),
+                Some(dingtalk.clone()),
+            )
+            .with_typing_port(dingtalk),
+        );
     }
 
-    if let Some(qq) = config.qq.as_ref() {
-        channels.push(Arc::new(QQChannel::with_http_client(
-            qq.app_id.clone(),
-            qq.app_secret.clone(),
-            qq.allowed_users.clone(),
-            http.client_for("channel.qq"),
-        )));
+    if let Some(qq) = build_long_tail_channel_with_host(config, host, http, "qq") {
+        channels.push(
+            BuiltChannel::with_output_ports(qq.clone(), Some(qq.clone()), Some(qq.clone()))
+                .with_typing_port(qq),
+        );
     }
 
-    if let Some(yb) = config.yuanbao.as_ref() {
-        match YuanbaoChannel::new(yb.clone()) {
-            Ok(channel) => channels.push(Arc::new(channel)),
-            Err(error) => tracing::warn!("[channels] yuanbao config invalid: {error}"),
-        }
+    if let Some(yuanbao) = build_long_tail_channel_with_host(config, host, http, "yuanbao") {
+        channels.push(
+            BuiltChannel::with_output_ports(
+                yuanbao.clone(),
+                Some(yuanbao.clone()),
+                Some(yuanbao.clone()),
+            )
+            .with_typing_port(yuanbao),
+        );
     }
 
     channels
@@ -421,26 +1107,25 @@ pub fn build_channels(
 fn build_whatsapp_web(
     wa: &crate::config::WhatsAppConfig,
     host: &Arc<dyn ChannelHost>,
-) -> Option<Arc<dyn Channel>> {
+) -> Option<BuiltChannel> {
     #[cfg(feature = "whatsapp-web")]
     {
+        let config = ChannelsConfig {
+            whatsapp: Some(wa.clone()),
+            ..Default::default()
+        };
         if !wa.is_web_config() {
             tracing::warn!("[channels] whatsapp web configured but session_path not set");
             return None;
         }
-        let mut channel = crate::WhatsAppWebChannel::new(
-            wa.session_path.clone().unwrap_or_default(),
-            wa.pair_phone.clone(),
-            wa.pair_code.clone(),
-            wa.allowed_numbers.clone(),
-        );
-        if let Some(lifecycle) = host.lifecycle() {
-            channel = channel.with_lifecycle(lifecycle);
-        }
-        if let Some(storage) = host.storage() {
-            channel = channel.with_storage(storage);
-        }
-        Some(Arc::new(channel))
+        build_whatsapp_web_channel(&config, host).map(|channel| {
+            BuiltChannel::with_output_ports(
+                channel.clone(),
+                Some(channel.clone()),
+                Some(channel.clone()),
+            )
+            .with_typing_port(channel)
+        })
     }
     #[cfg(not(feature = "whatsapp-web"))]
     {

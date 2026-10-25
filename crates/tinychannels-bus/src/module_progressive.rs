@@ -218,8 +218,29 @@ pub enum ProgressiveCommand {
     Open {
         channel: String,
     },
+    /// Open a turn-scoped output stream using the full configured address.
+    OpenOutput {
+        channel: crate::channel::ChannelRef,
+        conversation: crate::channel::ConversationRef,
+        turn_id: String,
+        /// Host-owned output lease in milliseconds; the host selects a value
+        /// that covers its turn backstop and closes this handle on completion.
+        lifetime_ms: u64,
+    },
+    /// Open a scoped output stream whose transport is the trusted host callback
+    /// captured by this compiled module runtime. Unlike `OpenOutput`, this
+    /// does not select a locally configured provider; the host callback owns
+    /// account authorization and delivery. Capabilities remain conservative.
+    OpenHostedOutput {
+        channel: crate::channel::ChannelRef,
+        conversation: crate::channel::ConversationRef,
+        turn_id: String,
+        /// Host-owned output lease in milliseconds.
+        lifetime_ms: u64,
+    },
     /// Open a handle bound to one provider target and host-authorized turn.
-    /// Subsequent `FeedOutput` requests must repeat the same turn scope.
+    /// Subsequent `FeedOutput` requests carry a host-assigned `sequence` and
+    /// must repeat the same turn scope.
     OpenScoped {
         channel: String,
         turn_id: Option<String>,
@@ -230,15 +251,26 @@ pub enum ProgressiveCommand {
         handle: String,
         events: Vec<ProgressiveEvent>,
     },
-    /// Feed canonical output events through the module's ordered transport.
-    /// `sequence` is the first event's stable position within `turn_id`; hosts
-    /// can retry the same batch without changing its delivery identity.
+    /// Feed canonical output events without converting them through the v1
+    /// four-variant progressive projection.
+    ///
+    /// The optional scope fields assert the handle's turn scope: a request
+    /// whose scope differs from the scope bound at open (or, for an unscoped
+    /// `Open`, by the first accepted batch) is rejected. `sequence` is the
+    /// first event's stable position within `turn_id`, so a host can retry the
+    /// same batch without changing its delivery identity. It is required for
+    /// handles from `Open`/`OpenScoped` and must be absent for module-sequenced
+    /// handles from `OpenOutput`/`OpenHostedOutput`.
     FeedOutput {
         handle: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         channel_ref: Option<Box<crate::channel::ChannelRef>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         conversation: Option<Box<crate::channel::ConversationRef>>,
-        sequence: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sequence: Option<u64>,
         events: Vec<ChannelOutputEvent>,
     },
     Finish {
@@ -268,6 +300,36 @@ pub enum ProgressiveResult {
         output_event_failures: Vec<u64>,
     },
     Closed,
+    /// V2 terminal delivery acknowledgement; carries every known platform
+    /// receipt and any partial-send failure from the provider.
+    DeliveryOutcome {
+        outcome: Box<crate::channel::ChannelSendOutcome>,
+    },
+    /// Rich content is retained for a host/provider port that does not yet
+    /// support it; it is never flattened to text or dropped.
+    DeliveryUnsupported {
+        parts: Vec<crate::channel::OutboundContentPart>,
+    },
+    DeliveryOutcomes {
+        outcomes: Vec<crate::channel::ChannelSendOutcome>,
+    },
+    DeliveryBatch {
+        outcomes: Vec<crate::channel::ChannelSendOutcome>,
+        unsupported: Vec<crate::channel::OutboundContentPart>,
+        failure: Option<ProgressiveOutputFailure>,
+        /// Hosted output accepted by its callback. This is not a provider
+        /// acknowledgement and carries no provider receipt.
+        #[serde(default)]
+        hosted_accepted: bool,
+    },
+}
+
+/// Content-free reason that an ordered output batch stopped before completion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressiveOutputFailure {
+    ObservationCallback,
+    ProviderTransport,
 }
 
 /// The host supplies its managed REST transport and captured credential.

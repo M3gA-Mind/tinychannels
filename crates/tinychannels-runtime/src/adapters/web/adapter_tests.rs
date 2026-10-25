@@ -1,5 +1,5 @@
 use super::*;
-use crate::channel::DeliveryDurability;
+use crate::channel::{ChannelInboundEnvelope, DeliveryDurability};
 use tinychannels_bus::channel::{MediaReference, OutboundVoice};
 
 #[derive(Default)]
@@ -25,15 +25,12 @@ impl WebEventSink for RecordingSink {
 
 #[derive(Default)]
 struct RecordingInbound {
-    pushed: Mutex<Vec<tinychannels_bus::ChannelInboundEnvelope>>,
+    pushed: Mutex<Vec<ChannelInboundEnvelope>>,
 }
 
 #[async_trait]
 impl ChannelInboundSink for RecordingInbound {
-    async fn push(
-        &self,
-        envelope: tinychannels_bus::ChannelInboundEnvelope,
-    ) -> Result<(), ChannelSendError> {
+    async fn push(&self, envelope: ChannelInboundEnvelope) -> Result<(), ChannelSendError> {
         self.pushed.lock().push(envelope);
         Ok(())
     }

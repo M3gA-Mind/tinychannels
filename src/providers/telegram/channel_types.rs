@@ -4,8 +4,10 @@ use crate::config::StreamMode;
 use crate::security::PairingGuard;
 use parking_lot::Mutex;
 use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use tokio::sync::watch;
 
 pub(crate) const TELEGRAM_RECENT_UPDATE_CACHE_SIZE: usize = 4096;
 
@@ -13,6 +15,8 @@ pub(crate) const TELEGRAM_RECENT_UPDATE_CACHE_SIZE: usize = 4096;
 /// Keep our inbound voice path inside the same bound before base64 encoding
 /// and dispatching to STT.
 pub(crate) const TELEGRAM_MAX_VOICE_FILE_BYTES: u64 = 20 * 1024 * 1024;
+/// Keep base64 callback requests below TinyBus's 16 MiB inline frame cap.
+pub(crate) const TELEGRAM_MAX_STORED_VOICE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// De-bounce window for approval prompts: suppress duplicate prompts sent to the
 /// same chat+sender within this duration (prevents restart-race and rapid-fire spam).
@@ -23,11 +27,6 @@ pub(crate) const TELEGRAM_POLL_ERROR_BACKOFF: Duration = Duration::from_secs(5);
 
 /// Delay before re-polling `getUpdates` after an unresolved 409 conflict.
 pub(crate) const TELEGRAM_POLL_CONFLICT_BACKOFF: Duration = Duration::from_secs(2);
-
-pub(crate) struct TelegramTypingTask {
-    pub(crate) recipient: String,
-    pub(crate) handle: tokio::task::JoinHandle<()>,
-}
 
 #[derive(Default)]
 pub(crate) struct TelegramUpdateWindow {
@@ -77,6 +76,9 @@ pub struct TelegramChannel {
     /// voice transcription is skipped (a warn is logged). Set via
     /// [`TelegramChannel::with_transcriber`].
     pub(crate) transcriber: Option<Arc<dyn crate::host::Transcriber>>,
+    pub(crate) voice_media_store: Option<Arc<dyn crate::host::VoiceMediaStore>>,
+    pub(crate) media_repository: Option<Arc<dyn crate::host::MediaRepository>>,
+    pub(crate) voice_synthesis: bool,
     /// Injected persisted-allowlist store. On first-run bind/pairing the paired
     /// identity is promoted through this so it survives restarts. `None` ⇒
     /// runtime-only allowlisting. Set via [`TelegramChannel::with_allowlist`].
@@ -85,7 +87,6 @@ pub struct TelegramChannel {
     /// still applied but no event is published. Set via
     /// [`TelegramChannel::with_events`].
     pub(crate) events: Option<Arc<dyn crate::host::EventSink>>,
-    pub(crate) typing_handle: Mutex<Option<TelegramTypingTask>>,
     pub(crate) stream_mode: StreamMode,
     pub(crate) draft_update_interval_ms: u64,
     pub(crate) silent_streaming: bool,
@@ -104,4 +105,7 @@ pub struct TelegramChannel {
     /// Back-off after a `getUpdates` 409 conflict that could not be cleared.
     /// Defaults to [`TELEGRAM_POLL_CONFLICT_BACKOFF`].
     pub(crate) poll_conflict_backoff: Duration,
+    /// Cancellation signal and single-owner guard for the typed long-poll loop.
+    pub(crate) listener_cancel: watch::Sender<bool>,
+    pub(crate) listener_running: AtomicBool,
 }

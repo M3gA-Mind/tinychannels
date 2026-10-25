@@ -5,6 +5,7 @@ fn unsupported_error_marker_preserves_the_public_struct_layout() {
     let legacy_literal = ChannelSendError {
         kind: SendErrorKind::BadFormat,
         message: "old downstream literal".into(),
+        unsupported: false,
         retryable: false,
         sent_before_error: false,
         retry_after: None,
@@ -27,5 +28,5 @@ fn unsupported_error_marker_preserves_the_public_struct_layout() {
     assert_eq!(unsupported.message, "unsupported operation: voice output");
     let encoded = serde_json::to_value(unsupported).expect("encode unsupported error");
     assert_eq!(encoded["message"], "unsupported operation: voice output");
-    assert!(encoded.get("unsupported").is_none());
+    assert_eq!(encoded["unsupported"], true);
 }

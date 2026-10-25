@@ -2,6 +2,60 @@ use super::*;
 use tinychannels_bus::ChannelsConfig;
 use tinychannels_bus::config::WhatsAppConfig;
 
+#[tokio::test]
+async fn service_web_turn_methods_open_project_and_release_one_scoped_handle() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let channels = Channels::new(HostChannels::new(connection), None);
+    let handle = channels
+        .begin_web_turn(tinychannels_bus::BeginWebTurn {
+            scope_key: "user:1/thread:2".into(),
+            context: tinychannels_bus::WebEventContext {
+                client_id: "client".into(),
+                thread_id: "thread-2".into(),
+                request_id: "request-3".into(),
+                ..Default::default()
+            },
+        })
+        .await
+        .unwrap();
+
+    let output = channels
+        .project_web_output(tinychannels_bus::ProjectWebOutput {
+            handle: handle.handle.clone(),
+            event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                text: "hello".into(),
+                iteration: Some(1),
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(output.events.len(), 1);
+    assert_eq!(output.events[0].context().thread_id, "thread-2");
+
+    channels
+        .end_web_turn(tinychannels_bus::EndWebTurn {
+            handle: handle.handle.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        channels
+            .project_web_output(tinychannels_bus::ProjectWebOutput {
+                handle: handle.handle,
+                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                    text: "after end".into(),
+                    iteration: None,
+                },
+            })
+            .await
+            .is_err()
+    );
+}
+
 #[cfg(feature = "test-support")]
 #[tokio::test]
 async fn test_remote_channel_fixture_registers_and_cleans_up_without_network() {
@@ -187,6 +241,7 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         Running::start(channel, hooks, host.clone()),
     );
     let channels = Channels {
+        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         progressive: Arc::new(crate::progressive::Replies::new(
             host.clone(),
             Arc::new(Mutex::new(running.clone())),
@@ -276,6 +331,7 @@ async fn prepared_legacy_payloads_use_the_legacy_provider_send_path() {
         Running::start(channel, Arc::new(Hooks::default()), host.clone()),
     )]);
     let channels = Channels {
+        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         progressive: Arc::new(crate::progressive::Replies::new(
             host.clone(),
             Arc::new(Mutex::new(running.clone())),
@@ -371,6 +427,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         Running::start(channel, Arc::new(Hooks::default()), host.clone()),
     );
     let channels = Channels {
+        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         progressive: Arc::new(crate::progressive::Replies::new(
             host.clone(),
             Arc::new(Mutex::new(running.clone())),
@@ -623,7 +680,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                         conversation_id: "room".into(),
                         channel_ref: Some(tinychannels_bus::channel::ChannelRef {
                             id: "fixture".into(),
-                            account_id: Some("account-a".into()),
+                            account_id: Some("fixture".into()),
                         }),
                         conversation_ref: Some(tinychannels_bus::channel::ConversationRef {
                             kind: tinychannels_bus::channel::ConversationKind::Thread,
@@ -651,7 +708,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                 .channel_ref
                 .as_ref()
                 .and_then(|channel| channel.account_id.as_deref()),
-            Some("account-a")
+            Some("fixture")
         );
         let address = typed.conversation_ref.as_ref().unwrap();
         assert_eq!(address.scope_id.as_deref(), Some("workspace-a"));
@@ -834,6 +891,7 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
         Running::start(channel, hooks, host.clone()),
     );
     let channels = Channels {
+        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         progressive: Arc::new(crate::progressive::Replies::new(
             host.clone(),
             Arc::new(Mutex::new(running.clone())),
@@ -1264,6 +1322,7 @@ async fn channels_with_store(
     )]);
     let relays = Arc::new(Relays::new(host.clone()));
     let channels = Channels {
+        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         progressive: Arc::new(crate::progressive::Replies::new(
             host.clone(),
             Arc::new(Mutex::new(running.clone())),
@@ -1902,10 +1961,25 @@ async fn provider_failure_stays_pending_then_recovery_fails_closed_once() {
         channels_with_store(Arc::new(FailingChannel(calls.clone()))).await;
     let intent = required_intent("provider-fail", "body");
     assert!(
+        !channels
+            .running
+            .lock()
+            .await
+            .get("fixture")
+            .unwrap()
+            .is_finished(),
+        "provider should be available before required delivery"
+    );
+    assert!(
         channels
             .send_channel_intent("fixture".into(), intent.clone())
             .await
             .is_err()
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "initial delivery reaches provider"
     );
     {
         let scopes = callbacks.storage.snapshot().await;
@@ -1917,7 +1991,11 @@ async fn provider_failure_stays_pending_then_recovery_fails_closed_once() {
     recover_delivery_channel(&channels.host, &channels.running, "fixture")
         .await
         .unwrap();
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "ambiguous delivery is not retried blindly"
+    );
     let scopes = callbacks.storage.snapshot().await;
     let scope = scopes.get("scope-a").unwrap();
     assert!(scope.pending.is_empty());
@@ -2223,6 +2301,7 @@ async fn configured_catalog_reports_webhook_mode_without_starting_a_listener() {
             api_token: "fixture-token".into(),
             from_phone: "+15550000001".into(),
             allowed_senders: vec![],
+            webhook_secret: None,
         }),
         ..Default::default()
     };
@@ -2409,6 +2488,7 @@ async fn inbound_preparation_preserves_escaped_persisted_keys_and_provider_threa
             },
             namespace: "openhuman".into(),
             session_policy: Default::default(),
+            preparation_mode: Default::default(),
         })
         .await
         .unwrap();
@@ -2426,7 +2506,7 @@ async fn inbound_preparation_preserves_escaped_persisted_keys_and_provider_threa
     assert_eq!(prepared.envelope.text, "fixture content");
     assert_eq!(
         prepared.session_key,
-        "openhuman:discord:default:unknown:room#b:thread/c"
+        "v22|namespace=p9:openhuman|channel=p7:discord|account=a|kind=p7:unknown|scope=a|conversation=p6:room#b|parent=a|topic=a|thread=p8:thread/c|participant=a"
     );
     service.shutdown().await.unwrap();
 }
@@ -2621,6 +2701,7 @@ async fn prepared_envelope_preserves_media_account_and_group_isolation_policy() 
         },
         namespace: "tenant".into(),
         session_policy: Default::default(),
+        preparation_mode: Default::default(),
     };
     let prepared = service
         .prepare_channel_inbound(request.clone())
@@ -2634,14 +2715,14 @@ async fn prepared_envelope_preserves_media_account_and_group_isolation_policy() 
     assert_eq!(prepared.message.sender_name.as_deref(), Some("Display"));
     assert_eq!(
         prepared.session_key,
-        "tenant:discord:account:group:room:thread"
+        "v22|namespace=p6:tenant|channel=p7:discord|account=p7:account|kind=p5:group|scope=a|conversation=p4:room|parent=a|topic=a|thread=p6:thread|participant=a"
     );
     let mut per_user = request;
     per_user.session_policy.thread_sessions_per_user = true;
     let prepared = service.prepare_channel_inbound(per_user).await.unwrap();
     assert_eq!(
         prepared.session_key,
-        "tenant:discord:account:group:room:thread:user"
+        "v22|namespace=p6:tenant|channel=p7:discord|account=p7:account|kind=p5:group|scope=a|conversation=p4:room|parent=a|topic=a|thread=p6:thread|participant=p4:user"
     );
     service.shutdown().await.unwrap();
 }
@@ -2668,6 +2749,7 @@ async fn inbound_preparation_refuses_mismatched_identity_oversized_payload_and_s
         },
         namespace: "tenant".into(),
         session_policy: Default::default(),
+        preparation_mode: Default::default(),
     };
     let error = service
         .prepare_channel_inbound(request)
@@ -2684,6 +2766,7 @@ async fn inbound_preparation_refuses_mismatched_identity_oversized_payload_and_s
         },
         namespace: "tenant".into(),
         session_policy: Default::default(),
+        preparation_mode: Default::default(),
     };
     assert!(
         service
@@ -2703,6 +2786,24 @@ async fn inbound_preparation_refuses_mismatched_identity_oversized_payload_and_s
             .await
             .is_err()
     );
+    // A typed preparation keeps the envelope's content instead of flattening it.
+    let typed = PrepareChannelInboundRequest {
+        source: ChannelInboundSource::Legacy {
+            message: tinychannels_bus::ChannelMessage {
+                channel: "discord".into(),
+                id: "typed".into(),
+                sender: "user".into(),
+                reply_target: "room".into(),
+                content: "hello".into(),
+                ..Default::default()
+            },
+            envelope: None,
+        },
+        namespace: "tenant".into(),
+        session_policy: Default::default(),
+        preparation_mode: tinychannels_bus::module_inbound::ChannelInboundPreparationMode::Typed,
+    };
+    assert!(service.prepare_channel_inbound(typed).await.is_ok());
     service.shutdown().await.unwrap();
     assert!(service.prepare_channel_inbound(request).await.is_err());
     assert!(service.prepare_channel_identity(identity).await.is_err());
@@ -2788,6 +2889,7 @@ async fn remote_help_is_parsed_and_rendered_inside_the_module() {
                 model: "fixture".into(),
             },
             history_len: 0,
+            session_scope: None,
         })
         .await
         .unwrap();
@@ -2813,7 +2915,9 @@ async fn remote_help_is_parsed_and_rendered_inside_the_module() {
                     model: "fixture".into(),
                 },
                 history_len: 0,
+                session_scope: None,
                 providers: vec![],
+                configured_channel: None,
             },
         )
         .await
@@ -2931,6 +3035,8 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
         message: serde_json::from_value(serde_json::json!({"id":"fixture","sender":"sender","reply_target":"chat","content":content,"channel":channel,"timestamp":1})).unwrap(),
         capabilities: None,
         route: RemoteRoute { provider: "old".into(), model: "model".into() }, history_len: 3,
+        session_scope: None,
+        configured_channel: None,
         providers: vec![ProviderDescriptor { name: "approved".into(), aliases: vec!["alias".into()] }],
     }
     };
@@ -3031,10 +3137,12 @@ async fn route_remote_commands_use_host_capabilities_for_isolated_runtime() {
                 model: "fixture".into(),
             },
             history_len: 0,
+            session_scope: None,
             providers: vec![ProviderDescriptor {
                 name: "fixture".into(),
                 aliases: vec![],
             }],
+            configured_channel: None,
         })
         .await
         .unwrap();
@@ -3057,6 +3165,7 @@ async fn webhook_provider_requires_outbound_start_and_rejects_duplicate_ownershi
             api_token: "fixture-token".into(),
             from_phone: "+15551234567".into(),
             allowed_senders: vec![],
+            webhook_secret: None,
         }),
         ..Default::default()
     };
@@ -3327,25 +3436,31 @@ async fn service_send_failures_preserve_named_error_and_durable_queue_busy_refus
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (service, _callbacks, _server) =
         channels_with_store(Arc::new(FailingChannel(calls.clone()))).await;
-    for error in [
-        service
-            .send_message("fixture".into(), SendMessage::new("hello", "room"))
-            .await
-            .expect_err("provider fails"),
-        service
-            .send_channel_intent(
-                "fixture".into(),
-                ChannelOutboundIntent {
-                    durability: tinychannels::DeliveryDurability::BestEffort,
-                    ..required_intent("best-effort", "hello")
-                },
-            )
-            .await
-            .map(|_| ())
-            .expect_err("provider fails"),
-    ] {
-        assert!(matches!(error, BusError::MethodFailed { name, .. } if name == SEND_FAILED_ERROR));
-    }
+    let legacy_error = service
+        .send_message("fixture".into(), SendMessage::new("hello", "room"))
+        .await
+        .expect_err("legacy provider send fails");
+    assert!(matches!(
+        legacy_error,
+        BusError::MethodFailed { name, .. } if name == SEND_FAILED_ERROR
+    ));
+
+    let typed_result = service
+        .send_channel_intent(
+            "fixture".into(),
+            ChannelOutboundIntent {
+                durability: tinychannels::DeliveryDurability::BestEffort,
+                ..required_intent("best-effort", "hello")
+            },
+        )
+        .await
+        .expect("typed send failure is returned in its outcome");
+    let typed_error = typed_result
+        .error
+        .expect("typed provider error is preserved");
+    assert_eq!(typed_error.message, "fixture provider failure");
+    assert!(!typed_error.retryable);
+    assert!(typed_error.sent_before_error);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     let admission = service.delivery_admission.lock().await;
     let error = service

@@ -24,6 +24,8 @@ crate-type = ["rlib", "cdylib"]
 tinychannels = { path = "../..", default-features = false, features = ["email", "lark", "relay-websocket"] }
 # The transport-free vocabulary shared with the host.
 tinychannels-bus = { path = "../tinychannels-bus" }
+tinychannels-runtime = { path = "../tinychannels-runtime" }
+tinyvoice-bus = { git = "https://github.com/tinyhumansai/tinyvoice", rev = "cf6444424149bbc8dc2303bddbd9b366abb29933" }
 # TinyBus provides the typed service interface and dynamic module host ABI.
 tinybus = { version = ">=0.1.4, <0.2", default-features = false, features = ["macros", "modules"] }
 # The module-side SDK owns its runtime and exports the stable C entrypoints.
@@ -46,8 +48,11 @@ log = "0.4"
 async-trait = "0.1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 uuid = { version = "1", features = ["v4"] }
+base64 = "0.23"
 
 [dev-dependencies]
+tinychannels = { path = "../.." }
+tinychannels-conformance = { path = "../tinychannels-conformance" }
 tinybus = { version = ">=0.1.4, <0.2", default-features = false, features = ["test-support"] }
 tinystoragedrivers-testkit = { git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456" }
 tempfile = "3"
@@ -55,7 +60,8 @@ tokio = { version = "1", features = ["test-util"] }
 serde_json = "1"
 futures-util = "0.3"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
-base64 = "0.23"
+wiremock = "0.6"
+hmac = "0.13"
 
 [features]
 default = ["whatsapp-web"]

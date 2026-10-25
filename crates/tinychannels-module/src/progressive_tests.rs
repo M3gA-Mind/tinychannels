@@ -57,9 +57,9 @@ impl Callback {
         if let ProgressiveTransportRequest::OutputEvent { sequence, .. } = &*request
             && self.failed_output_sequences.lock().await.contains(sequence)
         {
-            return Ok(ChannelBackendResult::ProgressiveTransport(
+            return Ok(ChannelBackendResult::ProgressiveTransport(Box::new(
                 ProgressiveTransportResult::Failed,
-            ));
+            )));
         }
         if let ProgressiveTransportRequest::Send { message, .. } = &*request {
             self.sends.lock().await.push(message.clone());
@@ -85,9 +85,9 @@ impl Callback {
         } else {
             self.result.lock().await.clone()
         };
-        Ok(ChannelBackendResult::ProgressiveTransport(
+        Ok(ChannelBackendResult::ProgressiveTransport(Box::new(
             override_result.unwrap_or(default),
-        ))
+        )))
     }
 }
 
@@ -154,7 +154,7 @@ async fn typed_final_removes_a_flushed_progressive_draft() {
             turn_id: Some("turn-1".into()),
             channel_ref: None,
             conversation: None,
-            sequence: 1,
+            sequence: Some(1),
             events: vec![ChannelOutputEvent::TextDelta {
                 text: "draft answer".into(),
                 iteration: Some(1),
@@ -174,7 +174,7 @@ async fn typed_final_removes_a_flushed_progressive_draft() {
             turn_id: Some("turn-1".into()),
             channel_ref: None,
             conversation: None,
-            sequence: 2,
+            sequence: Some(2),
             events: vec![ChannelOutputEvent::FinalMessage {
                 text: "final answer".into(),
                 parts: vec![],
@@ -225,7 +225,7 @@ async fn accepted_typed_final_keeps_a_flushed_progressive_draft() {
             turn_id: Some("turn-1".into()),
             channel_ref: None,
             conversation: None,
-            sequence: 1,
+            sequence: Some(1),
             events: vec![ChannelOutputEvent::TextDelta {
                 text: "draft answer".into(),
                 iteration: Some(1),
@@ -245,7 +245,7 @@ async fn accepted_typed_final_keeps_a_flushed_progressive_draft() {
             turn_id: Some("turn-1".into()),
             channel_ref: None,
             conversation: None,
-            sequence: 2,
+            sequence: Some(2),
             events: vec![ChannelOutputEvent::FinalMessage {
                 text: "final answer".into(),
                 parts: vec![],
@@ -298,7 +298,7 @@ async fn first_scoped_output_typing_uses_the_output_batch_scope() {
                 thread_id: Some("thread-1".into()),
                 topic_id: None,
             })),
-            sequence: 1,
+            sequence: Some(1),
             events: vec![ChannelOutputEvent::TextDelta {
                 text: "scoped response".into(),
                 iteration: Some(1),
@@ -386,7 +386,7 @@ async fn repeated_final_text_does_not_double_count_against_the_delta_budget() {
             turn_id: Some("turn-1".into()),
             channel_ref: None,
             conversation: None,
-            sequence: 1,
+            sequence: Some(1),
             events: vec![
                 ChannelOutputEvent::TextDelta {
                     text: repeated_text.clone(),
@@ -566,6 +566,38 @@ async fn reply_capacity_refuses_seventeenth_and_shutdown_drains_every_worker() {
 }
 
 #[tokio::test]
+async fn completed_replies_are_evicted_when_the_retained_handle_limit_is_reached() {
+    let (replies, callback) = fixture(false).await;
+    let mut completed_handles = Vec::new();
+    for index in 0..MAX_RETAINED {
+        let handle = open(&replies).await;
+        completed_handles.push(handle.clone());
+        replies
+            .execute(ProgressiveCommand::Finish {
+                handle,
+                text: format!("completed reply {index}"),
+            })
+            .await
+            .unwrap();
+    }
+    assert_eq!(replies.state.lock().await.entries.len(), MAX_RETAINED);
+
+    let newest = open(&replies).await;
+    {
+        let state = replies.state.lock().await;
+        assert_eq!(state.entries.len(), MAX_RETAINED);
+        assert!(
+            completed_handles
+                .iter()
+                .any(|handle| !state.entries.contains_key(handle))
+        );
+        assert!(state.entries.contains_key(&newest));
+    }
+    replies.shutdown().await.unwrap();
+    assert_eq!(callback.sends.lock().await.len(), MAX_RETAINED + 1);
+}
+
+#[tokio::test]
 async fn shutdown_starts_every_close_before_waiting_for_blocked_delivery() {
     let (replies, callback) = fixture(true).await;
     let replies = Arc::new(replies);
@@ -738,7 +770,7 @@ async fn feed_output_forwards_canonical_events_in_order_with_delivery_scope() {
                     thread_id: Some("thread-1".into()),
                     topic_id: None,
                 })),
-                sequence: 40,
+                sequence: Some(40),
                 events: events.clone(),
             })
             .await
@@ -837,7 +869,7 @@ async fn feed_output_returns_prior_and_current_receipts_when_output_event_callba
             turn_id: Some("turn-1".into()),
             channel_ref: None,
             conversation: None,
-            sequence: 40,
+            sequence: Some(40),
             events,
         })
         .await
@@ -959,7 +991,7 @@ async fn replayed_feed_output_retries_only_failed_observation_callbacks() {
         turn_id: Some("turn-1".into()),
         channel_ref: None,
         conversation: None,
-        sequence: 40,
+        sequence: Some(40),
         events: vec![event.clone()],
     };
 
@@ -1008,7 +1040,7 @@ async fn feed_output_retries_reuse_the_previous_result_without_reapplying_deltas
         turn_id: Some("turn-1".into()),
         channel_ref: None,
         conversation: None,
-        sequence: 70,
+        sequence: Some(70),
         events: vec![event.clone()],
     };
 
@@ -1042,7 +1074,7 @@ async fn feed_output_retries_reuse_the_previous_result_without_reapplying_deltas
                 turn_id: Some("turn-1".into()),
                 channel_ref: None,
                 conversation: None,
-                sequence: 70,
+                sequence: Some(70),
                 events: vec![changed],
             })
             .await
@@ -1100,7 +1132,7 @@ async fn scoped_open_rejects_feed_output_from_another_turn() {
                     thread_id: Some("thread-bound".into()),
                     topic_id: None,
                 })),
-                sequence: 1,
+                sequence: Some(1),
                 events: vec![ChannelOutputEvent::TextDelta {
                     text: "must not be projected".into(),
                     iteration: Some(1),
@@ -1126,7 +1158,7 @@ async fn scoped_open_rejects_feed_output_from_another_turn() {
                     thread_id: Some("thread-bound".into()),
                     topic_id: None,
                 })),
-                sequence: 2,
+                sequence: Some(2),
                 events: vec![],
             })
             .await
@@ -1149,7 +1181,7 @@ async fn scoped_open_rejects_feed_output_from_another_turn() {
                     thread_id: Some("thread-bound".into()),
                     topic_id: None,
                 })),
-                sequence: 3,
+                sequence: Some(3),
                 events: vec![],
             })
             .await
@@ -1172,7 +1204,7 @@ async fn scoped_open_rejects_feed_output_from_another_turn() {
             thread_id: Some("thread-bound".into()),
             topic_id: None,
         })),
-        sequence: 2,
+        sequence: Some(2),
         events: vec![ChannelOutputEvent::FinalMessage {
             text: "final answer".into(),
             parts: vec![],
@@ -1219,7 +1251,7 @@ async fn final_output_terminates_without_a_second_legacy_send_and_replays_receip
         turn_id: Some("turn-1".into()),
         channel_ref: None,
         conversation: None,
-        sequence: 80,
+        sequence: Some(80),
         events: vec![ChannelOutputEvent::FinalMessage {
             text: "final".into(),
             parts: vec![],
@@ -1266,7 +1298,7 @@ async fn feed_output_rejects_accumulated_text_and_thinking_over_the_content_limi
             turn_id: Some("turn-1".into()),
             channel_ref: None,
             conversation: None,
-            sequence: 90,
+            sequence: Some(90),
             events: vec![
                 ChannelOutputEvent::TextDelta {
                     text: "would be applied".into(),
@@ -1308,7 +1340,7 @@ async fn feed_output_rejects_final_message_text_over_the_content_limit() {
             turn_id: Some("turn-1".into()),
             channel_ref: None,
             conversation: None,
-            sequence: 1,
+            sequence: Some(1),
             events: vec![ChannelOutputEvent::FinalMessage {
                 text: "x".repeat(MAX_CONTENT + 1),
                 parts: vec![],
@@ -1406,7 +1438,7 @@ async fn feed_output_rejects_scope_changes_after_first_accepted_batch() {
             turn_id: Some("turn-1".into()),
             channel_ref: None,
             conversation: Some(Box::new(first_scope)),
-            sequence: 1,
+            sequence: Some(1),
             events: vec![event()],
         })
         .await
@@ -1425,7 +1457,7 @@ async fn feed_output_rejects_scope_changes_after_first_accepted_batch() {
                 id: "conversation-2".into(),
                 ..Default::default()
             })),
-            sequence: 2,
+            sequence: Some(2),
             events: vec![event()],
         })
         .await;
@@ -1674,4 +1706,672 @@ async fn transport_failures_preserve_recovery_classification() {
             | ProgressiveTransportResult::UnsupportedContent => unreachable!(),
         }
     }
+}
+
+#[tokio::test]
+async fn scoped_output_preserves_acknowledgement_receipt_and_unsupported_content_results() {
+    use tinychannels_bus::module_progressive::{ChannelOutputEvent, ProgressiveOutputFailure};
+
+    let (replies, callback) = fixture(false).await;
+    let scope = OpenScope {
+        channel: tinychannels_bus::ChannelRef {
+            id: "discord".into(),
+            account_id: Some("discord:fixture".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            id: "room-1".into(),
+            ..Default::default()
+        },
+        turn_id: "turn-1".into(),
+        lifetime: TURN_LIFETIME,
+    };
+    let sequence = AtomicU64::new(0);
+    let text_delta = || ChannelOutputEvent::TextDelta {
+        text: "partial".into(),
+        iteration: Some(1),
+    };
+
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Acknowledged);
+    assert_eq!(
+        feed_output(
+            &replies.host,
+            "discord:fixture",
+            Some(&scope),
+            &sequence,
+            vec![text_delta()]
+        )
+        .await
+        .unwrap(),
+        ProgressiveResult::Updated
+    );
+
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Accepted);
+    assert!(matches!(
+        feed_output(
+            &replies.host,
+            "discord:fixture",
+            Some(&scope),
+            &sequence,
+            vec![text_delta()]
+        )
+        .await
+        .unwrap(),
+        ProgressiveResult::DeliveryBatch {
+            hosted_accepted: true,
+            failure: None,
+            ..
+        }
+    ));
+
+    let outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Outcome(Box::new(
+        outcome.clone(),
+    )));
+    assert_eq!(
+        feed_output(
+            &replies.host,
+            "discord:fixture",
+            Some(&scope),
+            &sequence,
+            vec![text_delta()]
+        )
+        .await
+        .unwrap(),
+        ProgressiveResult::DeliveryOutcome {
+            outcome: Box::new(outcome.clone())
+        }
+    );
+
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Success(
+        serde_json::to_value(outcome.clone()).unwrap(),
+    ));
+    assert_eq!(
+        feed_output(
+            &replies.host,
+            "discord:fixture",
+            Some(&scope),
+            &sequence,
+            vec![text_delta()],
+        )
+        .await
+        .unwrap(),
+        ProgressiveResult::DeliveryOutcome {
+            outcome: Box::new(outcome)
+        }
+    );
+
+    *callback.result.lock().await = Some(ProgressiveTransportResult::UnsupportedContent);
+    let part = tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: Default::default(),
+            caption: None,
+            alt_text: Some("chart".into()),
+        },
+    };
+    assert_eq!(
+        feed_output(
+            &replies.host,
+            "discord:fixture",
+            Some(&scope),
+            &sequence,
+            vec![ChannelOutputEvent::FinalMessage {
+                text: "summary".into(),
+                parts: vec![part.clone()],
+                receipt: None,
+            }],
+        )
+        .await
+        .unwrap(),
+        ProgressiveResult::DeliveryUnsupported { parts: vec![part] }
+    );
+
+    assert!(matches!(
+        feed_output(
+            &replies.host,
+            "discord:fixture",
+            Some(&scope),
+            &sequence,
+            vec![text_delta()]
+        )
+        .await
+        .unwrap(),
+        ProgressiveResult::DeliveryBatch {
+            failure: Some(ProgressiveOutputFailure::ProviderTransport),
+            hosted_accepted: false,
+            ..
+        }
+    ));
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn hosted_output_lifecycle_carries_turn_scope_and_finishes_through_host_transport() {
+    use tinychannels_bus::module_progressive::ChannelOutputEvent;
+
+    let (replies, callback) = fixture(false).await;
+    let channel = tinychannels_bus::ChannelRef {
+        id: "discord".into(),
+        account_id: Some("discord:fixture".into()),
+    };
+    let conversation = tinychannels_bus::ConversationRef {
+        id: "room-1".into(),
+        thread_id: Some("thread-2".into()),
+        ..Default::default()
+    };
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenHostedOutput {
+            channel: channel.clone(),
+            conversation: conversation.clone(),
+            turn_id: "turn-9".into(),
+            lifetime_ms: 30_000,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("hosted output should open a scoped reply");
+    };
+
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Acknowledged);
+    assert_eq!(
+        replies
+            .execute(ProgressiveCommand::FeedOutput {
+                handle: handle.clone(),
+                turn_id: None,
+                channel_ref: None,
+                conversation: None,
+                sequence: None,
+                events: vec![ChannelOutputEvent::TextDelta {
+                    text: "partial".into(),
+                    iteration: Some(1),
+                }],
+            })
+            .await
+            .unwrap(),
+        ProgressiveResult::Updated
+    );
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Success(
+        serde_json::json!({"id": "fixture-message"}),
+    ));
+    assert_eq!(
+        replies
+            .execute(ProgressiveCommand::Finish {
+                handle,
+                text: "complete".into(),
+            })
+            .await
+            .unwrap(),
+        ProgressiveResult::Closed
+    );
+
+    let requests = callback.requests.lock().await;
+    assert!(requests.iter().any(|request| matches!(
+        request,
+        ProgressiveTransportRequest::OutputEvent {
+            channel: request_channel,
+            turn_id: Some(turn_id),
+            channel_ref: Some(request_scope),
+            conversation: Some(request_conversation),
+            sequence: 0,
+            ..
+        } if request_channel == "discord" && turn_id == "turn-9" && request_scope == &channel && request_conversation == &conversation
+    )));
+    assert_eq!(callback.sends.lock().await[0]["text"], "complete");
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_sequenced_output_rejects_host_sequence_and_foreign_turn_scope() {
+    let (replies, callback) = fixture(false).await;
+    let channel = tinychannels_bus::ChannelRef {
+        id: "discord".into(),
+        account_id: Some("discord:fixture".into()),
+    };
+    let conversation = tinychannels_bus::ConversationRef {
+        id: "room-1".into(),
+        ..Default::default()
+    };
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenHostedOutput {
+            channel: channel.clone(),
+            conversation: conversation.clone(),
+            turn_id: "turn-9".into(),
+            lifetime_ms: 30_000,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("hosted output should open a scoped reply");
+    };
+    let feed = |turn_id: Option<&str>, sequence: Option<u64>| ProgressiveCommand::FeedOutput {
+        handle: handle.clone(),
+        turn_id: turn_id.map(str::to_owned),
+        channel_ref: Some(Box::new(channel.clone())),
+        conversation: Some(Box::new(conversation.clone())),
+        sequence,
+        events: vec![ChannelOutputEvent::TextDelta {
+            text: "partial".into(),
+            iteration: Some(1),
+        }],
+    };
+
+    let sequenced = replies
+        .execute(feed(Some("turn-9"), Some(0)))
+        .await
+        .expect_err("a module-sequenced handle must not accept a host sequence");
+    assert!(
+        sequenced.to_string().contains("host sequence"),
+        "{sequenced}"
+    );
+    let foreign = replies
+        .execute(feed(Some("turn-other"), None))
+        .await
+        .expect_err("another turn must not feed this handle");
+    assert!(foreign.to_string().contains("scope changed"), "{foreign}");
+    assert!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .all(|request| !matches!(request, ProgressiveTransportRequest::OutputEvent { .. })),
+        "rejected batches must not reach the output callback"
+    );
+
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Acknowledged);
+    assert_eq!(
+        replies.execute(feed(Some("turn-9"), None)).await.unwrap(),
+        ProgressiveResult::Updated
+    );
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn host_sequenced_output_requires_a_batch_sequence() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    let error = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            turn_id: Some("turn-1".into()),
+            channel_ref: None,
+            conversation: None,
+            sequence: None,
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "partial".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .expect_err("a host-sequenced handle needs a stable batch sequence");
+    assert!(
+        error.to_string().contains("sequence is required"),
+        "{error}"
+    );
+    assert!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .all(|request| !matches!(request, ProgressiveTransportRequest::OutputEvent { .. }))
+    );
+    replies.shutdown().await.unwrap();
+}
+
+#[test]
+fn output_scope_accepts_a_hosted_turn_lease_and_rejects_longer_ones() {
+    let scope = |lifetime_ms| {
+        output_scope(
+            tinychannels_bus::ChannelRef {
+                id: "bot".into(),
+                ..Default::default()
+            },
+            tinychannels_bus::ConversationRef {
+                id: "room".into(),
+                ..Default::default()
+            },
+            "turn-1".into(),
+            lifetime_ms,
+        )
+    };
+    assert!(scope(3_660_000).is_ok(), "a one-hour turn lease must open");
+    assert!(scope(3_700_000).is_ok());
+    assert!(scope(3_700_001).is_err());
+    assert!(scope(0).is_err());
+}
+
+#[derive(Default)]
+struct RecordingChannel {
+    sent: Arc<Mutex<Vec<String>>>,
+}
+
+#[allow(deprecated)]
+#[async_trait::async_trait]
+impl tinychannels::Channel for RecordingChannel {
+    fn name(&self) -> &str {
+        "discord"
+    }
+
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        tinychannels_bus::ChannelCapabilities {
+            progressive_edits: true,
+            ..Default::default()
+        }
+    }
+
+    async fn send(&self, message: &tinychannels::SendMessage) -> anyhow::Result<()> {
+        self.sent.lock().await.push(message.content.clone());
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn closing_a_handle_after_a_module_sequenced_final_does_not_announce_a_cancellation() {
+    let (replies, _callback) = fixture(true).await;
+    let channel = Arc::new(RecordingChannel::default());
+    let sent = channel.sent.clone();
+    let provider =
+        Running::start_outbound(channel, Arc::new(Hooks::default()), replies.host.clone());
+    replies
+        .running
+        .lock()
+        .await
+        .insert("discord".into(), provider.clone());
+    let handle = match replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                ..Default::default()
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "turn-1".into(),
+            lifetime_ms: 60_000,
+        })
+        .await
+        .unwrap()
+    {
+        ProgressiveResult::Opened { handle } => handle,
+        _ => panic!("expected opened handle"),
+    };
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            turn_id: Some("turn-1".into()),
+            channel_ref: None,
+            conversation: None,
+            sequence: None,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "final answer".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    tokio::task::yield_now().await;
+    let _ = replies
+        .execute(ProgressiveCommand::Close {
+            handle: handle.clone(),
+        })
+        .await;
+    let sent = sent.lock().await.clone();
+    assert!(
+        sent.iter().all(|content| !content.contains("Cancelled")),
+        "a completed reply must not be followed by a cancellation notice: {sent:?}"
+    );
+    replies.shutdown().await.unwrap();
+    provider.stop().await.unwrap();
+}
+
+/// Records the order of provider typing and delivery calls.
+#[derive(Default)]
+struct OrderedAdapter {
+    log: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelAdapter for OrderedAdapter {
+    fn descriptor(&self) -> tinychannels::channel::ChannelDescriptor {
+        tinychannels::channel::ChannelDescriptor {
+            id: "telegram".into(),
+            display_name: "telegram".into(),
+            ..Default::default()
+        }
+    }
+
+    async fn start(
+        &self,
+        _: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync),
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Ok(())
+    }
+
+    async fn stop(&self) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Ok(())
+    }
+
+    async fn send(
+        &self,
+        _intent: tinychannels::channel::ChannelOutboundIntent,
+    ) -> std::result::Result<
+        tinychannels::channel::MessageReceipt,
+        tinychannels::channel::ChannelSendError,
+    > {
+        self.log.lock().await.push("send".into());
+        Ok(Default::default())
+    }
+
+    async fn send_typed(
+        &self,
+        _message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        self.log.lock().await.push("send".into());
+        Ok(Default::default())
+    }
+
+    async fn status(
+        &self,
+    ) -> std::result::Result<
+        tinychannels::controllers::ChannelAccountSnapshot,
+        tinychannels::channel::ChannelSendError,
+    > {
+        Ok(Default::default())
+    }
+}
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelTyping for OrderedAdapter {
+    async fn start_typing(
+        &self,
+        conversation_id: &str,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        self.log
+            .lock()
+            .await
+            .push(format!("typing:{conversation_id}"));
+        Ok(())
+    }
+
+    async fn stop_typing(
+        &self,
+        _conversation_id: &str,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Ok(())
+    }
+}
+
+async fn open_ordered(typing: bool) -> (Replies, Arc<Running>, Arc<Mutex<Vec<String>>>, String) {
+    let (replies, _callback) = fixture(true).await;
+    let adapter = Arc::new(OrderedAdapter::default());
+    let log = adapter.log.clone();
+    let mut built = tinychannels::factory::BuiltChannel::from_adapter(adapter.clone());
+    if typing {
+        built = built.with_typing_port(adapter);
+    }
+    let provider =
+        Running::start_built_outbound(built, Arc::new(Hooks::default()), replies.host.clone());
+    replies
+        .running
+        .lock()
+        .await
+        .insert("telegram".into(), provider.clone());
+    let handle = match replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                ..Default::default()
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                id: "chat-1".into(),
+                ..Default::default()
+            },
+            turn_id: "turn-1".into(),
+            lifetime_ms: 60_000,
+        })
+        .await
+        .unwrap()
+    {
+        ProgressiveResult::Opened { handle } => handle,
+        _ => panic!("expected opened handle"),
+    };
+    (replies, provider, log, handle)
+}
+
+async fn feed_final(replies: &Replies, handle: &str) {
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.to_owned(),
+            turn_id: Some("turn-1".into()),
+            channel_ref: None,
+            conversation: None,
+            sequence: None,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "final answer".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn adapter_typing_precedes_the_final_reply() {
+    let (replies, provider, log, handle) = open_ordered(true).await;
+    feed_final(&replies, &handle).await;
+    let log = log.lock().await.clone();
+    assert_eq!(
+        log.first().map(String::as_str),
+        Some("typing:chat-1"),
+        "typing must be the first provider call: {log:?}"
+    );
+    let send = log
+        .iter()
+        .position(|entry| entry == "send")
+        .expect("reply sent");
+    assert!(send > 0, "the reply follows the typing indicator: {log:?}");
+    replies.shutdown().await.unwrap();
+    provider.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn adapter_without_a_typing_port_still_delivers_the_reply() {
+    let (replies, provider, log, handle) = open_ordered(false).await;
+    feed_final(&replies, &handle).await;
+    let log = log.lock().await.clone();
+    assert_eq!(log, vec!["send".to_string()]);
+    replies.shutdown().await.unwrap();
+    provider.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn spoken_context_without_a_voice_pipeline_leaves_the_final_message_unchanged() {
+    let scope = OpenScope {
+        channel: tinychannels_bus::ChannelRef::default(),
+        conversation: tinychannels_bus::ConversationRef {
+            id: "chat-1".into(),
+            ..Default::default()
+        },
+        turn_id: "turn-1".into(),
+        lifetime: Duration::from_secs(60),
+    };
+    let capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+    let context = SpokenContext {
+        spoken: None,
+        scope: &scope,
+        capabilities: &capabilities,
+    };
+    let event = ChannelOutputEvent::FinalMessage {
+        text: "hello".into(),
+        parts: vec![],
+        receipt: None,
+    };
+    assert_eq!(context.with_voice(event.clone()).await, event);
+}
+
+#[tokio::test]
+async fn spoken_context_adds_the_voice_part_beside_the_final_text() {
+    use crate::voice_reply::test_support::spoken_reply;
+    let scope = OpenScope {
+        channel: tinychannels_bus::ChannelRef::default(),
+        conversation: tinychannels_bus::ConversationRef {
+            id: "progressive-voice-chat".into(),
+            ..Default::default()
+        },
+        turn_id: "turn-1".into(),
+        lifetime: Duration::from_secs(60),
+    };
+    let capabilities = crate::voice_reply::test_support::voice_capabilities();
+    let spoken = spoken_reply(tinychannels_bus::HostVoiceReplyMode::Always);
+    let context = SpokenContext {
+        spoken: Some(&spoken),
+        scope: &scope,
+        capabilities: &capabilities,
+    };
+    let event = ChannelOutputEvent::FinalMessage {
+        text: "hello".into(),
+        parts: vec![],
+        receipt: None,
+    };
+    let ChannelOutputEvent::FinalMessage { text, parts, .. } = context.with_voice(event).await
+    else {
+        panic!("final message stays a final message");
+    };
+    assert_eq!(text, "hello");
+    assert_eq!(parts.len(), 2, "{parts:?}");
+    assert!(matches!(
+        parts[0],
+        tinychannels_bus::OutboundContentPart::Content { .. }
+    ));
+    assert!(matches!(
+        parts[1],
+        tinychannels_bus::OutboundContentPart::Voice { .. }
+    ));
+
+    // A final message that already carries voice is not synthesized again, and
+    // non-final events pass through untouched.
+    let with_voice = ChannelOutputEvent::FinalMessage {
+        text: "hello".into(),
+        parts: vec![parts[1].clone()],
+        receipt: None,
+    };
+    assert_eq!(context.with_voice(with_voice.clone()).await, with_voice);
+    let delta = ChannelOutputEvent::TextDelta {
+        text: "partial".into(),
+        iteration: None,
+    };
+    assert_eq!(context.with_voice(delta.clone()).await, delta);
 }

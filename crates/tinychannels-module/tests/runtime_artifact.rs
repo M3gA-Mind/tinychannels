@@ -57,9 +57,9 @@ impl Callback {
             self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         Ok(
-            tinychannels_bus::ChannelBackendResult::ProgressiveTransport(
+            tinychannels_bus::ChannelBackendResult::ProgressiveTransport(Box::new(
                 ProgressiveTransportResult::Success(serde_json::json!({"id": "artifact-message"})),
-            ),
+            )),
         )
     }
 
@@ -274,6 +274,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             model: "fixture".into(),
         },
         history_len: 0,
+        session_scope: None,
     };
     assert!(
         first_client
@@ -334,6 +335,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         },
         namespace: "tenant".into(),
         session_policy: Default::default(),
+        preparation_mode: Default::default(),
     };
     let ordinary = first_client
         .call::<PreparedChannelInbound>(methods::PREPARE_CHANNEL_INBOUND, inbound.clone())
@@ -351,7 +353,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
     assert_eq!(prepared.client_id, "inbound:discord:user");
     assert_eq!(
         prepared.session_key,
-        "tenant:discord:default:unknown:room:user"
+        "v22|namespace=p6:tenant|channel=p7:discord|account=a|kind=p7:unknown|scope=a|conversation=p4:room|parent=a|topic=a|thread=a|participant=p4:user"
     );
     assert_eq!(prepared.envelope.text, "fixture");
 
@@ -363,6 +365,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             api_token: "fixture-token".into(),
             from_phone: "+15550000001".into(),
             allowed_senders: vec![],
+            webhook_secret: None,
         }),
         yuanbao: Some(tinychannels_bus::config::YuanbaoConfig {
             app_key: "fixture-key".into(),

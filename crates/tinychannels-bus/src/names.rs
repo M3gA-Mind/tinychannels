@@ -111,6 +111,12 @@ pub mod methods {
     pub const READ_MEDIA_CHUNK: &str = "ReadMediaChunk";
     /// Abort a media read and release its temporary bytes.
     pub const ABORT_MEDIA_READ: &str = "AbortMediaRead";
+    /// Begin module-owned projection state for one host-authorized web turn.
+    pub const BEGIN_WEB_TURN: &str = "BeginWebTurn";
+    /// Project a canonical provider output event into ordered web events.
+    pub const PROJECT_WEB_OUTPUT: &str = "ProjectWebOutput";
+    /// Retire module-owned state for one web turn.
+    pub const END_WEB_TURN: &str = "EndWebTurn";
 }
 
 /// One constant per method name on [`HOST_BUS_NAME`].
@@ -128,13 +134,15 @@ pub mod host_methods {
     pub const PERSIST_ALLOWED_IDENTITY: &str = "PersistAllowedIdentity";
     /// `Transcribe` — use the host's configured speech recognition provider.
     pub const TRANSCRIBE: &str = "Transcribe";
-    /// `TranscribeVoice` — transcribe media scoped to one authenticated turn.
+    /// Request a scoped speech transcription from the host.
     pub const TRANSCRIBE_VOICE: &str = "TranscribeVoice";
-    /// `SynthesizeSpeech` — synthesize a scoped spoken reply through the host.
+    /// Request scoped speech synthesis from the host.
     pub const SYNTHESIZE_SPEECH: &str = "SynthesizeSpeech";
-    /// `StoreVoiceMedia` — durably store scoped inbound or outbound audio.
+    /// Persist scoped voice media through the host.
     pub const STORE_VOICE_MEDIA: &str = "StoreVoiceMedia";
-    /// `GetVoiceReplyPolicy` — resolve host-authoritative spoken reply policy.
+    /// Read scoped voice media through the host.
+    pub const READ_VOICE_MEDIA: &str = "ReadVoiceMedia";
+    /// Resolve host voice reply policy for a scoped turn.
     pub const GET_VOICE_REPLY_POLICY: &str = "GetVoiceReplyPolicy";
     /// `PublishEvent` — publish one provider event through the host event sink.
     pub const PUBLISH_EVENT: &str = "PublishEvent";
@@ -144,7 +152,7 @@ pub mod host_methods {
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 44] = [
+pub const METHODS: [&str; 47] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -189,22 +197,26 @@ pub const METHODS: [&str; 44] = [
     methods::BEGIN_MEDIA_READ,
     methods::READ_MEDIA_CHUNK,
     methods::ABORT_MEDIA_READ,
+    methods::BEGIN_WEB_TURN,
+    methods::PROJECT_WEB_OUTPUT,
+    methods::END_WEB_TURN,
 ];
 
 /// All host-callback method names in declaration order.
-pub const HOST_METHODS: [&str; 12] = [
+pub const HOST_METHODS: [&str; 13] = [
     host_methods::DELIVER_INBOUND,
     host_methods::REPORT_STATUS,
     host_methods::PERSIST_ALLOWED_IDENTITY,
     host_methods::TRANSCRIBE,
-    host_methods::TRANSCRIBE_VOICE,
-    host_methods::SYNTHESIZE_SPEECH,
-    host_methods::STORE_VOICE_MEDIA,
-    host_methods::GET_VOICE_REPLY_POLICY,
     host_methods::PUBLISH_EVENT,
     host_methods::DISPATCH_CONTROLLER_BACKEND,
     host_methods::PROCESS_INBOUND,
     host_methods::DELIVER_EVENT,
+    host_methods::TRANSCRIBE_VOICE,
+    host_methods::SYNTHESIZE_SPEECH,
+    host_methods::STORE_VOICE_MEDIA,
+    host_methods::READ_VOICE_MEDIA,
+    host_methods::GET_VOICE_REPLY_POLICY,
 ];
 
 #[cfg(test)]

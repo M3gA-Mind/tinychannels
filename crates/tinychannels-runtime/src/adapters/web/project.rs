@@ -61,7 +61,7 @@ impl WebTurnProjector {
         for event in &mut projected {
             let seq = self.next_seq;
             self.next_seq += 1;
-            let context = context_mut(event);
+            let context = event.context_mut();
             context.seq = Some(seq);
             context.ts = Some(ts_ms);
         }
@@ -69,58 +69,9 @@ impl WebTurnProjector {
     }
 }
 
-/// Mutable access to the shared addressing fields of any event.
+/// Mutable access to the shared addressing fields of any projected event.
 pub fn context_mut(event: &mut WebChannelEvent) -> &mut WebEventContext {
-    use WebChannelEvent as E;
-    match event {
-        E::ChatDone { context, .. }
-        | E::ChatInterim { context, .. }
-        | E::ChatSuggestions { context, .. }
-        | E::ChatError { context, .. }
-        | E::ChatCancelled { context, .. }
-        | E::TextDelta { context, .. }
-        | E::ThinkingDelta { context, .. }
-        | E::ToolArgsDelta { context, .. }
-        | E::InferenceStart { context }
-        | E::InferenceHeartbeat { context }
-        | E::IterationStart { context, .. }
-        | E::ToolCall { context, .. }
-        | E::ToolProgress { context, .. }
-        | E::ToolResult { context, .. }
-        | E::TurnCost { context, .. }
-        | E::SubagentSpawned { context, .. }
-        | E::SubagentCompleted { context, .. }
-        | E::SubagentFailed { context, .. }
-        | E::SubagentAwaitingUser { context, .. }
-        | E::SubagentIterationStart { context, .. }
-        | E::SubagentToolCall { context, .. }
-        | E::SubagentToolResult { context, .. }
-        | E::SubagentTextDelta { context, .. }
-        | E::SubagentThinkingDelta { context, .. }
-        | E::ApprovalRequest { context, .. }
-        | E::ApprovalDecided { context, .. }
-        | E::PlanReviewRequest { context, .. }
-        | E::PlanReviewDecided { context, .. }
-        | E::QueueItemQueued { context, .. }
-        | E::QueueItemDelivered { context, .. }
-        | E::QueueItemRemoved { context, .. }
-        | E::ThreadGoalUpdated { context, .. }
-        | E::ThreadGoalCleared { context, .. }
-        | E::ThreadTodosChanged { context, .. }
-        | E::RunModeChanged { context, .. }
-        | E::ArtifactReady { context, .. }
-        | E::ArtifactFailed { context, .. }
-        | E::ArtifactPending { context, .. }
-        | E::MemoryActivity { context, .. }
-        | E::ExternalTransferPending { context, .. }
-        | E::ProactiveMessage { context, .. }
-        | E::VoiceSpeak { context, .. }
-        | E::UserError { context, .. }
-        | E::ChatMessage { context, .. }
-        | E::ChatSegment { context, .. }
-        | E::ChannelOutbound { context, .. }
-        | E::ChannelEvent { context, .. } => context,
-    }
+    event.context_mut()
 }
 
 fn project_event(ctx: &WebEventContext, event: ChannelOutputEvent) -> Option<Vec<WebChannelEvent>> {
@@ -331,6 +282,10 @@ fn project_event(ctx: &WebEventContext, event: ChannelOutputEvent) -> Option<Vec
                 message,
                 round: iteration,
             }),
+            "context_compacting" => one(WebChannelEvent::ContextCompacting {
+                context,
+                round: iteration,
+            }),
             _ => None,
         },
         O::Native { .. } => None,
@@ -476,6 +431,9 @@ fn project_subagent(context: WebEventContext, out: SubagentOutput) -> Option<Web
 
 fn subagent_detail(out: &SubagentOutput) -> WebSubagentProgressDetail {
     let usage = out.usage.as_ref();
+    // A finished child reports its total iteration count and final text on the
+    // detail; every other state carries neither.
+    let completed = out.state == "completed";
     WebSubagentProgressDetail {
         mode: out.mode.clone(),
         dedicated_thread: out.dedicated_thread,
@@ -489,7 +447,7 @@ fn subagent_detail(out: &SubagentOutput) -> WebSubagentProgressDetail {
         output_tokens: usage.map(|u| u.output_tokens),
         cached_input_tokens: usage.map(|u| u.cached_input_tokens),
         cost_usd: usage.map(|u| u.charged_amount_usd),
-        iterations: None,
+        iterations: if completed { out.iteration } else { None },
         output_chars: out.output_chars.map(|n| n as u64),
         worker_thread_id: out.worker_thread_id.clone(),
         display_name: out.display_name.clone(),
@@ -497,7 +455,7 @@ fn subagent_detail(out: &SubagentOutput) -> WebSubagentProgressDetail {
         changed_files: (!out.changed_files.is_empty()).then(|| out.changed_files.clone()),
         dirty_status: out.dirty_status,
         parent_call_id: out.parent_call_id.clone(),
-        output: if out.state == "completed" {
+        output: if completed {
             out.output.clone().map(cap_web_output)
         } else {
             None

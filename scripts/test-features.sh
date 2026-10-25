@@ -4,6 +4,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 python3 scripts/test-e2e-version.py
 python3 scripts/check-webpki-roots.py --self-test
 python3 scripts/check-webpki-roots.py
+python3 scripts/check-bus-purity.py
+python3 scripts/__tests__/check_bus_purity_tests.py
 # Native Windows Python resolves bare bash to the WSL launcher on some runners.
 # Reuse this Git Bash executable, converting its MSYS path for native Python.
 feature_test_bash="$BASH"
