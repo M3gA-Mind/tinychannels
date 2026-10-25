@@ -1120,6 +1120,7 @@ async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
             channel: tinychannels::factory::BuiltChannel::from_adapter(Arc::new(
                 super::LegacyChannelAdapter(Arc::new(InteractionChannel::default())),
             )),
+            spoken: None,
             send,
             cancel,
             worker: Mutex::new(None),
