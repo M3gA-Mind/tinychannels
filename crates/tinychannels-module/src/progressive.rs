@@ -1062,7 +1062,7 @@ async fn feed_adapter_output(
         } else {
             reply.apply_output_event(&event, true).await
         }
-        .map_err(|error| Error::failed(error.to_string()))?;
+        .map_err(|error| { eprintln!("DEBUGVOICE adapter output failed: {error:?}"); Error::failed(error.to_string()) })?;
         dispatch.outcomes.extend(current.outcomes);
         dispatch.unsupported.extend(current.unsupported);
         dispatch.failure = dispatch.failure.or(current.failure);
