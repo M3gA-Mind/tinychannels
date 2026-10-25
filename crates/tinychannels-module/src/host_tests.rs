@@ -1603,3 +1603,44 @@ async fn host_channels_supply_the_reply_policy_for_spoken_replies() {
     assert_eq!(policy.mode, tinychannels_bus::HostVoiceReplyMode::Always);
     host.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn module_voice_store_reads_back_what_it_stored_for_the_same_scope() {
+    use base64::Engine;
+    use tinychannels::host::VoiceMediaStore;
+    let (host, _callback, _server) = connected_host().await;
+    let store = crate::provider::ModuleVoiceMediaStore(crate::provider::ModuleMediaRepository(
+        host.clone(),
+        "telegram".into(),
+        Some("telegram".into()),
+    ));
+    let mut scope = voice_scope();
+    scope.configured_instance = "telegram".into();
+    let audio = base64::engine::general_purpose::STANDARD.encode(b"OggS-voice");
+    let stored = store
+        .store_voice(tinychannels::host::VoiceMediaRequest {
+            audio_base64: audio.clone(),
+            mime_type: "audio/ogg".into(),
+            codec: Some("ogg_opus".into()),
+            duration_ms: Some(1200),
+            file_name: Some("voice.ogg".into()),
+            direction: tinychannels_bus::HostVoiceMediaDirection::Outbound,
+            scope: scope.clone(),
+        })
+        .await
+        .unwrap();
+    let opaque = stored.media.opaque_id.clone().expect("opaque reference");
+
+    let read = store
+        .read_voice(scope.clone(), opaque.clone())
+        .await
+        .unwrap();
+    assert_eq!(read.audio_base64, audio);
+    assert_eq!(read.mime_type, "audio/ogg");
+    assert_eq!(read.file_name.as_deref(), Some("voice.ogg"));
+
+    let mut other_turn = scope;
+    other_turn.turn_id = "another-turn".into();
+    assert!(store.read_voice(other_turn, opaque).await.is_err());
+    host.shutdown().await.unwrap();
+}
