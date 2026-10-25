@@ -270,6 +270,7 @@ pub(crate) struct Hooks {
     hooks: StdMutex<Vec<ShutdownHook>>,
     configured_instance: StdMutex<Option<String>>,
     media_account_scope: StdMutex<Option<String>>,
+    spoken: StdMutex<Option<Arc<SpokenReply>>>,
 }
 impl LifecycleRegistry for Hooks {
     fn register_shutdown(&self, _name: &str, hook: ShutdownHook) {
@@ -280,6 +281,10 @@ impl LifecycleRegistry for Hooks {
     }
 }
 impl Hooks {
+    /// The outbound voice pipeline bound to the host this provider started with.
+    pub(crate) fn spoken(&self) -> Option<Arc<SpokenReply>> {
+        self.spoken.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
     pub(crate) fn host(
         self: &Arc<Self>,
         callbacks: HostChannels,
@@ -294,7 +299,27 @@ impl Hooks {
             .media_account_scope
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = media_account_scope.clone();
+        let voice_store = ModuleVoiceMediaStore(ModuleMediaRepository(
+            callbacks.clone(),
+            configured_instance.clone(),
+            media_account_scope.clone(),
+        ));
+        let synthesizer = ModuleSynthesizer(callbacks.clone(), configured_instance.clone());
+        let codec = ModuleVoiceCodec(callbacks.clone());
+        *self.spoken.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(SpokenReply {
+            host: callbacks.clone(),
+            instance: configured_instance.clone(),
+            synthesizer: ModuleSynthesizer(callbacks.clone(), configured_instance.clone()),
+            codec: ModuleVoiceCodec(callbacks.clone()),
+            store: ModuleVoiceMediaStore(ModuleMediaRepository(
+                callbacks.clone(),
+                configured_instance.clone(),
+                media_account_scope.clone(),
+            )),
+        }));
         ChannelHostBuilder::new()
+            .synthesizer(Arc::new(synthesizer))
+            .voice_codec(Arc::new(codec))
             .lifecycle(self.clone())
             .transcriber(Arc::new(ModuleTranscriber(
                 callbacks.clone(),
@@ -305,11 +330,7 @@ impl Hooks {
                 configured_instance.clone(),
                 media_account_scope.clone(),
             )))
-            .voice_media_store(Arc::new(ModuleVoiceMediaStore(ModuleMediaRepository(
-                callbacks.clone(),
-                configured_instance.clone(),
-                media_account_scope,
-            ))))
+            .voice_media_store(Arc::new(voice_store))
             .events(Arc::new(ModuleEvents(
                 callbacks.clone(),
                 configured_instance,
@@ -338,6 +359,9 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
     ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         use base64::Engine;
         const MAX_VOICE_BYTES: usize = 8 * 1024 * 1024;
+        if request.direction == tinychannels_bus::HostVoiceMediaDirection::Inbound {
+            inbound_voice::record(&request.scope.conversation.id, &request.scope.turn_id);
+        }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(request.audio_base64.as_bytes())
             .map_err(|_| anyhow::anyhow!("voice media payload is invalid"))?;
@@ -862,6 +886,9 @@ impl ChannelAdapter for LegacyChannelAdapter {
 /// A resource is retained until its owning task acknowledges cleanup.
 pub(crate) struct Running {
     pub(crate) channel: BuiltChannel,
+    /// Outbound voice pipeline for module-delivered replies, when the host
+    /// callbacks are bound.
+    pub(crate) spoken: Option<Arc<SpokenReply>>,
     send: mpsc::Sender<SendCommand>,
     cancel: watch::Sender<bool>,
     worker: Mutex<Option<JoinHandle<()>>>,
