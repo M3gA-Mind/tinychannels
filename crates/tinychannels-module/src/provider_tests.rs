@@ -1623,3 +1623,84 @@ async fn legacy_listener_logs_host_ingress_failure_and_keeps_provider_result() {
 
     assert!(result.is_ok());
 }
+
+#[derive(Default)]
+struct CountingTyping {
+    starts: std::sync::atomic::AtomicUsize,
+    stops: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelTyping for CountingTyping {
+    async fn start_typing(&self, _: &str) -> std::result::Result<(), ChannelSendError> {
+        self.starts.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    async fn stop_typing(&self, _: &str) -> std::result::Result<(), ChannelSendError> {
+        self.stops.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn adapter_typing_port_serves_start_stop_and_refresh_interactions() {
+    use tinychannels_bus::{ChannelInteraction as Op, ChannelInteractionResult as Res};
+    let port = Arc::new(CountingTyping::default());
+    let dyn_port: Arc<dyn tinychannels::channel::ChannelTyping> = port.clone();
+    let mut typing = TypingRefreshes::new();
+    let started = dispatch_adapter_typing(
+        &dyn_port,
+        "telegram",
+        &Op::StartTyping {
+            recipient: "chat".into(),
+        },
+        &mut typing,
+    )
+    .await
+    .expect("typing interaction is handled")
+    .unwrap();
+    assert!(matches!(started, Res::Completed));
+    assert_eq!(port.starts.load(Ordering::SeqCst), 1);
+
+    let handle = match dispatch_adapter_typing(
+        &dyn_port,
+        "telegram",
+        &Op::StartTypingRefresh {
+            recipient: "chat".into(),
+            interval_secs: 4,
+        },
+        &mut typing,
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    {
+        Res::TypingRefresh { handle } => handle,
+        other => panic!("expected a refresh handle, got {other:?}"),
+    };
+    tokio::time::sleep(Duration::from_secs(9)).await;
+    assert!(port.starts.load(Ordering::SeqCst) >= 3, "refresh re-issues typing");
+    dispatch_adapter_typing(&dyn_port, "telegram", &Op::StopTypingRefresh { handle }, &mut typing)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(typing.is_empty());
+    let stopped = dispatch_adapter_typing(
+        &dyn_port,
+        "telegram",
+        &Op::StopTyping {
+            recipient: "chat".into(),
+        },
+        &mut typing,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(matches!(stopped, Res::Completed));
+    assert_eq!(port.stops.load(Ordering::SeqCst), 1);
+    assert!(
+        dispatch_adapter_typing(&dyn_port, "telegram", &Op::Describe, &mut typing)
+            .await
+            .is_none()
+    );
+}
