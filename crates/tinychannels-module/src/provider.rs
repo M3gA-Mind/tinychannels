@@ -309,22 +309,22 @@ impl Hooks {
             configured_instance.clone(),
             media_account_scope.clone(),
         ));
-        let synthesizer = ModuleSynthesizer(callbacks.clone(), configured_instance.clone());
-        let codec = ModuleVoiceCodec(callbacks.clone());
+        let synthesizer = Arc::new(ModuleSynthesizer(
+            callbacks.clone(),
+            configured_instance.clone(),
+        ));
+        let codec = Arc::new(ModuleVoiceCodec(callbacks.clone()));
+        let voice_store = Arc::new(voice_store);
         *self.spoken.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(SpokenReply {
-            host: callbacks.clone(),
             instance: configured_instance.clone(),
-            synthesizer: ModuleSynthesizer(callbacks.clone(), configured_instance.clone()),
-            codec: ModuleVoiceCodec(callbacks.clone()),
-            store: ModuleVoiceMediaStore(ModuleMediaRepository(
-                callbacks.clone(),
-                configured_instance.clone(),
-                media_account_scope.clone(),
-            )),
+            policy: Arc::new(callbacks.clone()),
+            synthesizer: synthesizer.clone(),
+            codec: codec.clone(),
+            store: voice_store.clone(),
         }));
         ChannelHostBuilder::new()
-            .synthesizer(Arc::new(synthesizer))
-            .voice_codec(Arc::new(codec))
+            .synthesizer(synthesizer)
+            .voice_codec(codec)
             .lifecycle(self.clone())
             .transcriber(Arc::new(ModuleTranscriber(
                 callbacks.clone(),
@@ -335,7 +335,7 @@ impl Hooks {
                 configured_instance.clone(),
                 media_account_scope.clone(),
             )))
-            .voice_media_store(Arc::new(voice_store))
+            .voice_media_store(voice_store)
             .events(Arc::new(ModuleEvents(
                 callbacks.clone(),
                 configured_instance,

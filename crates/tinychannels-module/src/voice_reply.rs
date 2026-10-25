@@ -8,9 +8,9 @@
 //! Every failure falls back to the text reply that was already going out.
 
 use crate::host::HostChannels;
-use crate::provider::ModuleVoiceMediaStore;
+use std::sync::Arc;
 use tinychannels::host::{
-    VoiceReplyConstraints, VoiceReplyMode, prepare_voice_reply, should_synthesize_reply,
+    SpeechSynthesizer, VoiceCodec, VoiceMediaStore, VoiceReplyConstraints, VoiceReplyMode, prepare_voice_reply, should_synthesize_reply,
 };
 use tinychannels_bus::{
     ChannelCapabilities, ChannelRef, ConversationRef, HostVoiceReplyMode,
@@ -164,17 +164,38 @@ impl tinychannels::host::VoiceCodec for ModuleVoiceCodec {
     }
 }
 
+/// The host's configured reply mode for one scoped turn.
+#[async_trait::async_trait]
+pub(crate) trait ReplyPolicy: Send + Sync {
+    async fn reply_policy(
+        &self,
+        request: HostVoiceReplyPolicyRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostVoiceReplyPolicy>;
+}
+
+#[async_trait::async_trait]
+impl ReplyPolicy for HostChannels {
+    async fn reply_policy(
+        &self,
+        request: HostVoiceReplyPolicyRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostVoiceReplyPolicy> {
+        self.voice_reply_policy(request)
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+    }
+}
+
 /// The outbound voice pipeline bound to one configured provider instance.
 pub(crate) struct SpokenReply {
-    pub(crate) host: HostChannels,
     pub(crate) instance: String,
-    pub(crate) synthesizer: ModuleSynthesizer,
-    pub(crate) codec: ModuleVoiceCodec,
-    pub(crate) store: ModuleVoiceMediaStore,
+    pub(crate) policy: Arc<dyn ReplyPolicy>,
+    pub(crate) synthesizer: Arc<dyn SpeechSynthesizer>,
+    pub(crate) codec: Arc<dyn VoiceCodec>,
+    pub(crate) store: Arc<dyn VoiceMediaStore>,
 }
 
 impl SpokenReply {
-    /// The voice part to deliver beside `text`, or `None` to send text alone:
+    /// The voice part to deliver beside `text`, or `None` to send text only:
     /// the channel cannot synthesize, the host policy says not to speak, or any
     /// pipeline stage failed.
     pub(crate) async fn voice_part(
@@ -201,8 +222,8 @@ impl SpokenReply {
         };
         let inbound_has_voice = inbound_voice::latest_has_voice(&conversation.id);
         let policy = match self
-            .host
-            .voice_reply_policy(HostVoiceReplyPolicyRequest {
+            .policy
+            .reply_policy(HostVoiceReplyPolicyRequest {
                 scope: scope.clone(),
                 inbound_has_voice,
                 explicitly_requested: false,
@@ -228,9 +249,9 @@ impl SpokenReply {
             scope,
             text.to_owned(),
             None,
-            &self.synthesizer,
-            &self.codec,
-            &self.store,
+            self.synthesizer.as_ref(),
+            self.codec.as_ref(),
+            self.store.as_ref(),
             VoiceReplyConstraints {
                 accepted_codecs: &capabilities.voice_out.accepted_codecs,
                 max_size_bytes: capabilities.voice_out.max_size_bytes,
