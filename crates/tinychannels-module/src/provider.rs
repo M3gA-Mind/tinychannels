@@ -1,5 +1,6 @@
 //! Owned provider listener, lifecycle hooks and ordered inbound forwarding.
 use crate::host::HostChannels;
+use crate::voice_reply::{ModuleSynthesizer, ModuleVoiceCodec, SpokenReply, inbound_voice};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -50,57 +51,132 @@ async fn dispatch_interaction(
             recipient,
             interval_secs,
         } => {
-            if interval_secs == 0 || interval_secs > MAX_TYPING_REFRESH_INTERVAL_SECS {
-                return Err(Error::failed(
-                    "typing refresh interval is outside its limit",
-                ));
-            }
-            if typing.len() >= MAX_TYPING_REFRESH_RECIPIENTS {
-                return Err(Error::failed("typing refresh capacity is full"));
-            }
-            let (cancel, mut canceled) = watch::channel(false);
             let refresh_channel = Arc::clone(&channel);
-            let refresh_recipient = recipient.clone();
-            let interval = Duration::from_secs(interval_secs);
-            let task = tokio::spawn(async move {
-                loop {
-                    tokio::select! {
-                        biased;
-                        _ = async { let _ = canceled.wait_for(|value| *value).await; } => break,
-                        _ = tokio::time::sleep(interval) => {
-                            let refresh = refresh_channel.start_typing(&refresh_recipient);
-                            tokio::select! {
-                                biased;
-                                _ = async { let _ = canceled.wait_for(|value| *value).await; } => break,
-                                result = refresh => if let Err(error) = result {
-                                tracing::debug!(channel = refresh_channel.name(), "typing refresh failed: {error}");
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-            let handle = loop {
-                let candidate = uuid::Uuid::new_v4().simple().to_string();
-                if !typing.contains_key(&candidate) {
-                    break candidate;
-                }
-            };
-            typing.insert(
-                handle.clone(),
-                TypingRefreshTask {
-                    recipient,
-                    cancel,
-                    task,
-                },
-            );
-            Ok(tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle })
+            let name = channel.name().to_string();
+            start_typing_refresh(typing, recipient, interval_secs, name, move |recipient| {
+                let channel = Arc::clone(&refresh_channel);
+                Box::pin(async move {
+                    channel
+                        .start_typing(&recipient)
+                        .await
+                        .map_err(|error| error.to_string())
+                })
+            })
         }
         Op::StopTypingRefresh { handle } => {
             stop_typing_refresh(&handle, typing).await;
             Ok(tinychannels_bus::ChannelInteractionResult::Completed)
         }
         interaction => crate::interaction::dispatch(channel.as_ref(), interaction).await,
+    }
+}
+
+type TypingStartFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = std::result::Result<(), String>> + Send>>;
+
+/// Spawn the module-owned refresh task for one recipient. `start` re-issues the
+/// provider typing action; the task is cancelled and joined by
+/// `StopTypingRefresh`.
+fn start_typing_refresh(
+    typing: &mut TypingRefreshes,
+    recipient: String,
+    interval_secs: u64,
+    name: String,
+    start: impl Fn(String) -> TypingStartFuture + Send + 'static,
+) -> Result<tinychannels_bus::ChannelInteractionResult> {
+    if interval_secs == 0 || interval_secs > MAX_TYPING_REFRESH_INTERVAL_SECS {
+        return Err(Error::failed(
+            "typing refresh interval is outside its limit",
+        ));
+    }
+    if typing.len() >= MAX_TYPING_REFRESH_RECIPIENTS {
+        return Err(Error::failed("typing refresh capacity is full"));
+    }
+    let (cancel, mut canceled) = watch::channel(false);
+    let refresh_recipient = recipient.clone();
+    let interval = Duration::from_secs(interval_secs);
+    let task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                biased;
+                _ = async { let _ = canceled.wait_for(|value| *value).await; } => break,
+                _ = tokio::time::sleep(interval) => {
+                    let refresh = start(refresh_recipient.clone());
+                    tokio::select! {
+                        biased;
+                        _ = async { let _ = canceled.wait_for(|value| *value).await; } => break,
+                        result = refresh => if let Err(error) = result {
+                            tracing::debug!(channel = %name, "typing refresh failed: {error}");
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let handle = loop {
+        let candidate = uuid::Uuid::new_v4().simple().to_string();
+        if !typing.contains_key(&candidate) {
+            break candidate;
+        }
+    };
+    typing.insert(
+        handle.clone(),
+        TypingRefreshTask {
+            recipient,
+            cancel,
+            task,
+        },
+    );
+    Ok(tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle })
+}
+
+/// Typing interactions for a factory-built adapter, through its typing port.
+/// `None` when the interaction is not a typing operation.
+async fn dispatch_adapter_typing(
+    port: &Arc<dyn tinychannels::channel::ChannelTyping>,
+    name: &str,
+    interaction: &tinychannels_bus::ChannelInteraction,
+    typing: &mut TypingRefreshes,
+) -> Option<Result<tinychannels_bus::ChannelInteractionResult>> {
+    use tinychannels_bus::ChannelInteraction as Op;
+    match interaction {
+        Op::StartTyping { recipient } => Some(
+            port.start_typing(recipient)
+                .await
+                .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
+                .map_err(|_| Error::failed("provider typing start failed")),
+        ),
+        Op::StopTyping { recipient } => Some(
+            port.stop_typing(recipient)
+                .await
+                .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
+                .map_err(|_| Error::failed("provider typing stop failed")),
+        ),
+        Op::StartTypingRefresh {
+            recipient,
+            interval_secs,
+        } => {
+            let port = Arc::clone(port);
+            Some(start_typing_refresh(
+                typing,
+                recipient.clone(),
+                *interval_secs,
+                name.to_owned(),
+                move |recipient| {
+                    let port = Arc::clone(&port);
+                    Box::pin(async move {
+                        port.start_typing(&recipient)
+                            .await
+                            .map_err(|error| error.message)
+                    })
+                },
+            ))
+        }
+        Op::StopTypingRefresh { handle } => {
+            stop_typing_refresh(handle, typing).await;
+            Some(Ok(tinychannels_bus::ChannelInteractionResult::Completed))
+        }
+        _ => None,
     }
 }
 
@@ -196,6 +272,7 @@ pub(crate) struct Hooks {
     hooks: StdMutex<Vec<ShutdownHook>>,
     configured_instance: StdMutex<Option<String>>,
     media_account_scope: StdMutex<Option<String>>,
+    spoken: StdMutex<Option<Arc<SpokenReply>>>,
 }
 impl LifecycleRegistry for Hooks {
     fn register_shutdown(&self, _name: &str, hook: ShutdownHook) {
@@ -206,6 +283,13 @@ impl LifecycleRegistry for Hooks {
     }
 }
 impl Hooks {
+    /// The outbound voice pipeline bound to the host this provider started with.
+    pub(crate) fn spoken(&self) -> Option<Arc<SpokenReply>> {
+        self.spoken
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
     pub(crate) fn host(
         self: &Arc<Self>,
         callbacks: HostChannels,
@@ -220,7 +304,27 @@ impl Hooks {
             .media_account_scope
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = media_account_scope.clone();
+        let voice_store = ModuleVoiceMediaStore(ModuleMediaRepository(
+            callbacks.clone(),
+            configured_instance.clone(),
+            media_account_scope.clone(),
+        ));
+        let synthesizer = Arc::new(ModuleSynthesizer(
+            callbacks.clone(),
+            configured_instance.clone(),
+        ));
+        let codec = Arc::new(ModuleVoiceCodec(callbacks.clone()));
+        let voice_store = Arc::new(voice_store);
+        *self.spoken.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(SpokenReply {
+            instance: configured_instance.clone(),
+            policy: Arc::new(callbacks.clone()),
+            synthesizer: synthesizer.clone(),
+            codec: codec.clone(),
+            store: voice_store.clone(),
+        }));
         ChannelHostBuilder::new()
+            .synthesizer(synthesizer)
+            .voice_codec(codec)
             .lifecycle(self.clone())
             .transcriber(Arc::new(ModuleTranscriber(
                 callbacks.clone(),
@@ -231,11 +335,7 @@ impl Hooks {
                 configured_instance.clone(),
                 media_account_scope.clone(),
             )))
-            .voice_media_store(Arc::new(ModuleVoiceMediaStore(ModuleMediaRepository(
-                callbacks.clone(),
-                configured_instance.clone(),
-                media_account_scope,
-            ))))
+            .voice_media_store(voice_store)
             .events(Arc::new(ModuleEvents(
                 callbacks.clone(),
                 configured_instance,
@@ -254,6 +354,8 @@ impl Hooks {
 
 /// Persists inbound/outbound voice through the module's own scoped media
 /// repository; the host holds no voice store.
+const MAX_VOICE_BYTES: usize = 8 * 1024 * 1024;
+
 pub(crate) struct ModuleVoiceMediaStore(pub(crate) ModuleMediaRepository);
 
 #[async_trait::async_trait]
@@ -263,7 +365,6 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         request: tinychannels::host::VoiceMediaRequest,
     ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         use base64::Engine;
-        const MAX_VOICE_BYTES: usize = 8 * 1024 * 1024;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(request.audio_base64.as_bytes())
             .map_err(|_| anyhow::anyhow!("voice media payload is invalid"))?;
@@ -291,6 +392,26 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         Ok(tinychannels_bus::HostStoreVoiceMediaResult {
             media,
             accessible_url: None,
+        })
+    }
+
+    async fn read_voice(
+        &self,
+        scope: tinychannels_bus::HostVoiceScope,
+        opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        use base64::Engine;
+        let stored = <ModuleMediaRepository as tinychannels::host::MediaRepository>::read_media(
+            &self.0,
+            scope,
+            opaque_id,
+            MAX_VOICE_BYTES as u64,
+        )
+        .await?;
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(&stored.bytes),
+            mime_type: stored.content_type,
+            file_name: stored.file_name,
         })
     }
 }
@@ -578,6 +699,13 @@ impl tinychannels::channel::ChannelInboundSink for ModuleEvents {
     ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         envelope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
         envelope.channel.account_id = Some(self.1.clone());
+        inbound_voice::record(
+            &envelope.conversation.id,
+            envelope
+                .parts
+                .iter()
+                .any(|part| matches!(part, tinychannels_bus::ContentPart::VoiceNote { .. })),
+        );
         self.0
             .try_deliver_inbound(&self.1, envelope)
             .await
@@ -788,6 +916,9 @@ impl ChannelAdapter for LegacyChannelAdapter {
 /// A resource is retained until its owning task acknowledges cleanup.
 pub(crate) struct Running {
     pub(crate) channel: BuiltChannel,
+    /// Outbound voice pipeline for module-delivered replies, when the host
+    /// callbacks are bound.
+    pub(crate) spoken: Option<Arc<SpokenReply>>,
     send: mpsc::Sender<SendCommand>,
     cancel: watch::Sender<bool>,
     worker: Mutex<Option<JoinHandle<()>>>,
@@ -899,6 +1030,8 @@ impl Running {
         let adapter = channel.adapter().clone();
         let send_drafts = channel.drafts().cloned();
         let send_reactions = channel.reactions().cloned();
+        let send_typing = channel.typing().cloned();
+        let spoken = hooks.spoken();
         let listen_adapter = adapter.clone();
         let send_adapter = adapter.clone();
         let stop_adapter = adapter.clone();
@@ -1103,26 +1236,38 @@ impl Running {
                                 }
                             }
                             interaction => {
-                                match crate::interaction::dispatch_native_webhook(
-                                    send_adapter.as_ref(),
-                                    interaction.clone(),
-                                )
-                                .await
+                                if let Some(port) = send_typing.as_ref()
+                                    && let Some(result) = dispatch_adapter_typing(
+                                        port,
+                                        &configured_instance,
+                                        &interaction,
+                                        &mut typing,
+                                    )
+                                    .await
                                 {
-                                    Some(result) => result,
-                                    None => match send_legacy.as_ref() {
-                                        Some(legacy) => {
-                                            dispatch_interaction(
-                                                legacy.clone(),
-                                                interaction,
-                                                &mut typing,
-                                            )
-                                            .await
-                                        }
-                                        None => Err(Error::failed(
-                                            "provider interaction is not supported by this adapter",
-                                        )),
-                                    },
+                                    result
+                                } else {
+                                    match crate::interaction::dispatch_native_webhook(
+                                        send_adapter.as_ref(),
+                                        interaction.clone(),
+                                    )
+                                    .await
+                                    {
+                                        Some(result) => result,
+                                        None => match send_legacy.as_ref() {
+                                            Some(legacy) => {
+                                                dispatch_interaction(
+                                                    legacy.clone(),
+                                                    interaction,
+                                                    &mut typing,
+                                                )
+                                                .await
+                                            }
+                                            None => Err(Error::failed(
+                                                "provider interaction is not supported by this adapter",
+                                            )),
+                                        },
+                                    }
                                 }
                             }
                         },
@@ -1159,6 +1304,7 @@ impl Running {
         });
         Arc::new(Self {
             channel,
+            spoken,
             send,
             cancel,
             worker: Mutex::new(Some(worker)),

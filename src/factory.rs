@@ -803,6 +803,7 @@ pub enum BuiltChannel {
         edit: Option<Arc<dyn crate::channel::ChannelEdit>>,
         drafts: Option<Arc<dyn crate::channel::ChannelStreamingDraft>>,
         reactions: Option<Arc<dyn crate::channel::LegacyChannelReaction>>,
+        typing: Option<Arc<dyn crate::channel::ChannelTyping>>,
     },
 }
 
@@ -814,6 +815,7 @@ impl BuiltChannel {
             edit: None,
             drafts: None,
             reactions: None,
+            typing: None,
         }
     }
 
@@ -829,7 +831,17 @@ impl BuiltChannel {
             edit,
             drafts,
             reactions: None,
+            typing: None,
         }
+    }
+
+    /// Retain the provider's typing-indicator extension before its concrete
+    /// type is erased, so the module can start and stop typing for it.
+    pub fn with_typing_port(mut self, typing: Arc<dyn crate::channel::ChannelTyping>) -> Self {
+        match &mut self {
+            Self::Adapter { typing: port, .. } => *port = Some(typing),
+        }
+        self
     }
 
     /// Retain the provider's scoped reaction extension before its concrete
@@ -888,6 +900,13 @@ impl BuiltChannel {
         }
     }
 
+    /// Provider typing port, when the configured adapter implements it.
+    pub fn typing(&self) -> Option<&Arc<dyn crate::channel::ChannelTyping>> {
+        match self {
+            Self::Adapter { typing, .. } => typing.as_ref(),
+        }
+    }
+
     /// Provider reaction port, when the configured adapter implements it.
     pub fn reactions(&self) -> Option<&Arc<dyn crate::channel::LegacyChannelReaction>> {
         match self {
@@ -913,52 +932,70 @@ pub fn build_channels(
     if config.telegram.is_some()
         && let Some(telegram) = build_telegram_channel(config, host, http)
     {
-        channels.push(BuiltChannel::with_output_ports(
-            telegram.clone(),
-            Some(telegram.clone()),
-            Some(telegram),
-        ));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                telegram.clone(),
+                Some(telegram.clone()),
+                Some(telegram.clone()),
+            )
+            .with_typing_port(telegram),
+        );
     }
 
     if let Some(discord) = build_discord_channel(config, host, http) {
-        channels.push(BuiltChannel::with_output_ports(
-            discord.clone(),
-            Some(discord.clone()),
-            Some(discord),
-        ));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                discord.clone(),
+                Some(discord.clone()),
+                Some(discord.clone()),
+            )
+            .with_typing_port(discord),
+        );
     }
 
     if let Some(slack) = build_slack_channel(config, host, http) {
-        channels.push(BuiltChannel::with_output_ports(
-            slack.clone(),
-            Some(slack.clone()),
-            Some(slack),
-        ));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                slack.clone(),
+                Some(slack.clone()),
+                Some(slack.clone()),
+            )
+            .with_typing_port(slack),
+        );
     }
 
     if let Some(mattermost) = build_long_tail_channel_with_host(config, host, http, "mattermost") {
-        channels.push(BuiltChannel::with_output_ports(
-            mattermost.clone(),
-            Some(mattermost.clone()),
-            Some(mattermost),
-        ));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                mattermost.clone(),
+                Some(mattermost.clone()),
+                Some(mattermost.clone()),
+            )
+            .with_typing_port(mattermost),
+        );
     }
 
     #[cfg(feature = "imessage")]
     if let Some(imessage) = build_imessage_channel(config, host) {
-        channels.push(BuiltChannel::with_output_ports(
-            imessage.clone(),
-            Some(imessage.clone()),
-            Some(imessage),
-        ));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                imessage.clone(),
+                Some(imessage.clone()),
+                Some(imessage.clone()),
+            )
+            .with_typing_port(imessage),
+        );
     }
 
     if let Some(signal) = build_signal_channel(config, host, http) {
-        channels.push(BuiltChannel::with_output_ports(
-            signal.clone(),
-            Some(signal.clone()),
-            Some(signal),
-        ));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                signal.clone(),
+                Some(signal.clone()),
+                Some(signal.clone()),
+            )
+            .with_typing_port(signal),
+        );
     }
 
     if let Some(wa) = config.whatsapp.as_ref() {
@@ -973,7 +1010,8 @@ pub fn build_channels(
                             Some(channel.clone()),
                             Some(channel.clone()),
                         )
-                        .with_reaction_port(channel),
+                        .with_reaction_port(channel.clone())
+                        .with_typing_port(channel),
                     );
                 }
             }
@@ -992,60 +1030,65 @@ pub fn build_channels(
     }
 
     if let Some(linq) = build_linq_channel(config, host, http) {
-        channels.push(BuiltChannel::with_output_ports(
-            linq.clone(),
-            Some(linq.clone()),
-            Some(linq),
-        ));
+        channels.push(
+            BuiltChannel::with_output_ports(linq.clone(), Some(linq.clone()), Some(linq.clone()))
+                .with_typing_port(linq),
+        );
     }
 
     #[cfg(feature = "email")]
     if let Some(email) = build_email_channel(config, host) {
-        channels.push(BuiltChannel::with_output_ports(
-            email.clone(),
-            Some(email.clone()),
-            Some(email),
-        ));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                email.clone(),
+                Some(email.clone()),
+                Some(email.clone()),
+            )
+            .with_typing_port(email),
+        );
     }
 
     if let Some(irc) = build_long_tail_channel_with_host(config, host, http, "irc") {
-        channels.push(BuiltChannel::with_output_ports(
-            irc.clone(),
-            Some(irc.clone()),
-            Some(irc),
-        ));
+        channels.push(
+            BuiltChannel::with_output_ports(irc.clone(), Some(irc.clone()), Some(irc.clone()))
+                .with_typing_port(irc),
+        );
     }
 
     if let Some(lark) = build_long_tail_channel_with_host(config, host, http, "lark") {
-        channels.push(BuiltChannel::with_output_ports(
-            lark.clone(),
-            Some(lark.clone()),
-            Some(lark),
-        ));
+        channels.push(
+            BuiltChannel::with_output_ports(lark.clone(), Some(lark.clone()), Some(lark.clone()))
+                .with_typing_port(lark),
+        );
     }
 
     if let Some(dingtalk) = build_long_tail_channel_with_host(config, host, http, "dingtalk") {
-        channels.push(BuiltChannel::with_output_ports(
-            dingtalk.clone(),
-            Some(dingtalk.clone()),
-            Some(dingtalk),
-        ));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                dingtalk.clone(),
+                Some(dingtalk.clone()),
+                Some(dingtalk.clone()),
+            )
+            .with_typing_port(dingtalk),
+        );
     }
 
     if let Some(qq) = build_long_tail_channel_with_host(config, host, http, "qq") {
-        channels.push(BuiltChannel::with_output_ports(
-            qq.clone(),
-            Some(qq.clone()),
-            Some(qq),
-        ));
+        channels.push(
+            BuiltChannel::with_output_ports(qq.clone(), Some(qq.clone()), Some(qq.clone()))
+                .with_typing_port(qq),
+        );
     }
 
     if let Some(yuanbao) = build_long_tail_channel_with_host(config, host, http, "yuanbao") {
-        channels.push(BuiltChannel::with_output_ports(
-            yuanbao.clone(),
-            Some(yuanbao.clone()),
-            Some(yuanbao),
-        ));
+        channels.push(
+            BuiltChannel::with_output_ports(
+                yuanbao.clone(),
+                Some(yuanbao.clone()),
+                Some(yuanbao.clone()),
+            )
+            .with_typing_port(yuanbao),
+        );
     }
 
     channels
@@ -1076,7 +1119,12 @@ fn build_whatsapp_web(
             return None;
         }
         build_whatsapp_web_channel(&config, host).map(|channel| {
-            BuiltChannel::with_output_ports(channel.clone(), Some(channel.clone()), Some(channel))
+            BuiltChannel::with_output_ports(
+                channel.clone(),
+                Some(channel.clone()),
+                Some(channel.clone()),
+            )
+            .with_typing_port(channel)
         })
     }
     #[cfg(not(feature = "whatsapp-web"))]

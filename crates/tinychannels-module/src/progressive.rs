@@ -1,6 +1,7 @@
 //! Bounded module-owned progressive reply workers and retained terminal cleanup.
 use crate::host::HostChannels;
 use crate::provider::Running;
+use crate::voice_reply::SpokenReply;
 use async_trait::async_trait;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -374,7 +375,7 @@ struct Entry {
 enum OutputTarget {
     Legacy,
     Hosted(OpenScope),
-    Adapter(OpenScope, BuiltChannel),
+    Adapter(OpenScope, BuiltChannel, Option<Arc<SpokenReply>>),
 }
 
 /// Full turn scope fixed by `OpenOutput`/`OpenHostedOutput`.
@@ -434,12 +435,13 @@ impl Replies {
                         .as_deref()
                         .and_then(|id| running.get(id))
                         .or_else(|| running.get(provider_id))
-                        .map(|provider| provider.channel.clone())
+                        .map(|provider| (provider.channel.clone(), provider.spoken.clone()))
                 }
                 .ok_or_else(|| Error::failed("configured channel adapter is unavailable"))?;
+                let (built, spoken) = built;
                 self.open_target(
                     scope.channel.id.clone(),
-                    OutputTarget::Adapter(scope, built),
+                    OutputTarget::Adapter(scope, built, spoken),
                 )
                 .await
             }
@@ -651,7 +653,7 @@ impl Replies {
         }
         let provider_id = tinychannels_bus::provider_id(&channel);
         let capabilities = match &target {
-            OutputTarget::Adapter(_, built) => built.capabilities(),
+            OutputTarget::Adapter(_, built, _) => built.capabilities(),
             _ => self
                 .running
                 .lock()
@@ -709,17 +711,17 @@ impl Replies {
         let output_replay = Arc::new(Mutex::new(None));
         let module_scope = match &target {
             OutputTarget::Legacy => None,
-            OutputTarget::Hosted(scope) | OutputTarget::Adapter(scope, _) => Some(scope.clone()),
+            OutputTarget::Hosted(scope) | OutputTarget::Adapter(scope, _, _) => Some(scope.clone()),
         };
         let lifetime = match &target {
             OutputTarget::Legacy => TURN_LIFETIME,
-            OutputTarget::Hosted(scope) | OutputTarget::Adapter(scope, _) => scope.lifetime,
+            OutputTarget::Hosted(scope) | OutputTarget::Adapter(scope, _, _) => scope.lifetime,
         };
         let worker_target = match &target {
             OutputTarget::Legacy => WorkerTarget::Legacy,
             OutputTarget::Hosted(scope) => WorkerTarget::Hosted(scope.clone()),
-            OutputTarget::Adapter(scope, built) => {
-                WorkerTarget::Adapter(scope.clone(), built.clone())
+            OutputTarget::Adapter(scope, built, spoken) => {
+                WorkerTarget::Adapter(scope.clone(), built.clone(), spoken.clone())
             }
         };
         let worker = tokio::spawn(run(
@@ -832,7 +834,7 @@ async fn close_entry(entry: Arc<Entry>, text: String, retain_existing: bool) -> 
 enum WorkerTarget {
     Legacy,
     Hosted(OpenScope),
-    Adapter(OpenScope, BuiltChannel),
+    Adapter(OpenScope, BuiltChannel, Option<Arc<SpokenReply>>),
 }
 
 async fn run(
@@ -857,7 +859,7 @@ async fn run(
             Some(output_context(scope)),
             true,
         ),
-        WorkerTarget::Adapter(scope, built) => (
+        WorkerTarget::Adapter(scope, built, _) => (
             Arc::new(AdapterSender {
                 built: built.clone(),
                 scope: scope.clone(),
@@ -866,6 +868,7 @@ async fn run(
             false,
         ),
     };
+    let reply_capabilities = capabilities.clone();
     let mut reply = match context {
         Some(context) if hosted => {
             ProgressiveReply::new_hosted_scoped(transport, channel.clone(), capabilities, context)
@@ -876,6 +879,7 @@ async fn run(
         None => ProgressiveReply::new(transport, channel.clone(), capabilities),
     };
     let next_sequence = AtomicU64::new(0);
+    let adapter_capabilities = reply_capabilities;
     let mut edits = tokio::time::interval(EDIT_FLUSH_INTERVAL);
     let mut typing = tokio::time::interval(TYPING_REFRESH_INTERVAL);
     let mut fillers = tokio::time::interval(FILLER_INTERVAL);
@@ -906,7 +910,14 @@ async fn run(
                     });
                     let result = match &target {
                         WorkerTarget::Hosted(scope) => feed_output(&host, &channel, Some(scope), &next_sequence, events).await,
-                        WorkerTarget::Adapter(_, _) => feed_adapter_output(&mut reply, events).await,
+                        WorkerTarget::Adapter(scope, _, spoken) => {
+                            let voice = SpokenContext {
+                                spoken: spoken.as_deref(),
+                                scope,
+                                capabilities: &adapter_capabilities,
+                            };
+                            feed_adapter_output(&mut reply, &voice, events).await
+                        }
                         WorkerTarget::Legacy => Err(Error::failed("canonical output requires an opened output scope")),
                     };
                     let terminal = is_final && result.is_ok();
@@ -978,12 +989,71 @@ fn output_context(scope: &OpenScope) -> ProgressiveOutputContext {
     }
 }
 
+/// What the adapter worker needs to add a spoken reply to a final message.
+struct SpokenContext<'a> {
+    spoken: Option<&'a SpokenReply>,
+    scope: &'a OpenScope,
+    capabilities: &'a tinychannels_bus::ChannelCapabilities,
+}
+
+impl SpokenContext<'_> {
+    /// Add the synthesized voice part beside a final text reply. Text-only
+    /// delivery is the fallback for every unavailable stage.
+    async fn with_voice(
+        &self,
+        event: tinychannels_bus::module_progressive::ChannelOutputEvent,
+    ) -> tinychannels_bus::module_progressive::ChannelOutputEvent {
+        use tinychannels_bus::module_progressive::ChannelOutputEvent as Event;
+        let Some(spoken) = self.spoken else {
+            return event;
+        };
+        let Event::FinalMessage {
+            text,
+            mut parts,
+            receipt,
+        } = event
+        else {
+            return event;
+        };
+        let has_voice = parts
+            .iter()
+            .any(|part| matches!(part, tinychannels_bus::OutboundContentPart::Voice { .. }));
+        if !has_voice
+            && let Some(voice) = spoken
+                .voice_part(
+                    &self.scope.conversation,
+                    &self.scope.turn_id,
+                    &text,
+                    self.capabilities,
+                )
+                .await
+        {
+            if parts.is_empty() {
+                parts.push(tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text: text.clone(),
+                        markdown_dialect: None,
+                    },
+                });
+            }
+            parts.push(voice);
+        }
+        Event::FinalMessage {
+            text,
+            parts,
+            receipt,
+        }
+    }
+}
+
 async fn feed_adapter_output(
     reply: &mut ProgressiveReply,
+    voice: &SpokenContext<'_>,
     events: Vec<tinychannels_bus::module_progressive::ChannelOutputEvent>,
 ) -> Result<ProgressiveResult> {
     let mut dispatch = tinychannels::delivery::progressive::ProgressiveOutputDispatch::default();
     for event in events {
+        let event = voice.with_voice(event).await;
         let current = if matches!(
             event,
             tinychannels_bus::module_progressive::ChannelOutputEvent::FinalMessage { .. }
@@ -1148,7 +1218,14 @@ impl ProgressiveSender for AdapterSender {
     }
 
     async fn typing(&self, _channel: &str) -> std::result::Result<(), ProgressiveSendError> {
-        Ok(())
+        // Adapters without a typing port have no indicator to refresh.
+        match self.built.typing() {
+            Some(port) => port
+                .start_typing(&self.scope.conversation.id)
+                .await
+                .map_err(map_send_error),
+            None => Ok(()),
+        }
     }
 }
 
