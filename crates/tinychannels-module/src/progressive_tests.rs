@@ -2132,3 +2132,217 @@ async fn closing_a_handle_after_a_module_sequenced_final_does_not_announce_a_can
     replies.shutdown().await.unwrap();
     provider.stop().await.unwrap();
 }
+
+/// Records the order of provider typing and delivery calls.
+#[derive(Default)]
+struct OrderedAdapter {
+    log: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelAdapter for OrderedAdapter {
+    fn descriptor(&self) -> tinychannels::channel::ChannelDescriptor {
+        tinychannels::channel::ChannelDescriptor {
+            id: "telegram".into(),
+            display_name: "telegram".into(),
+            ..Default::default()
+        }
+    }
+
+    async fn start(
+        &self,
+        _: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync),
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Ok(())
+    }
+
+    async fn stop(&self) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Ok(())
+    }
+
+    async fn send(
+        &self,
+        _intent: tinychannels::channel::ChannelOutboundIntent,
+    ) -> std::result::Result<
+        tinychannels::channel::MessageReceipt,
+        tinychannels::channel::ChannelSendError,
+    > {
+        self.log.lock().await.push("send".into());
+        Ok(Default::default())
+    }
+
+    async fn send_typed(
+        &self,
+        _message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        self.log.lock().await.push("send".into());
+        Ok(Default::default())
+    }
+
+    async fn status(
+        &self,
+    ) -> std::result::Result<
+        tinychannels::controllers::ChannelAccountSnapshot,
+        tinychannels::channel::ChannelSendError,
+    > {
+        Ok(Default::default())
+    }
+}
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelTyping for OrderedAdapter {
+    async fn start_typing(
+        &self,
+        conversation_id: &str,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        self.log
+            .lock()
+            .await
+            .push(format!("typing:{conversation_id}"));
+        Ok(())
+    }
+
+    async fn stop_typing(
+        &self,
+        _conversation_id: &str,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Ok(())
+    }
+}
+
+async fn open_ordered(typing: bool) -> (Replies, Arc<Running>, Arc<Mutex<Vec<String>>>, String) {
+    let (replies, _callback) = fixture(true).await;
+    let adapter = Arc::new(OrderedAdapter::default());
+    let log = adapter.log.clone();
+    let mut built = tinychannels::factory::BuiltChannel::from_adapter(adapter.clone());
+    if typing {
+        built = built.with_typing_port(adapter);
+    }
+    let provider =
+        Running::start_built_outbound(built, Arc::new(Hooks::default()), replies.host.clone());
+    replies
+        .running
+        .lock()
+        .await
+        .insert("telegram".into(), provider.clone());
+    let handle = match replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                ..Default::default()
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                id: "chat-1".into(),
+                ..Default::default()
+            },
+            turn_id: "turn-1".into(),
+            lifetime_ms: 60_000,
+        })
+        .await
+        .unwrap()
+    {
+        ProgressiveResult::Opened { handle } => handle,
+        _ => panic!("expected opened handle"),
+    };
+    (replies, provider, log, handle)
+}
+
+async fn feed_final(replies: &Replies, handle: &str) {
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.to_owned(),
+            turn_id: Some("turn-1".into()),
+            channel_ref: None,
+            conversation: None,
+            sequence: None,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "final answer".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn adapter_typing_precedes_the_final_reply() {
+    let (replies, provider, log, handle) = open_ordered(true).await;
+    feed_final(&replies, &handle).await;
+    let log = log.lock().await.clone();
+    assert_eq!(
+        log.first().map(String::as_str),
+        Some("typing:chat-1"),
+        "typing must be the first provider call: {log:?}"
+    );
+    let send = log.iter().position(|entry| entry == "send").expect("reply sent");
+    assert!(send > 0, "the reply follows the typing indicator: {log:?}");
+    replies.shutdown().await.unwrap();
+    provider.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn adapter_without_a_typing_port_still_delivers_the_reply() {
+    let (replies, provider, log, handle) = open_ordered(false).await;
+    feed_final(&replies, &handle).await;
+    let log = log.lock().await.clone();
+    assert_eq!(log, vec!["send".to_string()]);
+    replies.shutdown().await.unwrap();
+    provider.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn spoken_context_without_a_voice_pipeline_leaves_the_final_message_unchanged() {
+    let scope = OpenScope {
+        channel: tinychannels_bus::ChannelRef::default(),
+        conversation: tinychannels_bus::ConversationRef {
+            id: "chat-1".into(),
+            ..Default::default()
+        },
+        turn_id: "turn-1".into(),
+        lifetime: Duration::from_secs(60),
+    };
+    let capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+    let context = SpokenContext {
+        spoken: None,
+        scope: &scope,
+        capabilities: &capabilities,
+    };
+    let event = ChannelOutputEvent::FinalMessage {
+        text: "hello".into(),
+        parts: vec![],
+        receipt: None,
+    };
+    assert_eq!(context.with_voice(event.clone()).await, event);
+}
+
+#[tokio::test]
+async fn spoken_reply_stays_text_only_when_the_channel_cannot_synthesize() {
+    let (replies, _callback) = fixture(false).await;
+    let spoken = SpokenReply {
+        host: replies.host.clone(),
+        instance: "telegram".into(),
+        synthesizer: crate::voice_reply::ModuleSynthesizer(replies.host.clone(), "telegram".into()),
+        codec: crate::voice_reply::ModuleVoiceCodec(replies.host.clone()),
+        store: crate::provider::ModuleVoiceMediaStore(crate::provider::ModuleMediaRepository(
+            replies.host.clone(),
+            "telegram".into(),
+            None,
+        )),
+    };
+    let conversation = tinychannels_bus::ConversationRef {
+        id: "chat-1".into(),
+        ..Default::default()
+    };
+    // `voice_out` is unsupported by default, so no host callback is attempted.
+    let capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+    assert!(
+        spoken
+            .voice_part(&conversation, "turn-1", "hello", &capabilities)
+            .await
+            .is_none()
+    );
+}
