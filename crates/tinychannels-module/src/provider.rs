@@ -354,6 +354,8 @@ impl Hooks {
 
 /// Persists inbound/outbound voice through the module's own scoped media
 /// repository; the host holds no voice store.
+const MAX_VOICE_BYTES: usize = 8 * 1024 * 1024;
+
 pub(crate) struct ModuleVoiceMediaStore(pub(crate) ModuleMediaRepository);
 
 #[async_trait::async_trait]
@@ -363,7 +365,6 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         request: tinychannels::host::VoiceMediaRequest,
     ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         use base64::Engine;
-        const MAX_VOICE_BYTES: usize = 8 * 1024 * 1024;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(request.audio_base64.as_bytes())
             .map_err(|_| anyhow::anyhow!("voice media payload is invalid"))?;
@@ -391,6 +392,26 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         Ok(tinychannels_bus::HostStoreVoiceMediaResult {
             media,
             accessible_url: None,
+        })
+    }
+
+    async fn read_voice(
+        &self,
+        scope: tinychannels_bus::HostVoiceScope,
+        opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        use base64::Engine;
+        let stored = <ModuleMediaRepository as tinychannels::host::MediaRepository>::read_media(
+            &self.0,
+            scope,
+            opaque_id,
+            MAX_VOICE_BYTES as u64,
+        )
+        .await?;
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(&stored.bytes),
+            mime_type: stored.content_type,
+            file_name: stored.file_name,
         })
     }
 }
