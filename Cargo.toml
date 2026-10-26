@@ -26,7 +26,7 @@ tinybus = { path = "vendor/tinybus/crates/tinybus" }
 
 [workspace.package]
 # Releases update this sole workspace version before packaging every crate.
-version = "0.1.43"
+version = "0.1.44"
 
 [package]
 rust-version = "1.94"
