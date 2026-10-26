@@ -27,9 +27,9 @@ tinychannels-bus = { path = "../tinychannels-bus" }
 tinychannels-runtime = { path = "../tinychannels-runtime" }
 tinyvoice-bus = { git = "https://github.com/tinyhumansai/tinyvoice", rev = "cf6444424149bbc8dc2303bddbd9b366abb29933" }
 # TinyBus provides the typed service interface and dynamic module host ABI.
-tinybus = { version = ">=0.1.4, <0.2", default-features = false, features = ["macros", "modules"] }
+tinybus = { version = ">=0.3.6, <0.4", default-features = false, features = ["macros", "modules"] }
 # The module-side SDK owns its runtime and exports the stable C entrypoints.
-tinybus-module = ">=0.1.4, <0.2"
+tinybus-module = ">=0.3.6, <0.4"
 # Provider listen loops are long-lived tasks the module owns.
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 # Storage over the bus: the module reaches host storage through the same port
@@ -53,7 +53,7 @@ base64 = "0.23"
 [dev-dependencies]
 tinychannels = { path = "../.." }
 tinychannels-conformance = { path = "../tinychannels-conformance" }
-tinybus = { version = ">=0.1.4, <0.2", default-features = false, features = ["test-support"] }
+tinybus = { version = ">=0.3.6, <0.4", default-features = false, features = ["test-support"] }
 tinystoragedrivers-testkit = { git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456" }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
